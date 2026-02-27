@@ -241,7 +241,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       const mode = this.state.session.mode
       const viewScale =
         "viewScale" in config
-          ? (config as { viewScale: number }).viewScale
+          ? (config as unknown as { viewScale: number }).viewScale
           : 1
       this._labelList.redraw(
         this.labelContext,
