@@ -1,6 +1,7 @@
 import { alert } from "../../common/alert"
 import { Severity } from "../../types/common"
 import {
+  addLabel,
   changeLabelsProps,
   linkLabels,
   mergeTracks,
@@ -9,7 +10,7 @@ import {
   unlinkLabels,
   splitTrack
 } from "../../action/common"
-import { selectLabels, unselectLabels } from "../../action/select"
+import { selectLabel, selectLabels, unselectLabels } from "../../action/select"
 import Session from "../../common/session"
 import { addVisibilityListener } from "../../common/window"
 import { Key } from "../../const/common"
@@ -18,12 +19,20 @@ import { getSelectedTracks } from "../../functional/state_util"
 import { tracksOverlapping } from "../../functional/track"
 import { Size2D } from "../../math/size2d"
 import { Vector2D } from "../../math/vector2d"
-import { IdType, State } from "../../types/state"
+import { IdType, LabelType, ShapeType, State } from "../../types/state"
 import { commit2DLabels } from "../states"
 import { Label2D, Label2DModifier } from "./label2d"
 import { Label2DList, makeDrawableLabel2D } from "./label2d_list"
 import { checkModifierFromKeyboard } from "./label2d_modifier"
 import { makeTrack } from "../../functional/states"
+import _ from "lodash"
+import { uid } from "../../common/uid"
+
+/** Clipboard entry for copy-paste */
+interface LabelClipboard {
+  label: LabelType
+  shapes: ShapeType[]
+}
 
 /**
  * List of drawable labels
@@ -42,6 +51,8 @@ export class Label2DHandler {
   private _selectedItemIndex: number
   /** Active modifier */
   private _modifier: Label2DModifier | null
+  /** Clipboard for copy-paste */
+  private _clipboard: LabelClipboard | null
 
   /**
    * Constructor
@@ -55,6 +66,7 @@ export class Label2DHandler {
     this._selectedItemIndex = -1
     this._labelList = labelList
     this._modifier = null
+    this._clipboard = null
 
     addVisibilityListener(() => this.onVisibilityChange())
   }
@@ -281,6 +293,20 @@ export class Label2DHandler {
     }
 
     switch (e.key) {
+      case Key.C_LOW:
+        if (this.isKeyDown(Key.CONTROL) || this.isKeyDown(Key.META)) {
+          e.preventDefault()
+          this.copySelectedLabel()
+          return
+        }
+        break
+      case Key.V_LOW:
+        if (this.isKeyDown(Key.CONTROL) || this.isKeyDown(Key.META)) {
+          e.preventDefault()
+          this.pasteLabel()
+          return
+        }
+        break
       case Key.L_LOW:
         if (this.isKeyDown(Key.CONTROL) || this.isKeyDown(Key.META)) {
           // Track link mode
@@ -571,5 +597,120 @@ export class Label2DHandler {
     const newTrackId = makeTrack().id
 
     Session.dispatch(splitTrack(track.id, newTrackId, select.item))
+  }
+
+  /**
+   * Copy the first selected label to the clipboard.
+   * Deep-clones both label metadata and shape data from store.
+   */
+  private copySelectedLabel(): void {
+    if (this._labelList.selectedLabels.length === 0) {
+      return
+    }
+    const drawable = this._labelList.selectedLabels[0]
+    if (drawable.temporary || !drawable.isValid()) {
+      return
+    }
+
+    // Read the authoritative state from the store
+    const state = this._state
+    const itemIndex = state.user.select.item
+    const item = state.task.items[itemIndex]
+    const labelState = item.labels[drawable.labelId]
+    if (labelState === undefined) {
+      return
+    }
+
+    // Deep-clone label and its shapes
+    const clonedLabel: LabelType = _.cloneDeep(labelState)
+    const clonedShapes: ShapeType[] = clonedLabel.shapes
+      .map((shapeId) => {
+        const shape = item.shapes[shapeId]
+        return shape !== undefined ? _.cloneDeep(shape) as ShapeType : null
+      })
+      .filter((s): s is ShapeType => s !== null)
+
+    this._clipboard = { label: clonedLabel, shapes: clonedShapes }
+    alert(Severity.SUCCESS, "Label copied")
+  }
+
+  /**
+   * Paste the clipboard label as a new label, offset by 20px.
+   * The new label is auto-selected so it is immediately draggable.
+   */
+  private pasteLabel(): void {
+    if (this._clipboard === null) {
+      alert(Severity.WARNING, "Nothing to paste")
+      return
+    }
+
+    const state = this._state
+    const itemIndex = state.user.select.item
+
+    // Deep-clone so multiple pastes don't interfere
+    const newLabel: LabelType = _.cloneDeep(this._clipboard.label)
+    const newShapes: ShapeType[] = _.cloneDeep(this._clipboard.shapes)
+
+    // Generate a fresh label ID
+    const newLabelId = uid()
+    newLabel.id = newLabelId
+    newLabel.item = itemIndex
+    newLabel.track = ""
+    newLabel.parent = ""
+    newLabel.children = []
+
+    // Generate fresh shape IDs and wire them to the label
+    const newShapeIds: string[] = []
+    for (const shape of newShapes) {
+      const newShapeId = uid()
+      shape.id = newShapeId
+      shape.label = [newLabelId]
+      newShapeIds.push(newShapeId)
+    }
+    newLabel.shapes = newShapeIds
+
+    // Offset shape coordinates by 20px in image coordinates
+    const OFFSET = 20
+    for (const shape of newShapes) {
+      const s = shape as unknown as Record<string, unknown>
+
+      // PolygonType — has points array
+      if ("points" in s && Array.isArray(s.points)) {
+        for (const pt of s.points as Array<{ x: number; y: number }>) {
+          pt.x += OFFSET
+          pt.y += OFFSET
+        }
+      }
+
+      // RectType — has x1/y1/x2/y2
+      if ("x1" in s && "y1" in s && "x2" in s && "y2" in s) {
+        ;(s.x1 as number) += OFFSET
+        ;(s.y1 as number) += OFFSET
+        ;(s.x2 as number) += OFFSET
+        ;(s.y2 as number) += OFFSET
+      }
+
+      // PathPoint2DType / Node2DType — has x/y directly on shape
+      if ("x" in s && "y" in s && !("points" in s)) {
+        ;(s.x as number) += OFFSET
+        ;(s.y as number) += OFFSET
+      }
+    }
+
+    // Dispatch the add
+    const action = addLabel(itemIndex, newLabel, newShapes)
+    Session.dispatch(action)
+
+    // Select the newly created label
+    Session.dispatch(
+      selectLabel(
+        {},
+        itemIndex,
+        newLabelId,
+        newLabel.category[0],
+        newLabel.attributes
+      )
+    )
+    alert(Severity.SUCCESS, "Label pasted")
   }
 }

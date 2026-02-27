@@ -12,7 +12,7 @@ import {
   ShapeType,
   State
 } from "../../types/state"
-import { blendColor, Context2D, encodeControlColor, toCssColor } from "../util"
+import { blendColor, Context2D, encodeControlColor, getColorByCategory, toCssColor } from "../util"
 import { DASH_LINE, MIN_SIZE, OPACITY } from "./common"
 import { DrawMode, Label2D } from "./label2d"
 import { Label2DList } from "./label2d_list"
@@ -623,6 +623,9 @@ export class Polygon2D extends Label2D {
       order: this._order,
       sensors: [sensor]
     })
+    // Set color immediately from category so the polygon renders in the
+    // correct category color while it is being drawn (before state commit)
+    this._color = getColorByCategory(state.user.select.category)
     this._highlightedHandle = 1
     return label
   }

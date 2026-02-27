@@ -7,11 +7,19 @@ import { ImageViewerConfigType, State } from "../types/state"
 
 // Display export constants
 /** The maximum scale */
-export const MAX_SCALE = 3.0
+export const MAX_SCALE = 10.0
 /** The minimum scale */
 export const MIN_SCALE = 1.0
-/** The boosted ratio to draw shapes sharper */
-export const UP_RES_RATIO = 2
+/**
+ * Adaptive high-resolution ratio.
+ * At low zoom (≤3×) use 2× for retina sharpness.
+ * At high zoom (>3×) drop to 1× because individual pixels are already visible.
+ *
+ * @param viewScale current zoom level
+ */
+export function getUpResRatio(viewScale: number): number {
+  return viewScale > 3 ? 1 : 2
+}
 /** The zoom ratio */
 export const ZOOM_RATIO = 1.3
 /** The scroll-zoom ratio */
@@ -42,16 +50,18 @@ export function getCurrentImageSize(state: State, viewerId: number): Size2D {
  * @param {Vector2D} values - the values to convert.
  * @param {boolean} upRes
  * @param displayToImageRatio
+ * @param upResRatio - effective up-resolution ratio (default 2)
  * @returns {Vector2D} - the converted values.
  */
 export function toCanvasCoords(
   values: Vector2D,
   upRes: boolean,
-  displayToImageRatio: number
+  displayToImageRatio: number,
+  upResRatio: number = 2
 ): Vector2D {
   const out = values.clone().scale(displayToImageRatio)
   if (upRes) {
-    out.scale(UP_RES_RATIO)
+    out.scale(upResRatio)
   }
   return out
 }
@@ -64,14 +74,16 @@ export function toCanvasCoords(
  * @param {Vector2D} values - the values to convert.
  * @param displayToImageRatio
  * @param {boolean} upRes - whether the canvas has higher resolution
+ * @param upResRatio - effective up-resolution ratio (default 2)
  * @returns {Vector2D} - the converted values.
  */
 export function toImageCoords(
   values: Vector2D,
   displayToImageRatio: number,
-  upRes: boolean = true
+  upRes: boolean = true,
+  upResRatio: number = 2
 ): Vector2D {
-  const up = upRes ? 1 / UP_RES_RATIO : 1
+  const up = upRes ? 1 / upResRatio : 1
   return values.clone().scale(displayToImageRatio * up)
 }
 
@@ -234,16 +246,19 @@ export function updateCanvasScale(
     displayToImageRatio = canvasWidth / image.width
   }
 
-  // Set canvas resolution
+  // Adaptive up-res ratio based on current zoom level
+  const upResRatio = getUpResRatio(config.viewScale)
+
+  // Set canvas backing resolution
   if (upRes) {
-    canvas.height = canvasHeight * UP_RES_RATIO
-    canvas.width = canvasWidth * UP_RES_RATIO
+    canvas.height = canvasHeight * upResRatio
+    canvas.width = canvasWidth * upResRatio
   } else {
     canvas.height = canvasHeight
     canvas.width = canvasWidth
   }
 
-  // Set canvas size
+  // Set canvas CSS display size (visual size stays the same)
   canvas.style.height = `${canvasHeight}px`
   canvas.style.width = `${canvasWidth}px`
 
@@ -260,5 +275,12 @@ export function updateCanvasScale(
   canvas.style.right = "auto"
   canvas.style.bottom = "auto"
 
-  return [canvasWidth, canvasHeight, displayToImageRatio, config.viewScale]
+  // Return the effective upResRatio so callers can use it
+  return [
+    canvasWidth,
+    canvasHeight,
+    displayToImageRatio,
+    config.viewScale,
+    upResRatio
+  ]
 }

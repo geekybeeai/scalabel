@@ -41,6 +41,13 @@ export interface Viewer2DProps extends ViewerProps {
  * Viewer for images and 2d labels
  */
 export class Viewer2D extends DrawableViewer<Viewer2DProps> {
+  /** Accumulated zoom ratio waiting for the next animation frame */
+  private _pendingZoomRatio: number = 1
+  /** Cursor position at the time the first pending scroll tick arrived */
+  private _pendingZoomOffset: Vector2D = new Vector2D(0, 0)
+  /** Whether a requestAnimationFrame has already been scheduled for zoom */
+  private _zoomRAFPending: boolean = false
+
   /**
    * Render function
    *
@@ -257,7 +264,21 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         if (-e.deltaY < 0) {
           zoomRatio = 1 / zoomRatio
         }
-        this.zoom(zoomRatio, new Vector2D(this._mX, this._mY))
+        // Accumulate all scroll ticks that arrive within the same animation
+        // frame. Without this, fast scrolling fires 60-120 Redux dispatches
+        // per second each triggering a full canvas repaint, which is the root
+        // cause of lag at high zoom. Batching into one rAF means exactly one
+        // repaint per rendered frame regardless of scroll speed.
+        this._pendingZoomRatio *= zoomRatio
+        this._pendingZoomOffset = new Vector2D(this._mX, this._mY)
+        if (!this._zoomRAFPending) {
+          this._zoomRAFPending = true
+          requestAnimationFrame(() => {
+            this.zoom(this._pendingZoomRatio, this._pendingZoomOffset)
+            this._pendingZoomRatio = 1
+            this._zoomRAFPending = false
+          })
+        }
       }
     }
   }

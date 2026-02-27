@@ -18,7 +18,6 @@ import {
   MIN_SCALE,
   normalizeMouseCoordinates,
   toCanvasCoords,
-  UP_RES_RATIO,
   updateCanvasScale
 } from "../view_config/image"
 import { Crosshair, Crosshair2D } from "./crosshair"
@@ -82,6 +81,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private readonly _keyUpListener: (e: KeyboardEvent) => void
   /** key down listener */
   private readonly _keyDownListener: (e: KeyboardEvent) => void
+  /** effective up-resolution ratio (adaptive based on zoom level) */
+  private _upResRatio: number
 
   // Keyboard and mouse status
   /** The hashed list of keys currently down */
@@ -106,6 +107,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     this.canvasHeight = 0
     this.canvasWidth = 0
     this.displayToImageRatio = 1
+    this._upResRatio = 2
     this.controlContext = null
     this.controlCanvas = null
     this.labelContext = null
@@ -240,7 +242,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this._labelList.redraw(
         this.labelContext,
         this.controlContext,
-        this.displayToImageRatio * UP_RES_RATIO,
+        this.displayToImageRatio * this._upResRatio,
         config.hideLabels,
         config.hideTags,
         mode
@@ -432,7 +434,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   private fetchHandleId(mousePos: Vector2D): number[] {
     if (this.controlContext !== null) {
-      const [x, y] = toCanvasCoords(mousePos, true, this.displayToImageRatio)
+      const [x, y] = toCanvasCoords(
+        mousePos,
+        true,
+        this.displayToImageRatio,
+        this._upResRatio
+      )
       const data = this.controlContext.getImageData(x, y, 4, 4).data
       return imageDataToHandleId(data)
     } else {
@@ -499,7 +506,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         this.canvasWidth,
         this.canvasHeight,
         this.displayToImageRatio,
-        this.scale
+        this.scale,
+        this._upResRatio
       ] = updateCanvasScale(
         this.state,
         this.display,

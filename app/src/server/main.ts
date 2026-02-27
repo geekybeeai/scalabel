@@ -176,24 +176,44 @@ async function launchRedisServer(config: ServerConfig): Promise<void> {
     redisDir = config.storage.data
   }
 
-  const redisProc = child.spawn("redis-server", [
-    getRedisConf(),
-    "--port",
-    `${config.redis.port}`,
-    "--bind",
-    "127.0.0.1",
-    "--dir",
-    redisDir,
-    "--protected-mode",
-    "yes"
-  ])
-  redisProc.stdout.on("data", (data) => {
-    process.stdout.write(data)
-  })
+  try {
+    const redisProc = child.spawn("redis-server", [
+      getRedisConf(),
+      "--port",
+      `${config.redis.port}`,
+      "--bind",
+      "127.0.0.1",
+      "--dir",
+      redisDir,
+      "--protected-mode",
+      "yes"
+    ])
+    redisProc.stdout.on("data", (data) => {
+      process.stdout.write(data)
+    })
 
-  redisProc.stderr.on("data", (data) => {
-    process.stdout.write(data)
-  })
+    redisProc.stderr.on("data", (data) => {
+      process.stdout.write(data)
+    })
+
+    redisProc.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") {
+        Logger.info(
+          "redis-server binary not found. " +
+            "Please ensure Redis is running externally " +
+            "(e.g. via Docker: docker run -d -p 6379:6379 redis, " +
+            "or install Memurai for Windows)."
+        )
+      } else {
+        Logger.error(err)
+      }
+    })
+  } catch (err) {
+    Logger.info(
+      "Failed to launch redis-server. " +
+        "Make sure Redis is running externally."
+    )
+  }
 }
 
 /**

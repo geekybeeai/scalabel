@@ -102,10 +102,33 @@ export class Label2DList {
     }
   }
 
-  /** Call when any drawable has been updated */
+  /**
+   * Whether a requestAnimationFrame is already scheduled for redraw.
+   * Prevents scheduling multiple redundant repaints within the same frame.
+   */
+  private _rafPending: boolean = false
+
+  /**
+   * Call when any drawable has been updated.
+   *
+   * All calls that arrive within the same animation frame are collapsed into
+   * a single actual repaint. This caps the canvas repaint rate at the display
+   * refresh rate (≤60fps) regardless of how fast mouse-move or key events
+   * fire. At high zoom levels canvases can be very large (viewScale × 2 ×
+   * display-size), so preventing redundant repaints is the single most
+   * impactful performance optimisation. Label coordinates and hit detection
+   * are unaffected because the LATEST state is always used when the frame
+   * callback actually executes.
+   */
   public onDrawableUpdate(): void {
-    for (const callback of this._callbacks) {
-      callback()
+    if (!this._rafPending) {
+      this._rafPending = true
+      requestAnimationFrame(() => {
+        this._rafPending = false
+        for (const callback of this._callbacks) {
+          callback()
+        }
+      })
     }
   }
 

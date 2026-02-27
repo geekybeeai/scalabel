@@ -72,6 +72,37 @@ function pickColorPalette(index: number): number[] {
 }
 
 /**
+ * Fixed distinct colors assigned per category index (0-based).
+ * Each category always renders in the same color regardless of label ID.
+ * Add more entries if you have more than 10 categories.
+ */
+const CATEGORY_COLOR_PALETTE: number[][] = [
+  [255, 215, 0],    // 0: gold / yellow
+  [255, 140, 0],    // 1: dark orange
+  [220, 220, 220],  // 2: light gray (white lines)
+  [100, 180, 255],  // 3: sky blue
+  [255, 80, 0],     // 4: deep orange
+  [210, 50, 50],    // 5: red
+  [0, 200, 170],    // 6: teal / cyan
+  [180, 60, 220],   // 7: purple
+  [50, 200, 50],    // 8: green
+  [255, 100, 180],  // 9: pink
+]
+
+/**
+ * Get a fixed color for a given category index.
+ * Falls back to the label-ID palette for indices beyond the category palette.
+ *
+ * @param categoryIndex 0-based category index
+ */
+export function getColorByCategory(categoryIndex: number): number[] {
+  if (categoryIndex >= 0 && categoryIndex < CATEGORY_COLOR_PALETTE.length) {
+    return CATEGORY_COLOR_PALETTE[categoryIndex]
+  }
+  return pickColorPalette(categoryIndex)
+}
+
+/**
  * Convert numerical id to color value in range of [0, 255]
  *
  * @param {IdType} labelId

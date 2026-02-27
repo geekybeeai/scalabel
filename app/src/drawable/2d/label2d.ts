@@ -14,7 +14,7 @@ import {
   ShapeType,
   State
 } from "../../types/state"
-import { Context2D, getColorById } from "../util"
+import { Context2D, getColorById, getColorByCategory } from "../util"
 import { Label2DList } from "./label2d_list"
 
 export enum DrawMode {
@@ -500,10 +500,17 @@ export abstract class Label2D {
     // None of the labels in the state is temporary
     this._temporary = false
     const select = state.user.select
-    this._color = getColorById(
-      getRootLabelId(item, labelId),
-      getRootTrackId(item, labelId)
-    )
+    // Use a fixed color per category so every label of the same category
+    // renders in the same colour regardless of its label ID.
+    const categoryIndex =
+      this._label.category.length > 0 ? this._label.category[0] : -1
+    this._color =
+      categoryIndex >= 0
+        ? getColorByCategory(categoryIndex)
+        : getColorById(
+            getRootLabelId(item, labelId),
+            getRootTrackId(item, labelId)
+          )
     this.setSelected(
       this._label.item in select.labels &&
         select.labels[this._label.item].includes(labelId)

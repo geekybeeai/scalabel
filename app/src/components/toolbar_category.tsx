@@ -9,14 +9,12 @@ import ExpandMoreIcon from "@material-ui/icons/ExpandMore"
 import ChevronRightIcon from "@material-ui/icons/ChevronRight"
 import * as React from "react"
 
-import { changeSelect, makeSequential } from "../action/common"
+import { changeSelect } from "../action/common"
 import { changeSelectedLabelsCategories } from "../action/select"
 import { dispatch, getState } from "../common/session"
 import { categoryStyle } from "../styles/label"
-import { BaseAction } from "../types/action"
 import { Component } from "./component"
 import { Category } from "../types/state"
-import { LabelTypeName } from "../const/common"
 
 /**
  * This is the handleChange function of MultipleSelect
@@ -29,22 +27,18 @@ function handleChange(
   _event: React.MouseEvent<HTMLElement>,
   categoryIndex: number | null
 ): void {
-  const state = getState()
   if (categoryIndex !== null) {
-    const actions: BaseAction[] = []
-    actions.push(changeSelect({ category: categoryIndex }))
-    // Update categories if any non-plane labels are selected
-    const hasSelectedLabels = Object.keys(state.user.select.labels).length > 0
-    if (hasSelectedLabels) {
-      const labelIds = Object.values(state.user.select.labels)
-      const groundPlaneSelected =
-        state.task.items[state.user.select.item].labels[labelIds[0][0]].type ===
-        LabelTypeName.PLANE_3D
-      if (!groundPlaneSelected) {
-        actions.push(changeSelectedLabelsCategories(state, [categoryIndex]))
-      }
+    dispatch(changeSelect({ category: categoryIndex }))
+
+    // If any labels are currently selected, update their category too
+    const state = getState()
+    const selectedLabels = state.user.select.labels
+    const hasSelected = Object.values(selectedLabels).some(
+      (ids) => ids.length > 0
+    )
+    if (hasSelected) {
+      dispatch(changeSelectedLabelsCategories(state, [categoryIndex]))
     }
-    dispatch(makeSequential(actions))
   }
 }
 
@@ -62,24 +56,18 @@ function handleTreeSelect(
   if (categoryIndex.includes("NotLeaf")) {
     return
   }
-  const state = getState()
-  const actions: BaseAction[] = []
-  actions.push(changeSelect({ category: Number(categoryIndex) }))
+  const catIdx = Number(categoryIndex)
+  dispatch(changeSelect({ category: catIdx }))
 
-  // Update categories if any non-plane labels are selected
-  const hasSelectedLabels = Object.keys(state.user.select.labels).length > 0
-  if (hasSelectedLabels) {
-    const labelIds = Object.values(state.user.select.labels)
-    const groundPlaneSelected =
-      state.task.items[state.user.select.item].labels[labelIds[0][0]].type ===
-      LabelTypeName.PLANE_3D
-    if (!groundPlaneSelected) {
-      actions.push(
-        changeSelectedLabelsCategories(state, [Number(categoryIndex)])
-      )
-    }
+  // If any labels are currently selected, update their category too
+  const state = getState()
+  const selectedLabels = state.user.select.labels
+  const hasSelected = Object.values(selectedLabels).some(
+    (ids) => ids.length > 0
+  )
+  if (hasSelected) {
+    dispatch(changeSelectedLabelsCategories(state, [catIdx]))
   }
-  dispatch(makeSequential(actions))
 }
 
 /**
