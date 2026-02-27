@@ -119,6 +119,7 @@ export class Polygon2D extends Label2D {
    * @param isTrackLinking
    * @param hideLabelTags
    * @param sessionMode
+   * @param viewScale: current zoom level (1 = no zoom)
    */
   public draw(
     context: Context2D,
@@ -126,9 +127,14 @@ export class Polygon2D extends Label2D {
     mode: DrawMode,
     isTrackLinking: boolean,
     hideLabelTags: boolean,
-    sessionMode: ModeStatus | undefined
+    sessionMode: ModeStatus | undefined,
+    viewScale: number = 1
   ): void {
     const numPoints = this._points.length
+
+    // Compute zoom-aware scale factor: styles thin out as you zoom in
+    const zoomScale = Math.max(1, viewScale)
+    const styleFactor = 1 / Math.sqrt(zoomScale)
 
     if (numPoints === 0) return
     let pointStyle = makePathPoint2DStyle()
@@ -141,6 +147,10 @@ export class Polygon2D extends Label2D {
         pointStyle = _.assign(pointStyle, DEFAULT_VIEW_POINT_STYLE)
         highPointStyle = _.assign(highPointStyle, DEFAULT_VIEW_HIGH_POINT_STYLE)
         edgeStyle = _.assign(edgeStyle, DEFAULT_VIEW_EDGE_STYLE)
+        // Scale styles inversely with zoom for better precision at high zoom
+        pointStyle.radius = Math.max(2, pointStyle.radius * styleFactor)
+        highPointStyle.radius = Math.max(3, highPointStyle.radius * styleFactor)
+        edgeStyle.lineWidth = Math.max(1, edgeStyle.lineWidth * styleFactor)
         assignColor = (i: number): number[] => {
           if (
             i > 0 &&

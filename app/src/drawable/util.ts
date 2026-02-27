@@ -79,7 +79,7 @@ function pickColorPalette(index: number): number[] {
 const CATEGORY_COLOR_PALETTE: number[][] = [
   [255, 215, 0],    // 0: gold / yellow
   [255, 140, 0],    // 1: dark orange
-  [220, 220, 220],  // 2: light gray (white lines)
+  [102, 51, 0],  // 2: brown
   [100, 180, 255],  // 3: sky blue
   [255, 80, 0],     // 4: deep orange
   [210, 50, 50],    // 5: red

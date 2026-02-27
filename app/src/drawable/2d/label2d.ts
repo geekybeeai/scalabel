@@ -296,6 +296,7 @@ export abstract class Label2D {
    * @param {boolean} isTrackLinking
    * @param {boolean} hideLabelTags
    * @param {ModeStatus} sessionMode
+   * @param {number} viewScale: current zoom level (1 = no zoom)
    */
   public abstract draw(
     canvas: Context2D,
@@ -303,7 +304,8 @@ export abstract class Label2D {
     mode: DrawMode,
     isTrackLinking: boolean,
     hideLabelTags: boolean,
-    sessionMode: ModeStatus | undefined
+    sessionMode: ModeStatus | undefined,
+    viewScale?: number
   ): void
 
   /**

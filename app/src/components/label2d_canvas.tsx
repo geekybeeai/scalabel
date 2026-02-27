@@ -239,13 +239,18 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     ) {
       const config = this.state.user.viewerConfigs[this.props.id]
       const mode = this.state.session.mode
+      const viewScale =
+        "viewScale" in config
+          ? (config as { viewScale: number }).viewScale
+          : 1
       this._labelList.redraw(
         this.labelContext,
         this.controlContext,
         this.displayToImageRatio * this._upResRatio,
         config.hideLabels,
         config.hideTags,
-        mode
+        mode,
+        viewScale
       )
     }
     return true

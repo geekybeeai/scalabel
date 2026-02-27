@@ -177,6 +177,7 @@ export class Label2DList {
    * @param hideLabels
    * @param hideLabelTags
    * @param sessionMode
+   * @param viewScale: current zoom level (1 = no zoom)
    */
   public redraw(
     labelContext: Context2D,
@@ -184,7 +185,8 @@ export class Label2DList {
     ratio: number,
     hideLabels?: boolean,
     hideLabelTags?: boolean,
-    sessionMode?: ModeStatus
+    sessionMode?: ModeStatus,
+    viewScale?: number
   ): void {
     const isTrackLinking = this._state.session.trackLinking
     const labelsToDraw =
@@ -202,7 +204,8 @@ export class Label2DList {
           mode,
           isTrackLinking,
           hideLabelTags ?? false,
-          sessionMode
+          sessionMode,
+          viewScale
         )
       })
     )

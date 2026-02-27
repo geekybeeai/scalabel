@@ -102,6 +102,7 @@ export class Box2D extends Label2D {
    * @param isTrackLinking
    * @param hideLabelTags
    * @param sessionMode
+   * @param viewScale: current zoom level (1 = no zoom)
    */
   public draw(
     context: Context2D,
@@ -109,8 +110,13 @@ export class Box2D extends Label2D {
     mode: DrawMode,
     isTrackLinking: boolean,
     hideLabelTags: boolean,
-    sessionMode: ModeStatus | undefined
+    sessionMode: ModeStatus | undefined,
+    viewScale: number = 1
   ): void {
+    // Compute zoom-aware scale factor: styles thin out as you zoom in
+    const zoomScale = Math.max(1, viewScale)
+    const styleFactor = 1 / Math.sqrt(zoomScale)
+
     // Set proper drawing styles
     let pointStyle = makePoint2DStyle()
     let highPointStyle = makePoint2DStyle()
@@ -121,6 +127,10 @@ export class Box2D extends Label2D {
         pointStyle = _.assign(pointStyle, DEFAULT_VIEW_POINT_STYLE)
         highPointStyle = _.assign(highPointStyle, DEFAULT_VIEW_HIGH_POINT_STYLE)
         rectStyle = _.assign(rectStyle, DEFAULT_VIEW_RECT_STYLE)
+        // Scale styles inversely with zoom for better precision at high zoom
+        pointStyle.radius = Math.max(2, pointStyle.radius * styleFactor)
+        highPointStyle.radius = Math.max(3, highPointStyle.radius * styleFactor)
+        rectStyle.lineWidth = Math.max(1, rectStyle.lineWidth * styleFactor)
         assignColor = (i: number): number[] => {
           if (i % 2 === 0 && i > 0) {
             // Midpoint
