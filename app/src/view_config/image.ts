@@ -11,6 +11,12 @@ export const MAX_SCALE = 10.0
 /** The minimum scale */
 export const MIN_SCALE = 1.0
 /**
+ * Maximum canvas backing resolution (width or height).
+ * Prevents excessive GPU memory usage at high zoom on large images.
+ * 4096 is a safe limit for most GPUs; 8192 for high-end.
+ */
+export const MAX_CANVAS_DIMENSION = 4096
+/**
  * Adaptive high-resolution ratio.
  * At low zoom (≤3×) use 2× for retina sharpness.
  * At high zoom (>3×) drop to 1× because individual pixels are already visible.
@@ -88,18 +94,91 @@ export function toImageCoords(
 }
 
 /**
- * Draw image on canvas
+ * Cache for ImageBitmap objects (faster GPU compositing than HTMLImageElement).
+ * Key format: "itemIndex-sensorId"
+ */
+const imageBitmapCache: Map<string, ImageBitmap> = new Map()
+
+/**
+ * Get or create an ImageBitmap for the given image.
+ * ImageBitmap provides faster drawing as the image is pre-decoded for GPU.
+ *
+ * @param image source HTMLImageElement
+ * @param cacheKey unique key for caching
+ */
+async function getImageBitmap(
+  image: HTMLImageElement,
+  cacheKey: string
+): Promise<ImageBitmap> {
+  const cached = imageBitmapCache.get(cacheKey)
+  if (cached !== undefined) {
+    return cached
+  }
+  const bitmap = await createImageBitmap(image)
+  imageBitmapCache.set(cacheKey, bitmap)
+  return bitmap
+}
+
+/**
+ * Clear the ImageBitmap cache (call when switching tasks/items).
+ */
+export function clearImageBitmapCache(): void {
+  for (const bitmap of imageBitmapCache.values()) {
+    bitmap.close()
+  }
+  imageBitmapCache.clear()
+}
+
+/**
+ * Draw image on canvas.
+ * Uses ImageBitmap when available for faster GPU-accelerated rendering.
  *
  * @param canvas
  * @param context
  * @param image
+ * @param itemIndex optional item index for caching
+ * @param sensorId optional sensor id for caching
  */
 export function drawImageOnCanvas(
   canvas: HTMLCanvasElement,
   context: CanvasRenderingContext2D,
-  image: HTMLImageElement
+  image: HTMLImageElement,
+  itemIndex?: number,
+  sensorId?: number
 ): void {
   clearCanvas(canvas, context)
+
+  // Enable image smoothing for downscaled images (better quality)
+  // Disable for upscaled images (preserves pixel detail)
+  const isDownscaled = canvas.width < image.width || canvas.height < image.height
+  context.imageSmoothingEnabled = isDownscaled
+  context.imageSmoothingQuality = isDownscaled ? "high" : "low"
+
+  // Try to use cached ImageBitmap for faster drawing
+  if (itemIndex !== undefined && sensorId !== undefined) {
+    const cacheKey = `${itemIndex}-${sensorId}`
+    const cached = imageBitmapCache.get(cacheKey)
+    if (cached !== undefined) {
+      context.drawImage(
+        cached,
+        0,
+        0,
+        image.width,
+        image.height,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      )
+      return
+    }
+    // Async create bitmap for future draws (don't block current frame)
+    getImageBitmap(image, cacheKey).catch(() => {
+      // Silently ignore - fallback to HTMLImageElement
+    })
+  }
+
+  // Fallback to standard HTMLImageElement draw
   context.drawImage(
     image,
     0,
@@ -249,14 +328,36 @@ export function updateCanvasScale(
   // Adaptive up-res ratio based on current zoom level
   const upResRatio = getUpResRatio(config.viewScale)
 
-  // Set canvas backing resolution
-  if (upRes) {
-    canvas.height = canvasHeight * upResRatio
-    canvas.width = canvasWidth * upResRatio
-  } else {
-    canvas.height = canvasHeight
-    canvas.width = canvasWidth
+  // Calculate target canvas backing resolution
+  let targetWidth = upRes ? canvasWidth * upResRatio : canvasWidth
+  let targetHeight = upRes ? canvasHeight * upResRatio : canvasHeight
+
+  // Cap canvas backing resolution to prevent GPU memory issues.
+  //
+  // CRITICAL constraint: the backing canvas must NEVER be smaller than the
+  // CSS display size (canvasWidth × canvasHeight). If it were, the image
+  // would render at sub-1:1 pixel density → visibly blurry at high zoom.
+  // The cap only reduces the *extra* pixels added by the upRes 2× retina
+  // factor; the base 1:1 resolution is always preserved.
+  //
+  // This also guarantees effectiveUpResRatio >= 1, which keeps polyline
+  // thickness adaptation correct (styleFactor = 1/√viewScale applied in
+  // polygon2d.draw() maps directly to visual width in CSS pixels).
+  if (targetWidth > MAX_CANVAS_DIMENSION || targetHeight > MAX_CANVAS_DIMENSION) {
+    const scaleFactor = Math.min(
+      MAX_CANVAS_DIMENSION / targetWidth,
+      MAX_CANVAS_DIMENSION / targetHeight
+    )
+    const cappedWidth = Math.floor(targetWidth * scaleFactor)
+    const cappedHeight = Math.floor(targetHeight * scaleFactor)
+    // Enforce floor at CSS display size so image quality is never degraded
+    targetWidth = Math.max(cappedWidth, Math.round(canvasWidth))
+    targetHeight = Math.max(cappedHeight, Math.round(canvasHeight))
   }
+
+  // Set canvas backing resolution
+  canvas.width = targetWidth
+  canvas.height = targetHeight
 
   // Set canvas CSS display size (visual size stays the same)
   canvas.style.height = `${canvasHeight}px`
@@ -275,12 +376,24 @@ export function updateCanvasScale(
   canvas.style.right = "auto"
   canvas.style.bottom = "auto"
 
-  // Return the effective upResRatio so callers can use it
+  // Effective upRes ratio = actual backing pixels per CSS pixel.
+  // Because canvas.width >= canvasWidth always, this is always >= 1.
+  //
+  // The label drawing invariant:
+  //   drawingRatio = displayToImageRatio × effectiveUpResRatio
+  //               = (canvas.width / image.width)   [backing px per image px]
+  //
+  // This ratio is passed as `ratio` to polygon2d/box2d .draw() which scales
+  // image-space coordinates to backing canvas pixels. With effectiveUpResRatio
+  // always >= 1, annotations always land exactly on the correct pixel and
+  // the styleFactor-based line thinning at high zoom works as intended.
+  const effectiveUpResRatio = upRes ? canvas.width / canvasWidth : 1
+
   return [
     canvasWidth,
     canvasHeight,
     displayToImageRatio,
     config.viewScale,
-    upResRatio
+    effectiveUpResRatio
   ]
 }

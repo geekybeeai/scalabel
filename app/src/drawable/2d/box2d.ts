@@ -94,6 +94,19 @@ export class Box2D extends Label2D {
   }
 
   /**
+   * Get the bounding box of this box in image coordinates
+   * Returns [x, y, width, height]
+   */
+  public bounds(): [number, number, number, number] | null {
+    return [
+      this._rect.x1,
+      this._rect.y1,
+      this._rect.width(),
+      this._rect.height()
+    ]
+  }
+
+  /**
    * Draw the label on viewing or control canvas
    *
    * @param context

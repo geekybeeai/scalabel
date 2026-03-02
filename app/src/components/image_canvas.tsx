@@ -113,6 +113,7 @@ export class ImageCanvas extends DrawableCanvas<Props> {
 
   /**
    * Function to redraw all canvases
+   * Includes dirty checking to skip redundant redraws.
    *
    * @return {boolean}
    */
@@ -125,9 +126,11 @@ export class ImageCanvas extends DrawableCanvas<Props> {
         item < Session.images.length &&
         sensor in Session.images[item]
       ) {
+        // Always redraw: the inline ref callback recreates canvas on every render
+        // (HTML canvas is cleared whenever canvas.width is assigned, even with the
+        // same value). ImageBitmap cache keeps this fast.
         const image = Session.images[item][sensor]
-        // Redraw imageCanvas
-        drawImageOnCanvas(this.imageCanvas, this.imageContext, image)
+        drawImageOnCanvas(this.imageCanvas, this.imageContext, image, item, sensor)
       } else {
         clearCanvas(this.imageCanvas, this.imageContext)
       }

@@ -243,6 +243,33 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         "viewScale" in config
           ? (config as unknown as { viewScale: number }).viewScale
           : 1
+      const hiddenLabelTypes: string[] =
+        config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : []
+
+      // Compute viewport bounds in image coordinates for culling
+      let viewportBounds: [number, number, number, number] | undefined
+      if (
+        viewScale > 2 &&
+        this.display !== null &&
+        "displayLeft" in config &&
+        "displayTop" in config
+      ) {
+        const displayRect = this.display.getBoundingClientRect()
+        const imgConfig = config as unknown as {
+          displayLeft: number
+          displayTop: number
+        }
+        // Viewport in image coordinates
+        // Note: displayToImageRatio already includes viewScale factor
+        // displayLeft/Top are CSS pixel offsets (negative when panned)
+        const ratio = this.displayToImageRatio
+        const viewportX = -imgConfig.displayLeft / ratio
+        const viewportY = -imgConfig.displayTop / ratio
+        const viewportW = displayRect.width / ratio
+        const viewportH = displayRect.height / ratio
+        viewportBounds = [viewportX, viewportY, viewportW, viewportH]
+      }
+
       this._labelList.redraw(
         this.labelContext,
         this.controlContext,
@@ -250,7 +277,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         config.hideLabels,
         config.hideTags,
         mode,
-        viewScale
+        viewScale,
+        viewportBounds,
+        hiddenLabelTypes
       )
     }
     return true

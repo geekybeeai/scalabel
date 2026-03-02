@@ -108,6 +108,28 @@ export class Polygon2D extends Label2D {
   }
 
   /**
+   * Get the bounding box of this polygon in image coordinates
+   * Returns [x, y, width, height] or null if no points
+   */
+  public bounds(): [number, number, number, number] | null {
+    if (this._points.length === 0) {
+      return null
+    }
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const point of this._points) {
+      const v = point.vector()
+      minX = Math.min(minX, v.x)
+      minY = Math.min(minY, v.y)
+      maxX = Math.max(maxX, v.x)
+      maxY = Math.max(maxY, v.y)
+    }
+    return [minX, minY, maxX - minX, maxY - minY]
+  }
+
+  /**
    * Draw the label on viewing or control canvas
    *
    * @param _context

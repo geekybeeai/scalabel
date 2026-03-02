@@ -309,6 +309,15 @@ export abstract class Label2D {
   ): void
 
   /**
+   * Get the bounding box of this label in image coordinates
+   * Returns [x, y, width, height] or null if bounds cannot be determined
+   * Used for viewport culling optimization
+   */
+  public bounds(): [number, number, number, number] | null {
+    return null
+  }
+
+  /**
    * Draw the label tag on viewing or control canvas
    *
    * @param {Context2D} ctx

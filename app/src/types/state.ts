@@ -203,6 +203,8 @@ export interface ViewerConfigType {
   hideLabels: boolean
   /** whether to hide label tags */
   hideTags: boolean
+  /** list of label type names to hide (e.g. ['box2d']) */
+  hiddenLabelTypes: string[]
 }
 
 export interface ImageViewerConfigType extends ViewerConfigType {

@@ -128,7 +128,7 @@ class HomographyCanvas extends ImageCanvas {
             this._updated = false
           }
         } else {
-          drawImageOnCanvas(this.imageCanvas, this.imageContext, this._image)
+          drawImageOnCanvas(this.imageCanvas, this.imageContext, this._image, item, sensor)
         }
       } else {
         clearCanvas(this.imageCanvas, this.imageContext)

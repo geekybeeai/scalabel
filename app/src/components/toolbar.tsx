@@ -1,6 +1,8 @@
 import "react-toastify/dist/ReactToastify.css"
+import Checkbox from "@material-ui/core/Checkbox"
+import FormControlLabel from "@material-ui/core/FormControlLabel"
 import List from "@material-ui/core/List/List"
-// import ListItem from "@material-ui/core/ListItem"
+import ListItem from "@material-ui/core/ListItem"
 import _ from "lodash"
 import React from "react"
 import { Slide, toast, ToastContainer } from "react-toastify"
@@ -86,21 +88,23 @@ export class ToolBar extends Component<Props> {
       case Key.H_LOW:
       case Key.H_UP: {
         e.preventDefault()
-        const config = {
-          ...this.state.user.viewerConfigs[Session.activeViewerId]
+        const activeConfig = this.activeViewerConfig
+        if (activeConfig !== undefined) {
+          const config = { ...activeConfig }
+          config.hideLabels = !config.hideLabels
+          Session.dispatch(changeViewerConfig(this.safeActiveViewerId, config))
         }
-        config.hideLabels = !config.hideLabels
-        Session.dispatch(changeViewerConfig(Session.activeViewerId, config))
         break
       }
       case Key.T_LOW:
       case Key.T_UP: {
         e.preventDefault()
-        const config = {
-          ...this.state.user.viewerConfigs[Session.activeViewerId]
+        const activeConfig = this.activeViewerConfig
+        if (activeConfig !== undefined) {
+          const config = { ...activeConfig }
+          config.hideTags = !config.hideTags
+          Session.dispatch(changeViewerConfig(this.safeActiveViewerId, config))
         }
-        config.hideTags = !config.hideTags
-        Session.dispatch(changeViewerConfig(Session.activeViewerId, config))
         break
       }
       case Key.X_LOW: {
@@ -161,12 +165,41 @@ export class ToolBar extends Component<Props> {
   }
 
   /**
+   * Get the active viewer config, falling back to viewer 0 when
+   * Session.activeViewerId is -1 (before the user's mouse enters any viewer).
+   */
+  private get activeViewerConfig() {
+    const configs = this.state.user.viewerConfigs
+    return configs[Session.activeViewerId] ?? configs[0]
+  }
+
+  /**
+   * Get the safe active viewer ID (falls back to 0 if not yet set).
+   */
+  private get safeActiveViewerId(): number {
+    const configs = this.state.user.viewerConfigs
+    if (
+      Session.activeViewerId !== -1 &&
+      Session.activeViewerId in configs
+    ) {
+      return Session.activeViewerId
+    }
+    return 0
+  }
+
+  /**
    * ToolBar render function
    *
    * @return component
    */
   public render(): React.ReactNode {
     const { categories, treeCategories, attributes } = this.props
+    // Compute once, safe — handles the case where activeViewerId is -1
+    // (which happens before the user's mouse first enters a viewer pane)
+    const activeConfig = this.activeViewerConfig
+    if (activeConfig === undefined) {
+      return null
+    }
     return (
       <div>
         {categories !== null ? (
@@ -196,6 +229,88 @@ export class ToolBar extends Component<Props> {
               this.deletePressed()
             })}
           </div>
+          {/* Visibility toggles — always shown */}
+          {this.state.task.config.labelTypes.length >= 1 && (
+            <div
+              style={{
+                padding: "4px 8px",
+                borderTop: "1px solid rgba(255,255,255,0.15)",
+                marginTop: 4
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  opacity: 0.7,
+                  marginBottom: 2,
+                  letterSpacing: 1,
+                  textTransform: "uppercase"
+                }}
+              >
+                Visibility
+              </div>
+              {/* Tags (category label boxes, e.g. "yel", "dou") */}
+              <ListItem
+                key="__tags__"
+                dense
+                disableGutters
+                style={{ padding: "0 0 0 4px" }}
+              >
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={!(activeConfig.hideTags ?? false)}
+                      onChange={() => {
+                        const config = { ...activeConfig }
+                        config.hideTags = !config.hideTags
+                        Session.dispatch(
+                          changeViewerConfig(this.safeActiveViewerId, config)
+                        )
+                      }}
+                      style={{ padding: 2, color: "inherit" }}
+                    />
+                  }
+                  label={<span style={{ fontSize: 12 }}>Show Tags</span>}
+                  style={{ margin: 0 }}
+                />
+              </ListItem>
+              {/* Per label-type toggles */}
+              {this.state.task.config.labelTypes.map((labelType) => {
+                const hidden = (
+                  (activeConfig.hiddenLabelTypes ?? [])
+                ).includes(labelType)
+                const displayName = this.getLabelTypeDisplayName(labelType)
+                return (
+                  <ListItem
+                    key={labelType}
+                    dense
+                    disableGutters
+                    style={{ padding: "0 0 0 4px" }}
+                  >
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={!hidden}
+                          onChange={() =>
+                            this.toggleLabelTypeVisibility(labelType)
+                          }
+                          style={{ padding: 2, color: "inherit" }}
+                        />
+                      }
+                      label={
+                        <span style={{ fontSize: 12 }}>
+                          Show {displayName}
+                        </span>
+                      }
+                      style={{ margin: 0 }}
+                    />
+                  </ListItem>
+                )
+              })}
+            </div>
+          )}
           {(this.state.user.viewerConfigs[0].type ===
             ViewerConfigTypeName.POINT_CLOUD ||
             this.state.user.viewerConfigs[0].type ===
@@ -234,6 +349,39 @@ export class ToolBar extends Component<Props> {
         <ToastContainer hideProgressBar transition={Slide} />
       </div>
     )
+  }
+
+  /**
+   * Toggle visibility of a specific label type in the active viewer
+   *
+   * @param labelTypeName the label type to toggle (e.g. 'box2d')
+   */
+  private toggleLabelTypeVisibility(labelTypeName: string): void {
+    const config = { ...this.activeViewerConfig }
+    const hidden = config.hiddenLabelTypes ?? []
+    if (hidden.includes(labelTypeName)) {
+      config.hiddenLabelTypes = hidden.filter((t) => t !== labelTypeName)
+    } else {
+      config.hiddenLabelTypes = [...hidden, labelTypeName]
+    }
+    Session.dispatch(changeViewerConfig(this.safeActiveViewerId, config))
+  }
+
+  /**
+   * Get a human-readable display name for a label type
+   *
+   * @param labelTypeName the internal label type name
+   */
+  private getLabelTypeDisplayName(labelTypeName: string): string {
+    const nameMap: { [key: string]: string } = {
+      box2d: "Boxes",
+      polygon2d: "Polygons",
+      polyline2d: "Polylines",
+      tag: "Tags",
+      box3d: "3D Boxes",
+      custom2d: "Custom"
+    }
+    return nameMap[labelTypeName] ?? labelTypeName
   }
 
   /**

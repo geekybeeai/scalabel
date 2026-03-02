@@ -178,6 +178,8 @@ export class Label2DList {
    * @param hideLabelTags
    * @param sessionMode
    * @param viewScale: current zoom level (1 = no zoom)
+   * @param viewportBounds: optional viewport bounds for culling [x, y, width, height] in image coords
+   * @param hiddenLabelTypes: label type names to hide (e.g. ['box2d'])
    */
   public redraw(
     labelContext: Context2D,
@@ -186,13 +188,48 @@ export class Label2DList {
     hideLabels?: boolean,
     hideLabelTags?: boolean,
     sessionMode?: ModeStatus,
-    viewScale?: number
+    viewScale?: number,
+    viewportBounds?: [number, number, number, number],
+    hiddenLabelTypes?: string[]
   ): void {
     const isTrackLinking = this._state.session.trackLinking
-    const labelsToDraw =
+    let labelsToDraw =
       hideLabels !== null && hideLabels !== undefined && hideLabels
         ? this._labelList.filter((label) => label.selected)
         : this._labelList
+
+    // Per-type visibility: hide label types that are toggled off in the sidebar
+    // Selected labels are always shown so users can't lose their selection
+    if (hiddenLabelTypes !== undefined && hiddenLabelTypes.length > 0) {
+      labelsToDraw = labelsToDraw.filter(
+        (label) => label.selected || !hiddenLabelTypes.includes(label.type)
+      )
+    }
+
+    // Viewport culling: at high zoom, only draw labels within visible area
+    // This provides massive performance improvement when zoomed in on large images
+    if (
+      viewportBounds !== undefined &&
+      viewScale !== undefined &&
+      viewScale > 2
+    ) {
+      const [vx, vy, vw, vh] = viewportBounds
+      // Add margin to prevent labels from popping in/out at edges
+      const margin = 50 / ratio
+      labelsToDraw = labelsToDraw.filter((label) => {
+        const bounds = label.bounds()
+        if (bounds === null) return true // Always draw labels without bounds
+        const [lx, ly, lw, lh] = bounds
+        // Check if label bounds intersect viewport
+        return !(
+          lx + lw < vx - margin ||
+          lx > vx + vw + margin ||
+          ly + lh < vy - margin ||
+          ly > vy + vh + margin
+        )
+      })
+    }
+
     labelsToDraw.forEach((v) =>
       [
         { ctx: labelContext, mode: DrawMode.VIEW },

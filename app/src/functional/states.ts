@@ -304,7 +304,8 @@ export function makeImageViewerConfig(
     pane,
     synchronized: false,
     hideLabels: false,
-    hideTags: false
+    hideTags: false,
+    hiddenLabelTypes: []
   }
 }
 
@@ -332,6 +333,7 @@ export function makePointCloudViewerConfig(
     synchronized: false,
     hideLabels: false,
     hideTags: false,
+    hiddenLabelTypes: [],
     cameraRotateDir: false,
     colorScheme: ColorSchemeType.HEIGHT,
     cameraTransformed: false
