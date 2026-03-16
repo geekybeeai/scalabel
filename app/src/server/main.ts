@@ -54,7 +54,7 @@ function startHTTPServer(
   projectStore: ProjectStore,
   userManager: UserManager
 ): void {
-  const listeners = new Listeners(projectStore, userManager)
+  const listeners = new Listeners(projectStore, userManager, config)
 
   // Set up middleware
   app.use(listeners.loggingHandler)
@@ -95,6 +95,11 @@ function startHTTPServer(
     listeners.getExportHandler.bind(listeners)
   )
   app.get(
+    Endpoint.TILE_EXPORT,
+    authMiddleWare,
+    listeners.getTileDataHandler.bind(listeners)
+  )
+  app.get(
     Endpoint.STATS,
     authMiddleWare,
     listeners.statsHandler.bind(listeners)
@@ -133,6 +138,11 @@ function startHTTPServer(
     express.json(),
     listeners.postTasksHandler.bind(listeners)
   )
+  // 404 handler for unmatched routes
+  app.use((_req: Request, res: Response) => {
+    res.status(404).json({ code: "404", data: "Not found" })
+  })
+
   app.use(errorHandler(config))
 }
 

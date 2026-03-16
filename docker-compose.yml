@@ -1,0 +1,39 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /opt/scalabel
+    command:
+      [
+        "sh",
+        "-lc",
+        "npm run build && node --max-old-space-size=8192 app/dist/main.js --config ./local-data/scalabel/config.yml"
+      ]
+    environment:
+      TILE_BACKEND_URL: "http://tile-backend:8787"
+      TILE_BACKEND_TIMEOUT_MS: "1800000"
+    ports:
+      - "8686:8686"
+      - "6379:6379"
+    volumes:
+      - ./local-data:/opt/scalabel/local-data
+      - ./scalable_json_to_tilewise_annotation/run:/opt/scalabel/scalable_json_to_tilewise_annotation/run
+    depends_on:
+      - tile-backend
+
+  tile-backend:
+    build:
+      context: .
+      dockerfile: scalable_json_to_tilewise_annotation/Dockerfile
+    working_dir: /opt/scalabel/scalable_json_to_tilewise_annotation
+    environment:
+      TILE_BACKEND_HOST: "0.0.0.0"
+      TILE_BACKEND_PORT: "8787"
+      TILE_PATH_MAP_FROM: "${TILE_PATH_MAP_FROM:-}"
+      TILE_PATH_MAP_TO: "${TILE_PATH_MAP_TO:-}"
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./local-data:/opt/scalabel/local-data
+      - ./scalable_json_to_tilewise_annotation/run:/opt/scalabel/scalable_json_to_tilewise_annotation/run

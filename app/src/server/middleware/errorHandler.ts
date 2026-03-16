@@ -1,4 +1,4 @@
-import { Request, Response } from "express"
+import { NextFunction, Request, Response } from "express"
 
 import { ServerConfig } from "../../types/config"
 import { HttpException } from "../exception"
@@ -14,8 +14,9 @@ import { HttpException } from "../exception"
  */
 const errorHandler =
   (config: ServerConfig) =>
-  (error: HttpException, _request: Request, response: Response) => {
-    const status = error.status !== 0 ? error.status : 500
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  (error: HttpException, _request: Request, response: Response, _next: NextFunction) => {
+    const status = error.status != null && error.status !== 0 ? error.status : 500
     const message =
       error.message !== "" ? error.message : "Something went wrong"
     const resData: { [k: string]: string } = {

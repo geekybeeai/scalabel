@@ -68,3 +68,5 @@ doc/media
 build/
 dist/
 scalabel.egg-info
+scalable_json_to_tilewise_annotation/run
+scalable_json_to_tilewise_annotation/src/logs/

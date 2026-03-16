@@ -245,7 +245,7 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
               if (time !== -1) {
                 dateString = formatDate(time)
               }
-              totalLabels += Number(value.numLabels)
+              totalLabels += Math.max(0, Number(value.numLabels))
               totalTaskLabeled += Number(value.numLabeledItems) > 0 ? 1 : 0
               return (
                 <TableRow
@@ -351,13 +351,31 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
   ): void {
     const xhr = new XMLHttpRequest()
     xhr.onreadystatechange = () => {
+      if (xhr.readyState !== 4) {
+        return
+      }
+
       const newTaskMetaData = this.state.taskMetaDatas
-      if (xhr.responseText !== "") {
-        newTaskMetaData[index] = JSON.parse(xhr.responseText)
-        if (xhr.readyState === 4) {
-          this.setState({ taskMetaDatas: newTaskMetaData })
+      if (xhr.status >= 200 && xhr.status < 300 && xhr.responseText !== "") {
+        try {
+          newTaskMetaData[index] = JSON.parse(xhr.responseText)
+        } catch (_err) {
+          newTaskMetaData[index] = {
+            ...newTaskMetaData[index],
+            numLabeledItems: "0",
+            numLabels: "0",
+            submissions: [{ time: -1, user: "" }]
+          }
+        }
+      } else {
+        newTaskMetaData[index] = {
+          ...newTaskMetaData[index],
+          numLabeledItems: "0",
+          numLabels: "0",
+          submissions: [{ time: -1, user: "" }]
         }
       }
+      this.setState({ taskMetaDatas: newTaskMetaData })
     }
     taskId = taskId.substring(taskId.length - 6)
     xhr.open(
@@ -463,6 +481,18 @@ function sidebar(props: SidebarProps): JSX.Element {
             href={`.${Endpoint.EXPORT}?project_name=` + projectMetaData.name}
           >
             DOWNLOAD LABELS
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            className={classes.link}
+            startIcon={<CloudDownloadIcon />}
+            href={
+              `.${Endpoint.TILE_EXPORT}?project_name=` + projectMetaData.name
+            }
+            data-testid="download-tile-link"
+          >
+            Download Tile data
           </Button>
           {/* <Link
             variant="body2"

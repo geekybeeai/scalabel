@@ -200,8 +200,25 @@ export class ToolBar extends Component<Props> {
     if (activeConfig === undefined) {
       return null
     }
+
+    const currentItem = this.state.task.items[this.state.user.select.item]
+    let imageName = ""
+    if (currentItem) {
+      if (currentItem.names && Object.values(currentItem.names).length > 0) {
+        imageName = Object.values(currentItem.names)[0]
+      } else if (currentItem.urls && Object.values(currentItem.urls).length > 0) {
+        const url = Object.values(currentItem.urls)[0]
+        imageName = url.substring(url.lastIndexOf("/") + 1)
+      }
+    }
+
     return (
       <div>
+        {imageName !== "" && (
+          <div style={{ padding: "8px 16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.15)", marginBottom: "4px", wordBreak: "break-all" }}>
+            {imageName}
+          </div>
+        )}
         {categories !== null ? (
           <ToolbarCategory
             categories={categories}

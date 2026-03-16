@@ -264,7 +264,7 @@ export class Polygon2D extends Label2D {
           point.type === PathPointType.CURVE
         ) {
           const coord0 = point.vector().scale(ratio)
-          const coord1 = point.vector().scale(ratio)
+          const coord1 = nextPoint.vector().scale(ratio)
           context.moveTo(coord0.x, coord0.y)
           context.lineTo(coord1.x, coord1.y)
           context.stroke()
@@ -281,15 +281,15 @@ export class Polygon2D extends Label2D {
           PathPointType.UNKNOWN,
           this._label?.id
         )
-        const tmpStyle = pointStyle
+        const tmpStyle = { ...pointStyle }
         tmpStyle.color = assignColor(numPoints + 1)
         tmpPoint.draw(context, ratio, tmpStyle)
         let numVertices = 1
         _.forEach(this._points, (point, index) => {
           if (point.type === PathPointType.LINE) {
-            let style = pointStyle
+            let style = { ...pointStyle }
             if (numVertices === this._highlightedHandle) {
-              style = highPointStyle
+              style = { ...highPointStyle }
             }
             style.color = assignColor(index + 1)
             point.draw(context, ratio, style)
@@ -299,11 +299,15 @@ export class Polygon2D extends Label2D {
       } else if (this._state === Polygon2DState.FINISHED) {
         for (let i = 0; i < numPoints; ++i) {
           const point = this._points[i]
-          let style = pointStyle
+          let style = { ...pointStyle }
           if (i + 1 === this._highlightedHandle) {
-            style = highPointStyle
+            style = { ...highPointStyle }
           }
           style.color = assignColor(i + 1)
+          if (mode === DrawMode.VIEW && point.type === PathPointType.CURVE) {
+            style.color = [0, 255, 255]
+            style.strokeColor = [0, 0, 0]
+          }
           point.draw(context, ratio, style)
         }
       }

@@ -10,6 +10,8 @@ export interface PathPoint2DStyle {
   radius: number
   /** color of the point */
   color: number[]
+  /** optional stroke color for the point */
+  strokeColor?: number[]
 }
 
 export interface Edge2DStyle {
@@ -186,10 +188,20 @@ export class PathPoint2D {
     // Convert to display resolution
     const real = this.vector().scale(ratio)
     context.beginPath()
+
+    // Keep fill color driven by the provided style so control-canvas color
+    // encoding (for hit testing) remains intact for all point types.
     context.fillStyle = toCssColor(style.color)
     context.arc(real.x, real.y, style.radius, 0, 2 * Math.PI, false)
     context.closePath()
     context.fill()
+
+    if (style.strokeColor !== undefined) {
+      context.lineWidth = 1
+      context.strokeStyle = toCssColor(style.strokeColor)
+      context.stroke()
+    }
+
     context.restore()
   }
 }
