@@ -18,15 +18,15 @@ services:
       - "6379:6379"
     volumes:
       - ./local-data:/opt/scalabel/local-data
-      - ./scalable_json_to_tilewise_annotation/run:/opt/scalabel/scalable_json_to_tilewise_annotation/run
+      - ./scalabel_json_to_tilewise_annotation/run:/opt/scalabel/scalabel_json_to_tilewise_annotation/run
     depends_on:
       - tile-backend
 
   tile-backend:
     build:
       context: .
-      dockerfile: scalable_json_to_tilewise_annotation/Dockerfile
-    working_dir: /opt/scalabel/scalable_json_to_tilewise_annotation
+      dockerfile: scalabel_json_to_tilewise_annotation/Dockerfile
+    working_dir: /opt/scalabel/scalabel_json_to_tilewise_annotation
     environment:
       TILE_BACKEND_HOST: "0.0.0.0"
       TILE_BACKEND_PORT: "8787"
@@ -36,4 +36,4 @@ services:
       - "8787:8787"
     volumes:
       - ./local-data:/opt/scalabel/local-data
-      - ./scalable_json_to_tilewise_annotation/run:/opt/scalabel/scalable_json_to_tilewise_annotation/run
+      - ./scalabel_json_to_tilewise_annotation/run:/opt/scalabel/scalabel_json_to_tilewise_annotation/run

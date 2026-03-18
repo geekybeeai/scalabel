@@ -184,7 +184,7 @@ export class Listeners {
       const runName = `${now()}_${this.safePathToken(projectName)}`
       const runRoot = path.resolve(
         process.cwd(),
-        "scalable_json_to_tilewise_annotation",
+        "scalabel_json_to_tilewise_annotation",
         "run"
       )
       const outputDir = path.join(runRoot, runName)
