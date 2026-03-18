@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import cv2
+import matplotlib
+matplotlib.use("Agg")  # MUST be before importing pyplot for a non-GUI backend
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
