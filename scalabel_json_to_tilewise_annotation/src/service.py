@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from logger_config import setup_logging
 from main import main as run_pipeline
+from settings import IGNORE_CATEGORIES
 
 setup_logging(log_dir="logs")
 logger = logging.getLogger(__name__)
@@ -47,6 +48,14 @@ class ProcessRequest(BaseModel):
     input_dir: str = Field(..., description="Input image directory")
     scalable_json_path: str = Field(
         ..., description="Path to Scalabel JSON export file"
+    )
+    ignore_categories: list[str] = Field(
+        default=IGNORE_CATEGORIES,
+        description=(
+            "Category names to exclude from COCO output. "
+            "Remaining category IDs are re-sequenced. "
+            "Defaults to IGNORE_CATEGORIES in settings.py."
+        ),
     )
     output_dir: str = Field(
         ..., description="Output directory for generated tile data"
@@ -93,6 +102,7 @@ def process(request: ProcessRequest) -> ProcessResponse:
             str(input_dir),
             str(scalable_json_path),
             str(output_dir),
+            ignore_categories=request.ignore_categories,
         )
     except Exception as exc:
         logger.exception("Tile pipeline execution failed")

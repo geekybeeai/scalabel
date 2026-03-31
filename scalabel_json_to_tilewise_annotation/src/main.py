@@ -7,6 +7,7 @@ import shutil
 
 from logger_config import setup_logging
 from process_image import ProcessImage
+from settings import IGNORE_CATEGORIES
 from split_annotation import TileAnnotationSplitter
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ def main(
     input_dir: str,
     scalable_json_path: str,
     output_dir: str,
+    ignore_categories: list[str] | None = None,
 ) -> None:
     """Run the full annotation processing and tile-splitting pipeline.
 
@@ -57,6 +59,7 @@ def main(
         input_dir: Directory containing source images.
         scalable_json_path: Path to the Scalabel JSON export file.
         output_dir: Directory where outputs will be written.
+        ignore_categories: Category names to exclude from COCO output.
     """
     logger.info("Current working directory: %s", os.getcwd())
 
@@ -65,7 +68,10 @@ def main(
     validate_dir(output_dir)
     logger.info("All input paths are valid.")
 
-    processor = ProcessImage(input_dir, scalable_json_path, output_dir)
+    processor = ProcessImage(
+        input_dir, scalable_json_path, output_dir,
+        ignore_categories=ignore_categories,
+    )
     processor.load_json()
     processor.find_images()
     processor.process_all_images()
@@ -124,11 +130,28 @@ if __name__ == "__main__":
         required=True,
         help='Output directory for processed tiles',
     )
+    parser.add_argument(
+        '--ignore-categories',
+        nargs='*',
+        default=IGNORE_CATEGORIES,
+        help=(
+            'Category names to exclude from COCO output. '
+            'Remaining category IDs are re-sequenced. '
+            'Defaults to IGNORE_CATEGORIES in settings.py.'
+        ),
+    )
     args = parser.parse_args()
 
     logger.info("Input directory: %s", args.input_dir)
     logger.info("Scalable JSON path: %s", args.scalable_json_path)
     logger.info("Output directory: %s", args.output_dir)
+    if args.ignore_categories:
+        logger.info("Ignoring categories: %s", args.ignore_categories)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    main(args.input_dir, args.scalable_json_path, args.output_dir)
+    main(
+        args.input_dir,
+        args.scalable_json_path,
+        args.output_dir,
+        ignore_categories=args.ignore_categories,
+    )

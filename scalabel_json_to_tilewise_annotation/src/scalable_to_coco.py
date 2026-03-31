@@ -39,11 +39,15 @@ class ScalableDirectToCoco:
         image_path: str,
         output_dir: Optional[str] = None,
         lane_width: int = 8,
+        ignore_categories: Optional[List[str]] = None,
+        scalable_data: Optional[Dict] = None,
     ):
         self.scalable_json_path = Path(scalable_json_path)
         self.image_path = Path(image_path)
         self.output_dir = Path(output_dir)
         self.lane_width = lane_width
+        self.ignore_categories: List[str] = ignore_categories or []
+        self._preloaded_data: Optional[Dict] = scalable_data
 
         # Image
         self.image: Optional[np.ndarray] = None
@@ -52,6 +56,10 @@ class ScalableDirectToCoco:
 
         # Data
         self.scalable_data: Dict = {}
+
+        # Reusable matplotlib figure (created after image dimensions are known)
+        self._fig: Optional[plt.Figure] = None
+        self._ax = None
 
         # Categories
         self.categories: List[Dict] = []
@@ -81,13 +89,18 @@ class ScalableDirectToCoco:
             "Resolution: %dx%d", self.image_width, self.image_height
         )
 
-        if not self.scalable_json_path.exists():
-            raise FileNotFoundError(
-                f"JSON not found: {self.scalable_json_path}"
-            )
+        # Reuse pre-loaded JSON if available, otherwise read from disk
+        if self._preloaded_data is not None:
+            self.scalable_data = self._preloaded_data
+            logger.info("Using pre-loaded Scalabel JSON (cached)")
+        else:
+            if not self.scalable_json_path.exists():
+                raise FileNotFoundError(
+                    f"JSON not found: {self.scalable_json_path}"
+                )
 
-        with open(self.scalable_json_path, 'r') as f:
-            self.scalable_data = json.load(f)
+            with open(self.scalable_json_path, 'r') as f:
+                self.scalable_data = json.load(f)
 
         if (
             not isinstance(self.scalable_data, dict)
@@ -98,7 +111,26 @@ class ScalableDirectToCoco:
         num_frames = len(self.scalable_data['frames'])
         logger.info("Loaded Scalabel JSON: %d frame(s)", num_frames)
 
+        # Create reusable matplotlib figure now that image dims are known
+        self._init_figure()
+
         self._extract_categories()
+
+    def _init_figure(self) -> None:
+        """Create a reusable matplotlib figure sized to the image."""
+        self._fig = plt.figure(facecolor="0")
+        self._fig.set_size_inches(
+            self.image_width / self._fig.get_dpi(),
+            self.image_height / self._fig.get_dpi(),
+        )
+        self._ax = self._fig.add_axes([0, 0, 1, 1])
+
+    def close(self) -> None:
+        """Release the reusable matplotlib figure."""
+        if self._fig is not None:
+            plt.close(self._fig)
+            self._fig = None
+            self._ax = None
 
     def _get_matching_frame(self):
         """Find the frame that matches the current image.
@@ -120,20 +152,49 @@ class ScalableDirectToCoco:
         return None
 
     def _extract_categories(self) -> None:
-        """Extract unique categories from all frames."""
-        category_names = set()
+        """Extract categories from Scalabel JSON config, preserving order.
 
-        for frame in self.scalable_data.get('frames', []):
-            for label in frame.get('labels', []):
-                category = label.get('category')
-                if category:
-                    category_names.add(category)
+        Uses ``config.categories`` from the Scalabel JSON so that **all**
+        defined categories appear in the COCO output even when they have
+        no annotations.  Falls back to scanning frame labels only when the
+        config block is absent.
 
-        sorted_categories = sorted(category_names)
+        Categories listed in ``self.ignore_categories`` are removed and
+        the remaining IDs are re-sequenced starting from 1.
+        """
+        config_cats = (
+            self.scalable_data
+            .get('config', {})
+            .get('categories', [])
+        )
+
+        if config_cats:
+            # Preserve the order defined in the Scalabel config
+            ordered_names = [c['name'] for c in config_cats if 'name' in c]
+        else:
+            # Fallback: extract from frame labels (sorted for determinism)
+            category_names = set()
+            for frame in self.scalable_data.get('frames', []):
+                for label in frame.get('labels', []):
+                    category = label.get('category')
+                    if category:
+                        category_names.add(category)
+            ordered_names = sorted(category_names)
+
+        # Filter out ignored categories
+        ignored = set(self.ignore_categories)
+        if ignored:
+            logger.info(
+                "Ignoring categories: %s",
+                ', '.join(sorted(ignored)),
+            )
+        ordered_names = [n for n in ordered_names if n not in ignored]
+
+        # Build category list with re-sequenced IDs
         self.categories = []
         self.category_name_to_id = {}
 
-        for idx, name in enumerate(sorted_categories):
+        for idx, name in enumerate(ordered_names):
             cat_id = idx + 1
             self.categories.append({'id': cat_id, 'name': name})
             self.category_name_to_id[name] = cat_id
@@ -211,11 +272,9 @@ class ScalableDirectToCoco:
         Returns:
             Binary mask (uint8) with annotation rendered in white
         """
-        fig = plt.figure(facecolor="0")
-        fig.set_size_inches(
-            self.image_width / fig.get_dpi(), self.image_height / fig.get_dpi()
-        )
-        ax = fig.add_axes([0, 0, 1, 1])
+        # Reuse the pre-created figure — just reset the axes
+        ax = self._ax
+        ax.clear()
         ax.axis("off")
         ax.set_xlim(0, self.image_width)
         ax.set_ylim(0, self.image_height)
@@ -237,10 +296,10 @@ class ScalableDirectToCoco:
                 )
             )
 
+        fig = self._fig
         fig.canvas.draw()
         mask = np.frombuffer(fig.canvas.tostring_rgb(), np.uint8)
         mask = mask.reshape((self.image_height, self.image_width, -1))[..., 0]
-        plt.close(fig)
         return mask
 
     def _extract_poly2d_bbox(
@@ -478,6 +537,16 @@ class ScalableDirectToCoco:
         for label_idx, label in enumerate(all_labels):
             category = label.get('category')
 
+            # Skip ignored categories
+            if category in set(self.ignore_categories):
+                logger.info(
+                    "Label %d: skipping ignored category '%s'",
+                    label_idx,
+                    category,
+                )
+                skipped_count += 1
+                continue
+
             # ✅ SKIP ONLY: Invalid category (data corruption)
             if category not in self.category_name_to_id:
                 logger.warning(
@@ -705,5 +774,6 @@ class ScalableDirectToCoco:
 
         self.load_data()
         self.scalable_to_coco()
+        self.close()
 
         logger.info("Verification step complete")
