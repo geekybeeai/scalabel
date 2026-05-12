@@ -37,6 +37,7 @@ export function initSession(containerName: string): void {
     taskIndex = parseInt(taskIndexParam, 10)
   }
   const devMode = searchParams.has(QueryArg.DEV_MODE)
+  Session.embedded = searchParams.get(QueryArg.EMBEDDED) === "1"
 
   /**
    * Wait for page to load to ensure consistent fingerprint

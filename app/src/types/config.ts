@@ -79,6 +79,13 @@ export interface HttpConfig {
   port: number
 }
 
+export interface EmbedConfig {
+  /** How often the cleanup task runs, in minutes */
+  cleanupIntervalMinutes: number
+  /** How long an embed_* project may be inactive before deletion, in minutes */
+  sessionTtlMinutes: number
+}
+
 /**
  * Information for backend environment variables
  * Populated using configuration file
@@ -98,6 +105,8 @@ export interface ServerConfig {
   bot: BotConfig
   /** cognito settings */
   cognito?: CognitoConfig
+  /** embedded edit-session config */
+  embed?: EmbedConfig
 
   /**
    * Port that server listens on

@@ -1,6 +1,7 @@
 import React from "react"
 import { connect } from "react-redux"
 
+import Session from "../common/session"
 import { getConfig } from "../functional/selector"
 import { ReduxState } from "../types/redux"
 import { ConfigType } from "../types/state"
@@ -51,7 +52,7 @@ export class Window extends React.Component<Props> {
     const config = this.props.config
 
     // Get all the components
-    const titleBar = <TitleBar />
+    const titleBar = Session.embedded ? null : <TitleBar />
 
     const leftSidebar1 = (
       <ToolBar

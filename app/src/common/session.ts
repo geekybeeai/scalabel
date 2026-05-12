@@ -30,6 +30,8 @@ class Session {
   /** if in test mode, needed for integration and end to end testing */
   // TODO: when we move to node move this into state
   public testMode: boolean
+  /** True when the labeling page is loaded with ?embedded=1 */
+  public embedded: boolean
 
   /**
    * Constructor
@@ -42,6 +44,7 @@ class Session {
     this.tracks = {}
     this.activeViewerId = -1
     this.testMode = false
+    this.embedded = false
     this.store = configureStore({})
   }
 

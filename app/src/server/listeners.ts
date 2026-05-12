@@ -2,6 +2,7 @@ import axios from "axios"
 import { NextFunction, Request, Response } from "express"
 import * as fs from "fs-extra"
 import { File } from "formidable"
+import * as os from "os"
 import * as path from "path"
 import { filterXSS } from "xss"
 
@@ -55,6 +56,69 @@ interface TileBackendResponse {
 
 const DEFAULT_TILE_BACKEND_URL = "http://127.0.0.1:8787"
 const DEFAULT_TILE_BACKEND_TIMEOUT_MS = 30 * 60 * 1000
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+interface OpenEditSessionBody {
+  sessionId?: string
+  annotations?: {
+    frames?: Array<{
+      url?: string
+      name?: string
+      labels?: unknown[]
+      videoName?: string
+      timestamp?: number
+      attributes?: Record<string, unknown>
+      sensor?: number
+    }>
+    config?: {
+      categories?: Array<{ name?: string }>
+      attributes?: unknown[]
+    }
+  }
+}
+
+function validateOpenEditSessionBody(
+  body: OpenEditSessionBody | undefined
+): { ok: true } | { ok: false; reason: string } {
+  if (body === undefined || body === null) {
+    return { ok: false, reason: "Missing request body" }
+  }
+  if (typeof body.sessionId !== "string" || !UUID_RE.test(body.sessionId)) {
+    return { ok: false, reason: "sessionId must be a valid UUID" }
+  }
+  const ann = body.annotations
+  if (ann === undefined || ann === null) {
+    return { ok: false, reason: "Missing annotations" }
+  }
+  if (!Array.isArray(ann.frames) || ann.frames.length !== 1) {
+    return {
+      ok: false,
+      reason: "annotations.frames must contain exactly one entry"
+    }
+  }
+  const frame = ann.frames[0]
+  if (typeof frame.url !== "string" || frame.url.length === 0) {
+    return {
+      ok: false,
+      reason: "annotations.frames[0].url must be a non-empty string"
+    }
+  }
+  const cats = ann.config?.categories
+  if (!Array.isArray(cats) || cats.length === 0) {
+    return {
+      ok: false,
+      reason: "annotations.config.categories must be a non-empty array"
+    }
+  }
+  for (const c of cats) {
+    if (typeof c?.name !== "string" || c.name.length === 0) {
+      return { ok: false, reason: "Every category requires a non-empty name" }
+    }
+  }
+  return { ok: true }
+}
 
 /**
  * Wraps HTTP listeners
@@ -237,6 +301,131 @@ export class Listeners {
     } catch (error) {
       Logger.error(error as Error)
       res.status(500).send(filterXSS((error as Error).message))
+    }
+  }
+
+  /**
+   * Open an embedded edit session: create an ephemeral embed_<sessionId>
+   * project from a JSON payload and return a labeling URL the caller can
+   * iframe.
+   *
+   * @param req
+   * @param res
+   */
+  public async openEditSessionHandler(
+    req: Request,
+    res: Response
+  ): Promise<void> {
+    if (this.checkInvalidPost(req, res)) {
+      return
+    }
+
+    const body = req.body as OpenEditSessionBody | undefined
+    const validation = validateOpenEditSessionBody(body)
+    if (!validation.ok) {
+      res.status(400).send(filterXSS(validation.reason))
+      return
+    }
+
+    const sessionId = (body as OpenEditSessionBody).sessionId as string
+    const projectName = `embed_${sessionId}`
+
+    if (await this.projectStore.checkProjectName(projectName)) {
+      res.status(409).send(`Session ${sessionId} already exists`)
+      return
+    }
+
+    // Write the incoming JSON to a tempfile so we can reuse the existing
+    // single-file project-creation pipeline (parseSingleFile reads from disk).
+    const tempPath = path.join(os.tmpdir(), `embed_${sessionId}.json`)
+    await fs.writeJson(tempPath, (body as OpenEditSessionBody).annotations)
+
+    try {
+      const fields: { [key: string]: string } = {
+        [FormField.PROJECT_NAME]: projectName,
+        [FormField.ITEM_TYPE]: "image",
+        [FormField.LABEL_TYPE]: "polyline2d",
+        [FormField.TASK_SIZE]: "1",
+        [FormField.PAGE_TITLE]: "",
+        [FormField.INSTRUCTIONS_URL]: "",
+        [FormField.TRACKING]: "false"
+      }
+      const files: { [key: string]: string } = {
+        [FormField.SINGLE_FILE]: tempPath
+      }
+
+      const storage = this.projectStore.getStorage()
+      const form = await parseForm(fields, this.projectStore)
+      const formFileData = await parseSingleFile(
+        storage,
+        form.labelType,
+        files
+      )
+      const project = await createProject(form, formFileData)
+      const [filteredProject] = filterIntersectedPolygonsInProject(project)
+
+      await Promise.all([
+        this.projectStore.saveProject(filteredProject),
+        createTasks(filteredProject, this.projectStore)
+      ])
+
+      res.status(200).json({
+        labelUrl:
+          `/label?project_name=${encodeURIComponent(projectName)}` +
+          `&task_index=0&embedded=1`
+      })
+    } catch (err) {
+      Logger.error(err as Error)
+      res.status(500).send(filterXSS((err as Error).message))
+    } finally {
+      try {
+        await fs.unlink(tempPath)
+      } catch {
+        /* best-effort temp cleanup */
+      }
+    }
+  }
+
+  /**
+   * Close an embedded edit session: delete the embed_<sessionId> project.
+   * Idempotent (returns 404 if already cleaned up). Strictly scoped to the
+   * embed_ prefix.
+   *
+   * @param req
+   * @param res
+   */
+  public async closeEditSessionHandler(
+    req: Request,
+    res: Response
+  ): Promise<void> {
+    if (this.checkInvalidPost(req, res)) {
+      return
+    }
+
+    const sessionId = req.query?.sessionId
+    if (typeof sessionId !== "string" || !UUID_RE.test(sessionId)) {
+      res.status(400).send("sessionId must be a valid UUID")
+      return
+    }
+
+    const projectName = `embed_${sessionId}`
+    if (!projectName.startsWith("embed_")) {
+      // Defense in depth — should be unreachable.
+      res.status(400).send("Refusing to delete non-embed project")
+      return
+    }
+
+    if (!(await this.projectStore.checkProjectName(projectName))) {
+      res.status(404).send("No such session")
+      return
+    }
+
+    try {
+      await this.projectStore.deleteProject(projectName)
+      res.status(204).end()
+    } catch (err) {
+      Logger.error(err as Error)
+      res.status(500).send(filterXSS((err as Error).message))
     }
   }
 

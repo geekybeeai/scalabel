@@ -144,6 +144,14 @@ export class ProjectStore {
   }
 
   /**
+   * Expose the underlying storage so callers (e.g. the embed-session
+   * handler) can reuse the same storage instance for parseSingleFile.
+   */
+  public getStorage(): Storage {
+    return this.storage
+  }
+
+  /**
    * Checks whether project name is unique
    *
    * @param projectName

@@ -236,7 +236,9 @@ class LabelLayout extends React.Component<Props, LayoutState> {
     return (
       <React.Fragment>
         <CssBaseline />
-        <div className={classes.titleBar}>{titleBar}</div>
+        {titleBar !== null && (
+          <div className={classes.titleBar}>{titleBar}</div>
+        )}
         <div className={classes.alerts}>
           <Stack spacing={1}>{this.getAlerts()}</Stack>
         </div>

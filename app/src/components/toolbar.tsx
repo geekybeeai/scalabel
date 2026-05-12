@@ -59,6 +59,8 @@ export class ToolBar extends Component<Props> {
   private readonly _keyDownHandler: (e: KeyboardEvent) => void
   /** key up handler */
   private readonly _keyUpHandler: (e: KeyboardEvent) => void
+  /** True while a Save & Close request is in flight (embedded mode) */
+  private _saving: boolean
 
   /**
    * Constructor
@@ -72,7 +74,61 @@ export class ToolBar extends Component<Props> {
     this._keyUpHandler = this.onKeyUp.bind(this)
     this.handleAttributeToggle = this.handleAttributeToggle.bind(this)
     this.getAlignmentIndex = this.getAlignmentIndex.bind(this)
+    this.handleSaveAndClose = this.handleSaveAndClose.bind(this)
     this._keyDownMap = {}
+    this._saving = false
+  }
+
+  /**
+   * Save the current edits via /getExport, postMessage the JSON to the
+   * parent window, then fire-and-forget /closeEditSession to delete the
+   * ephemeral project. Only used in embedded mode.
+   */
+  private async handleSaveAndClose(): Promise<void> {
+    if (this._saving) {
+      return
+    }
+    this._saving = true
+    this.forceUpdate()
+
+    const reduxState = Session.store.getState().present
+    const projectName = reduxState.task.config.projectName
+    const sessionId = projectName.replace(/^embed_/, "")
+
+    let annotations: unknown = null
+    try {
+      const resp = await fetch(
+        `./getExport?project_name=${encodeURIComponent(projectName)}`
+      )
+      if (!resp.ok) {
+        throw new Error(`getExport returned ${resp.status}`)
+      }
+      annotations = await resp.json()
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      window.alert(
+        `Save failed: ${(err as Error).message}. Your edits remain in this ` +
+          `session — please try again.`
+      )
+      this._saving = false
+      this.forceUpdate()
+      return
+    }
+
+    window.parent.postMessage(
+      { type: "scalabel:saved", sessionId, annotations },
+      window.location.origin
+    )
+
+    void fetch(
+      `./closeEditSession?sessionId=${encodeURIComponent(sessionId)}`,
+      { method: "POST" }
+    ).catch(() => {
+      /* swallow — the cleanup task will catch it */
+    })
+
+    // Leave _saving=true so the button stays disabled until the parent
+    // closes the modal, which destroys this iframe.
   }
 
   /**
@@ -214,7 +270,7 @@ export class ToolBar extends Component<Props> {
 
     return (
       <div>
-        {imageName !== "" && (
+        {imageName !== "" && !Session.embedded && (
           <div style={{ padding: "8px 16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.15)", marginBottom: "4px", wordBreak: "break-all" }}>
             {imageName}
           </div>
@@ -363,6 +419,27 @@ export class ToolBar extends Component<Props> {
             </div>
           )}
         </div>
+        {Session.embedded && (
+          <div style={{ padding: 16 }}>
+            <button
+              type="button"
+              disabled={this._saving}
+              onClick={this.handleSaveAndClose}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                background: this._saving ? "#5a5a5a" : "#0a84ff",
+                color: "#fff",
+                border: "none",
+                borderRadius: 4,
+                cursor: this._saving ? "not-allowed" : "pointer",
+                fontWeight: 600
+              }}
+            >
+              {this._saving ? "Saving…" : "Save & Close"}
+            </button>
+          </div>
+        )}
         <ToastContainer hideProgressBar transition={Slide} />
       </div>
     )

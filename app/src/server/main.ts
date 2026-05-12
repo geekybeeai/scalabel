@@ -13,6 +13,7 @@ import { ServerConfig } from "../types/config"
 import { BotManager } from "./bot_manager"
 import { readConfig } from "./config"
 import Callback from "./controller/callback"
+import { startEmbedCleanup } from "./embed_cleanup"
 import { Hub } from "./hub"
 import { Listeners } from "./listeners"
 import Logger from "./logger"
@@ -137,6 +138,17 @@ function startHTTPServer(
     authMiddleWare,
     express.json(),
     listeners.postTasksHandler.bind(listeners)
+  )
+  app.post(
+    Endpoint.OPEN_EDIT_SESSION,
+    authMiddleWare,
+    express.json({ limit: "50mb" }),
+    listeners.openEditSessionHandler.bind(listeners)
+  )
+  app.post(
+    Endpoint.CLOSE_EDIT_SESSION,
+    authMiddleWare,
+    listeners.closeEditSessionHandler.bind(listeners)
   )
   // 404 handler for unmatched routes
   app.use((_req: Request, res: Response) => {
@@ -312,6 +324,23 @@ async function main(): Promise<void> {
   await userManager.clearUsers()
 
   await makeBotManager(config, subscriber, cacheClient)
+
+  // Schedule cleanup of abandoned embed_* projects (safety net for the
+  // happy-path closeEditSession flow).
+  const embedCfg = config.embed ?? {
+    cleanupIntervalMinutes: 60,
+    sessionTtlMinutes: 1440
+  }
+  startEmbedCleanup(
+    projectStore,
+    embedCfg.cleanupIntervalMinutes,
+    embedCfg.sessionTtlMinutes
+  )
+  Logger.info(
+    `embed_cleanup scheduled: interval=${embedCfg.cleanupIntervalMinutes}m ` +
+      `ttl=${embedCfg.sessionTtlMinutes}m`
+  )
+
   await startServers(config, projectStore, userManager, publisher)
 }
 

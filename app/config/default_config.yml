@@ -4,3 +4,9 @@ storage:
     data: "./local-data/scalabel"
     itemDir: "./local-data/items"
     type: "local"
+# Embedded edit-session configuration. Used by POST /openEditSession to
+# create ephemeral embed_<sessionId> projects, and by the cleanup task
+# that reaps abandoned embed_* projects. Values shown are the defaults.
+# embed:
+#     cleanupIntervalMinutes: 60
+#     sessionTtlMinutes: 1440   # 24 hours

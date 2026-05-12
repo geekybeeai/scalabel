@@ -29,6 +29,10 @@ export const serverConfig: ServerConfig = {
     on: false,
     host: "http://0.0.0.0",
     port: 8080
+  },
+  embed: {
+    cleanupIntervalMinutes: 60,
+    sessionTtlMinutes: 1440
   }
 }
 
