@@ -384,6 +384,65 @@ export class ToolBar extends Component<Props> {
               })}
             </div>
           )}
+          {/* Keyboard shortcut legend — always shown, embedded or not */}
+          <div
+            style={{
+              padding: "4px 8px",
+              borderTop: "1px solid rgba(255,255,255,0.15)",
+              marginTop: 4
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                opacity: 0.7,
+                marginBottom: 4,
+                letterSpacing: 1,
+                textTransform: "uppercase"
+              }}
+            >
+              Keyboard Shortcuts
+            </div>
+            {[
+              { keys: ["Backspace"], label: "delete line" },
+              { keys: ["Enter"], label: "confirm line" },
+              { keys: ["Ctrl", "C"], label: "copy line" },
+              { keys: ["Ctrl", "V"], label: "paste line" },
+              { keys: ["C"], label: "control curve" }
+            ].map((row) => (
+              <div
+                key={row.label}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "2px 0",
+                  fontSize: 11
+                }}
+              >
+                <span style={{ display: "flex", gap: 3 }}>
+                  {row.keys.map((k, i) => (
+                    <kbd
+                      key={i}
+                      style={{
+                        display: "inline-block",
+                        padding: "1px 6px",
+                        fontSize: 10,
+                        fontFamily: "monospace",
+                        background: "rgba(255,255,255,0.1)",
+                        border: "1px solid rgba(255,255,255,0.2)",
+                        borderRadius: 3,
+                        lineHeight: "14px"
+                      }}
+                    >
+                      {k}
+                    </kbd>
+                  ))}
+                </span>
+                <span style={{ opacity: 0.85 }}>{row.label}</span>
+              </div>
+            ))}
+          </div>
           {(this.state.user.viewerConfigs[0].type ===
             ViewerConfigTypeName.POINT_CLOUD ||
             this.state.user.viewerConfigs[0].type ===
