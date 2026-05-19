@@ -2,7 +2,6 @@ import axios from "axios"
 import { NextFunction, Request, Response } from "express"
 import * as fs from "fs-extra"
 import { File } from "formidable"
-import * as os from "os"
 import * as path from "path"
 import { filterXSS } from "xss"
 
@@ -20,6 +19,9 @@ import {
   readConfig,
   filterIntersectedPolygonsInProject
 } from "./create_project"
+// parseSingleFile is retained in the import for backward compatibility but
+// no longer used by openEditSessionHandler (which builds FormFileData
+// directly from the in-memory request payload).
 import { convertStateToExport } from "./export"
 import { FileStorage } from "./file_storage"
 import Logger from "./logger"
@@ -335,11 +337,6 @@ export class Listeners {
       return
     }
 
-    // Write the incoming JSON to a tempfile so we can reuse the existing
-    // single-file project-creation pipeline (parseSingleFile reads from disk).
-    const tempPath = path.join(os.tmpdir(), `embed_${sessionId}.json`)
-    await fs.writeJson(tempPath, (body as OpenEditSessionBody).annotations)
-
     try {
       const fields: { [key: string]: string } = {
         [FormField.PROJECT_NAME]: projectName,
@@ -350,17 +347,22 @@ export class Listeners {
         [FormField.INSTRUCTIONS_URL]: "",
         [FormField.TRACKING]: "false"
       }
-      const files: { [key: string]: string } = {
-        [FormField.SINGLE_FILE]: tempPath
+      const form = await parseForm(fields, this.projectStore)
+
+      // Build FormFileData directly from the request payload.
+      // parseSingleFile would do this from a file on the storage layer,
+      // but we have the parsed DatasetExport in memory already.
+      const annotations = (body as OpenEditSessionBody)
+        .annotations as DatasetExport
+      const formFileData = {
+        items: annotations.frames as Array<Partial<ItemExport>>,
+        itemGroups: annotations.frameGroups ?? [],
+        sensors: annotations.config.sensors ?? [],
+        templates: [],
+        attributes: annotations.config.attributes ?? [],
+        categories: annotations.config.categories
       }
 
-      const storage = this.projectStore.getStorage()
-      const form = await parseForm(fields, this.projectStore)
-      const formFileData = await parseSingleFile(
-        storage,
-        form.labelType,
-        files
-      )
       const project = await createProject(form, formFileData)
       const [filteredProject] = filterIntersectedPolygonsInProject(project)
 
@@ -377,12 +379,6 @@ export class Listeners {
     } catch (err) {
       Logger.error(err as Error)
       res.status(500).send(filterXSS((err as Error).message))
-    } finally {
-      try {
-        await fs.unlink(tempPath)
-      } catch {
-        /* best-effort temp cleanup */
-      }
     }
   }
 
