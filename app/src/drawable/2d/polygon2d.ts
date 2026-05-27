@@ -661,7 +661,11 @@ export class Polygon2D extends Label2D {
     })
     // Set color immediately from category so the polygon renders in the
     // correct category color while it is being drawn (before state commit)
-    this._color = getColorByCategory(state.user.select.category)
+    const cats = state.task.config.categories
+    const catIdx = state.user.select.category
+    const catName =
+      catIdx >= 0 && catIdx < cats.length ? cats[catIdx] : undefined
+    this._color = getColorByCategory(catIdx, catName)
     this._highlightedHandle = 1
     return label
   }

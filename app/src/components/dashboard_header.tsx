@@ -36,9 +36,7 @@ function DashboardHeader(props: {
         noWrap
         className={classes.title}
       >
-        {admin !== null
-          ? "Scalabel Admin Dashboard"
-          : "Scalabel Worker Dashboard"}
+        {admin !== null ? "Admin Dashboard" : "Worker Dashboard"}
       </Typography>
       <IconButton onClick={logout}>
         <SvgIcon>

@@ -73,13 +73,12 @@ function pickColorPalette(index: number): number[] {
 
 /**
  * Fixed distinct colors assigned per category index (0-based).
- * Each category always renders in the same color regardless of label ID.
- * Add more entries if you have more than 10 categories.
+ * Used as a fallback when a category name is not in CATEGORY_NAME_COLOR_MAP.
  */
 const CATEGORY_COLOR_PALETTE: number[][] = [
   [255, 215, 0],    // 0: gold / yellow
   [255, 140, 0],    // 1: dark orange
-  [102, 51, 0],  // 2: brown
+  [102, 51, 0],     // 2: brown
   [100, 180, 255],  // 3: sky blue
   [255, 80, 0],     // 4: deep orange
   [210, 50, 50],    // 5: red
@@ -90,12 +89,35 @@ const CATEGORY_COLOR_PALETTE: number[][] = [
 ]
 
 /**
- * Get a fixed color for a given category index.
- * Falls back to the label-ID palette for indices beyond the category palette.
+ * Fixed category-name -> RGB color mapping. Lane-annotation use case:
+ * each category always renders in the same color regardless of its
+ * position in the categories array. Edit this map (not the palette
+ * above) to change per-category colors.
+ */
+const CATEGORY_NAME_COLOR_MAP: { [name: string]: number[] } = {
+  curb_road_edge:         [210, 50, 50],    // red
+  without_curb_road_edge: [50, 200, 50],    // green
+  continuous_white_line:  [255, 215, 0],    // yellow
+  dashed_white_line:      [100, 180, 255],  // blue
+  double_yellow_line:     [102, 51, 0],     // brown
+  center_turn_lane:       [255, 140, 0]     // orange
+}
+
+/**
+ * Get a fixed color for a given category. Prefers a name-based lookup
+ * (so colors stay bound to semantic categories), falls back to an
+ * index-based palette for categories not in the name map.
  *
  * @param categoryIndex 0-based category index
+ * @param categoryName  optional category name; if known, overrides index lookup
  */
-export function getColorByCategory(categoryIndex: number): number[] {
+export function getColorByCategory(
+  categoryIndex: number,
+  categoryName?: string
+): number[] {
+  if (categoryName !== undefined && categoryName in CATEGORY_NAME_COLOR_MAP) {
+    return CATEGORY_NAME_COLOR_MAP[categoryName]
+  }
   if (categoryIndex >= 0 && categoryIndex < CATEGORY_COLOR_PALETTE.length) {
     return CATEGORY_COLOR_PALETTE[categoryIndex]
   }

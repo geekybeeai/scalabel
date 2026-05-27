@@ -515,9 +515,14 @@ export abstract class Label2D {
     // renders in the same colour regardless of its label ID.
     const categoryIndex =
       this._label.category.length > 0 ? this._label.category[0] : -1
+    const allCategories = state.task.config.categories
+    const categoryName =
+      categoryIndex >= 0 && categoryIndex < allCategories.length
+        ? allCategories[categoryIndex]
+        : undefined
     this._color =
       categoryIndex >= 0
-        ? getColorByCategory(categoryIndex)
+        ? getColorByCategory(categoryIndex, categoryName)
         : getColorById(
             getRootLabelId(item, labelId),
             getRootTrackId(item, labelId)

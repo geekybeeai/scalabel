@@ -1,5 +1,4 @@
 - name: double_yellow_line
-- name: yellow_line
 - name: continuous_white_line
 - name: dashed_white_line
 - name: curb_road_edge

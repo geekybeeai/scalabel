@@ -94,6 +94,12 @@ export abstract class DrawableViewer<
     super.componentDidMount()
     document.addEventListener("keydown", this._keyDownHandler)
     document.addEventListener("keyup", this._keyUpHandler)
+    // Claim active-viewer status on mount so wheel events (e.g. ctrl+scroll
+    // zoom) work without first having to mouseenter the canvas. Only claim
+    // if no other viewer has taken it yet — otherwise hover decides.
+    if (Session.activeViewerId === -1) {
+      Session.activeViewerId = this.props.id
+    }
   }
 
   /**

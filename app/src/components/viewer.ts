@@ -72,6 +72,17 @@ export abstract class DrawableCanvas<
     if (nextState.task.items !== this.state.task.items) {
       return true
     }
+    // Check if frame load status changed (image finished downloading).
+    // Without this, the initial image.onload state update would be
+    // skipped, leaving the canvas blank until the user nudged something
+    // else (e.g. reset zoom) that did trigger an update.
+    const item = nextState.user.select.item
+    if (
+      this.state.session.itemStatuses[item] !==
+      nextState.session.itemStatuses[item]
+    ) {
+      return true
+    }
     // Check if session mode changed (affects label drawing style - e.g. fill in SELECTING mode)
     if (nextState.session.mode !== this.state.session.mode) {
       return true

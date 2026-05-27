@@ -29,8 +29,8 @@ StyleRules<
       alignItems: "left"
     },
     formControl: {
-      width: "80%",
-      margin: "2px 10%"
+      width: "92%",
+      margin: "2px 4%"
     },
     primary: {
       fontWeight: "bold",
@@ -39,10 +39,17 @@ StyleRules<
       padding: "0px"
     },
     button: {
-      height: 22,
+      minHeight: 22,
       textTransform: "none",
       borderRadius: 0,
-      borderWidth: "1px"
+      borderWidth: "1px",
+      // Allow long category names (e.g. "without_curb_road_edge") to wrap
+      // instead of being clipped by the fixed-width sidebar.
+      whiteSpace: "normal",
+      wordBreak: "break-word",
+      lineHeight: 1.15,
+      padding: "4px 6px",
+      fontSize: 12
     },
     buttonGroup: {
       width: "100%"
