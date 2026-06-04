@@ -200,7 +200,9 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
       this._container !== null &&
       this._viewerConfig !== undefined
     ) {
-      if (this.isKeyDown(types.Key.META) || this.isKeyDown(types.Key.CONTROL)) {
+      // Read the modifier from the event (see onWheel) so ctrl+drag pan works
+      // immediately, without first clicking the iframe to focus it.
+      if (e.ctrlKey || e.metaKey) {
         const dx = this._mX - oldX
         const dy = this._mY - oldY
 
@@ -259,7 +261,13 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   protected onWheel(e: WheelEvent): void {
     e.preventDefault()
     if (this._viewerConfig !== undefined && this._container !== null) {
-      if (this.isKeyDown(types.Key.META) || this.isKeyDown(types.Key.CONTROL)) {
+      // Read the modifier from the event itself rather than tracked key state.
+      // In an embedded iframe the document only receives keydown events once the
+      // iframe is focused (first click), so isKeyDown(CTRL) stays false until
+      // then — which blocked ctrl+scroll zoom on load. e.ctrlKey is always
+      // current, and trackpad pinch-zoom also arrives as a wheel event with
+      // ctrlKey set, so this enables pinch-to-zoom too.
+      if (e.ctrlKey || e.metaKey) {
         let zoomRatio = SCROLL_ZOOM_RATIO
         if (-e.deltaY < 0) {
           zoomRatio = 1 / zoomRatio

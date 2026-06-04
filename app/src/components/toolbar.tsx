@@ -415,7 +415,10 @@ export class ToolBar extends Component<Props> {
               { keys: ["Enter"], label: "confirm line" },
               { keys: ["Ctrl", "C"], label: "copy line" },
               { keys: ["Ctrl", "V"], label: "paste line" },
-              { keys: ["C"], label: "control curve" }
+              { keys: ["C"], label: "control curve" },
+              { keys: ["Ctrl", "Scroll"], label: "zoom (mouse)" },
+              { keys: ["Ctrl", "Pinch"], label: "zoom (trackpad)" },
+              { keys: ["Ctrl", "Drag"], label: "pan (mouse / trackpad)" }
             ].map((row) => (
               <div
                 key={row.label}
