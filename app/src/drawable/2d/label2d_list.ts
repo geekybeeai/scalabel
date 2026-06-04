@@ -209,11 +209,15 @@ export class Label2DList {
     }
 
     // Per-category visibility: hide categories that are toggled off in the
-    // sidebar. Selected labels are always shown so users can't lose selection.
+    // sidebar. Only the label being actively drawn/edited is exempt (so it
+    // stays visible while you work on it). A merely-selected committed label
+    // still obeys the checkbox — gating on `selected` here would leave every
+    // newly-added or just-edited polyline permanently visible, because the
+    // drawable's `selected` flag isn't reset when the Redux selection changes.
     if (hiddenCategories !== undefined && hiddenCategories.length > 0) {
       labelsToDraw = labelsToDraw.filter(
         (label) =>
-          label.selected || !hiddenCategories.includes(label.category[0])
+          label.editing || !hiddenCategories.includes(label.category[0])
       )
     }
 
