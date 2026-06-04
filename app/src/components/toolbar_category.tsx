@@ -1,8 +1,6 @@
-import { ListItemText, ListItem } from "@material-ui/core"
+import { Checkbox, ListItemText, ListItem } from "@material-ui/core"
 import FormControl from "@material-ui/core/FormControl"
 import { withStyles } from "@material-ui/core/styles"
-import ToggleButton from "@material-ui/lab/ToggleButton"
-import ToggleButtonGroup from "@material-ui/lab/ToggleButtonGroup"
 import TreeView from "@material-ui/lab/TreeView"
 import TreeItem from "@material-ui/lab/TreeItem"
 import ExpandMoreIcon from "@material-ui/icons/ExpandMore"
@@ -12,9 +10,30 @@ import * as React from "react"
 import { changeSelect } from "../action/common"
 import { changeSelectedLabelsCategories } from "../action/select"
 import { dispatch, getState } from "../common/session"
+import { getColorByCategory } from "../drawable/util"
 import { categoryStyle } from "../styles/label"
 import { Component } from "./component"
 import { Category } from "../types/state"
+
+/**
+ * Display-name overrides for category keys. The data keeps the canonical
+ * names (e.g. "continuous_white_line") so the annotation JSON / round-trip
+ * is unchanged; only the sidebar label is shortened. Falls back to the raw
+ * name when a category isn't listed here.
+ */
+const CATEGORY_DISPLAY_NAME: { [name: string]: string } = {
+  continuous_white_line: "continuous_line",
+  dashed_white_line: "dashed_line"
+}
+
+/**
+ * Map a canonical category name to its sidebar display label.
+ *
+ * @param name canonical category name from the config
+ */
+function categoryDisplayName(name: string): string {
+  return CATEGORY_DISPLAY_NAME[name] ?? name
+}
 
 /**
  * This is the handleChange function of MultipleSelect
@@ -124,6 +143,12 @@ interface Props {
   classes: ClassType
   /** header text of MultipleSelect */
   headerText: string
+  /** indices of categories currently hidden on the canvas */
+  hiddenCategories?: number[]
+  /** toggle visibility of a single category by index */
+  onToggleCategoryVisibility?: (index: number) => void
+  /** toggle visibility of all categories at once */
+  onToggleAllCategoryVisibility?: () => void
 }
 
 /**
@@ -138,18 +163,59 @@ function renderTreeCategory(
   treeCategory: Category,
   categoryNameMap: { [key: string]: number },
   treeLevel: number,
-  classes: ClassType
+  classes: ClassType,
+  hiddenCategories: number[],
+  onToggleVisibility?: (index: number) => void
 ): JSX.Element {
   const isLeaf: boolean = !Array.isArray(treeCategory.subcategories)
   const nodeId = isLeaf
     ? categoryNameMap[treeCategory.name].toString()
     : treeCategory.name + "-" + treeLevel.toString() + "-NotLeaf"
+  const catIdx = isLeaf ? categoryNameMap[treeCategory.name] : -1
+  const rgb = getColorByCategory(catIdx, treeCategory.name)
+  const swatchColor = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`
   return (
     <TreeItem
       key={treeCategory.name}
       nodeId={nodeId}
       label={
-        <div className={classes.treeItemLabelText}>{treeCategory.name}</div>
+        <div
+          className={classes.treeItemLabelText}
+          style={{ display: "flex", alignItems: "center" }}
+        >
+          {isLeaf && onToggleVisibility !== undefined && (
+            <Checkbox
+              size="small"
+              checked={!hiddenCategories.includes(catIdx)}
+              // Stop the click from selecting this tree node as the active
+              // draw category — the checkbox only toggles canvas visibility.
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleVisibility(catIdx)
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={`Toggle visibility of ${treeCategory.name}`}
+              style={{ padding: 2, color: "inherit" }}
+            />
+          )}
+          {isLeaf && (
+            <span
+              // Solid swatch matching the colour this category's lines use.
+              title={`Line colour for ${treeCategory.name}`}
+              style={{
+                display: "inline-block",
+                width: 14,
+                height: 14,
+                flexShrink: 0,
+                marginRight: 6,
+                borderRadius: 2,
+                border: "1px solid rgba(255, 255, 255, 0.5)",
+                background: swatchColor
+              }}
+            />
+          )}
+          {categoryDisplayName(treeCategory.name)}
+        </div>
       }
       classes={{
         root: classes.treeItemRoot,
@@ -166,7 +232,9 @@ function renderTreeCategory(
               category,
               categoryNameMap,
               treeLevel + 1,
-              classes
+              classes,
+              hiddenCategories,
+              onToggleVisibility
             )
           )
         : null}
@@ -203,6 +271,22 @@ class MultipleSelect extends Component<Props> {
               primary={headerText}
             />
           </ListItem>
+          {this.props.onToggleAllCategoryVisibility !== undefined && (
+            <ListItem dense disableGutters style={{ padding: "0 0 2px 8px" }}>
+              <Checkbox
+                size="small"
+                checked={(this.props.hiddenCategories ?? []).length === 0}
+                indeterminate={
+                  (this.props.hiddenCategories ?? []).length > 0 &&
+                  (this.props.hiddenCategories ?? []).length < categories.length
+                }
+                onChange={() => this.props.onToggleAllCategoryVisibility?.()}
+                title="Toggle visibility of all categories"
+                style={{ padding: 2, color: "inherit" }}
+              />
+              <span style={{ fontSize: 12, opacity: 0.75 }}>Show all</span>
+            </ListItem>
+          )}
           {treeCategories !== null ? (
             <TreeView
               onNodeSelect={handleTreeSelect}
@@ -211,29 +295,84 @@ class MultipleSelect extends Component<Props> {
               className={classes.treeView}
             >
               {treeCategories.map((category) =>
-                renderTreeCategory(category, categoryNameMap, 0, classes)
+                renderTreeCategory(
+                  category,
+                  categoryNameMap,
+                  0,
+                  classes,
+                  this.props.hiddenCategories ?? [],
+                  this.props.onToggleCategoryVisibility
+                )
               )}
             </TreeView>
           ) : (
-            <ToggleButtonGroup
-              className={classes.buttonGroup}
-              orientation="vertical"
-              exclusive
-              onChange={handleChange}
-              value={getState().user.select.category}
-              aria-label="vertical outlined primary button group"
-            >
-              {categories.map((name: string, index: number) => (
-                <ToggleButton
-                  className={classes.button}
-                  key={`category-${name}`}
-                  value={index}
-                  disableRipple={true}
-                >
-                  {name}
-                </ToggleButton>
-              ))}
-            </ToggleButtonGroup>
+            <div className={classes.buttonGroup}>
+              {categories.map((name: string, index: number) => {
+                const hidden = (this.props.hiddenCategories ?? []).includes(
+                  index
+                )
+                const selected = getState().user.select.category === index
+                const rgb = getColorByCategory(index, name)
+                const swatchColor = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`
+                return (
+                  <div
+                    key={`category-${name}`}
+                    // Clicking the row selects this category as the active draw
+                    // category (mirrors the old ToggleButton behaviour).
+                    onClick={(e) => handleChange(e, index)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      minHeight: 24,
+                      padding: "1px 4px",
+                      border: "1px solid rgba(255, 255, 255, 0.23)",
+                      marginTop: index === 0 ? 0 : -1,
+                      cursor: "pointer",
+                      fontSize: 12,
+                      lineHeight: 1.15,
+                      background: selected
+                        ? "rgba(25, 118, 210, 0.4)"
+                        : "transparent"
+                    }}
+                  >
+                    {this.props.onToggleCategoryVisibility !== undefined && (
+                      <Checkbox
+                        size="small"
+                        checked={!hidden}
+                        // Stop the click from also selecting this category as
+                        // the active draw category — the checkbox only toggles
+                        // canvas visibility.
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          this.props.onToggleCategoryVisibility?.(index)
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        title={`Toggle visibility of ${name}`}
+                        style={{ padding: 2, color: "inherit" }}
+                      />
+                    )}
+                    <span
+                      // Solid swatch showing the colour this category's lines
+                      // are drawn in on the canvas.
+                      title={`Line colour for ${name}`}
+                      style={{
+                        display: "inline-block",
+                        width: 14,
+                        height: 14,
+                        flexShrink: 0,
+                        marginRight: 6,
+                        borderRadius: 2,
+                        border: "1px solid rgba(255, 255, 255, 0.5)",
+                        background: swatchColor
+                      }}
+                    />
+                    <span style={{ flex: 1, wordBreak: "break-word" }}>
+                      {categoryDisplayName(name)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
           )}
         </FormControl>
       </>

@@ -79,6 +79,7 @@ export enum Key {
   ALT = "Alt",
   SHIFT = "Shift",
   BACKSPACE = "Backspace",
+  DELETE = "Delete",
   SPACE = " ",
   ENTER = "Enter",
   PERIOD = ".",

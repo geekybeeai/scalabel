@@ -138,7 +138,7 @@ export class ToolBar extends Component<Props> {
    */
   public onKeyDown(e: KeyboardEvent): void {
     switch (e.key) {
-      case Key.BACKSPACE:
+      case Key.DELETE:
         this.deletePressed()
         break
       case Key.H_LOW:
@@ -280,6 +280,13 @@ export class ToolBar extends Component<Props> {
             categories={categories}
             treeCategories={treeCategories}
             headerText={"Category"}
+            hiddenCategories={activeConfig.hiddenCategories ?? []}
+            onToggleCategoryVisibility={(index: number) =>
+              this.toggleCategoryVisibility(index)
+            }
+            onToggleAllCategoryVisibility={() =>
+              this.toggleAllCategoryVisibility(categories.length)
+            }
           />
         ) : null}
         <List>
@@ -404,7 +411,7 @@ export class ToolBar extends Component<Props> {
               Keyboard Shortcuts
             </div>
             {[
-              { keys: ["Backspace"], label: "delete line" },
+              { keys: ["Delete"], label: "delete line" },
               { keys: ["Enter"], label: "confirm line" },
               { keys: ["Ctrl", "C"], label: "copy line" },
               { keys: ["Ctrl", "V"], label: "paste line" },
@@ -516,6 +523,44 @@ export class ToolBar extends Component<Props> {
       config.hiddenLabelTypes = hidden.filter((t) => t !== labelTypeName)
     } else {
       config.hiddenLabelTypes = [...hidden, labelTypeName]
+    }
+    Session.dispatch(changeViewerConfig(this.safeActiveViewerId, config))
+  }
+
+  /**
+   * Toggle visibility of a specific category in the active viewer
+   *
+   * @param categoryIndex the index of the category to toggle
+   */
+  private toggleCategoryVisibility(categoryIndex: number): void {
+    const config = { ...this.activeViewerConfig }
+    const hidden = config.hiddenCategories ?? []
+    if (hidden.includes(categoryIndex)) {
+      config.hiddenCategories = hidden.filter((c) => c !== categoryIndex)
+    } else {
+      config.hiddenCategories = [...hidden, categoryIndex]
+    }
+    Session.dispatch(changeViewerConfig(this.safeActiveViewerId, config))
+  }
+
+  /**
+   * Toggle the "Show All" categories checkbox: when all categories are
+   * currently visible, hide them all; otherwise show them all.
+   *
+   * @param categoryCount total number of categories
+   */
+  private toggleAllCategoryVisibility(categoryCount: number): void {
+    const config = { ...this.activeViewerConfig }
+    const hidden = config.hiddenCategories ?? []
+    if (hidden.length === 0) {
+      // Currently showing all -> hide all
+      config.hiddenCategories = Array.from(
+        { length: categoryCount },
+        (_, i) => i
+      )
+    } else {
+      // Some or all hidden -> show all
+      config.hiddenCategories = []
     }
     Session.dispatch(changeViewerConfig(this.safeActiveViewerId, config))
   }

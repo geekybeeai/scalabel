@@ -201,9 +201,9 @@ class LabelLayout extends React.Component<Props, LayoutState> {
       rightSidebar2,
       classes
     } = this.props
-    const leftDefaultWidth = 160
-    const leftMaxWidth = 180
-    const leftMinWidth = 140
+    const leftDefaultWidth = 230
+    const leftMaxWidth = 300
+    const leftMinWidth = 200
     const rightDefaultWidth = 200
     const rightMaxWidth = 300
     const rightMinWidth = 180

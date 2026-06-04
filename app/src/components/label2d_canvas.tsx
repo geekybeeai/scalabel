@@ -245,6 +245,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
           : 1
       const hiddenLabelTypes: string[] =
         config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : []
+      const hiddenCategories: number[] =
+        config.hiddenCategories !== undefined ? config.hiddenCategories : []
 
       // Compute viewport bounds in image coordinates for culling
       let viewportBounds: [number, number, number, number] | undefined
@@ -279,7 +281,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         mode,
         viewScale,
         viewportBounds,
-        hiddenLabelTypes
+        hiddenLabelTypes,
+        hiddenCategories
       )
     }
     return true

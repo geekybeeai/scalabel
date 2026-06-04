@@ -180,6 +180,7 @@ export class Label2DList {
    * @param viewScale: current zoom level (1 = no zoom)
    * @param viewportBounds: optional viewport bounds for culling [x, y, width, height] in image coords
    * @param hiddenLabelTypes: label type names to hide (e.g. ['box2d'])
+   * @param hiddenCategories: category indices to hide (e.g. [0, 2])
    */
   public redraw(
     labelContext: Context2D,
@@ -190,7 +191,8 @@ export class Label2DList {
     sessionMode?: ModeStatus,
     viewScale?: number,
     viewportBounds?: [number, number, number, number],
-    hiddenLabelTypes?: string[]
+    hiddenLabelTypes?: string[],
+    hiddenCategories?: number[]
   ): void {
     const isTrackLinking = this._state.session.trackLinking
     let labelsToDraw =
@@ -203,6 +205,15 @@ export class Label2DList {
     if (hiddenLabelTypes !== undefined && hiddenLabelTypes.length > 0) {
       labelsToDraw = labelsToDraw.filter(
         (label) => label.selected || !hiddenLabelTypes.includes(label.type)
+      )
+    }
+
+    // Per-category visibility: hide categories that are toggled off in the
+    // sidebar. Selected labels are always shown so users can't lose selection.
+    if (hiddenCategories !== undefined && hiddenCategories.length > 0) {
+      labelsToDraw = labelsToDraw.filter(
+        (label) =>
+          label.selected || !hiddenCategories.includes(label.category[0])
       )
     }
 
