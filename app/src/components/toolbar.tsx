@@ -411,8 +411,8 @@ export class ToolBar extends Component<Props> {
               Keyboard Shortcuts
             </div>
             {[
-              { keys: ["Delete"], label: "delete line" },
               { keys: ["Enter"], label: "confirm line" },
+              { keys: ["Delete"], label: "delete line" },
               { keys: ["Ctrl", "C"], label: "copy line" },
               { keys: ["Ctrl", "V"], label: "paste line" },
               { keys: ["C"], label: "control curve" },

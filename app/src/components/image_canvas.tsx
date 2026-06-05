@@ -201,7 +201,11 @@ export class ImageCanvas extends DrawableCanvas<Props> {
         context,
         imgConfig,
         imgConfig.viewScale / this.scale,
-        upRes
+        upRes,
+        // Image-only: render at reduced resolution during a gesture (cheap-but-
+        // blurry while moving, crisp on idle). Labels stay full-res so tag
+        // sizes don't change while zooming.
+        true
       )
       this.scale = newParams[3]
     }

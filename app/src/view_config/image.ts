@@ -22,15 +22,14 @@ export const MOTION_RESOLUTION_SCALE = 0.7
 
 /**
  * Adaptive up-resolution ratio. 2x retina sharpness at low zoom, 1x at high
- * zoom (pixels already visible). While interacting, render cheaper so the
- * gesture stays smooth; the idle pass restores full resolution.
+ * zoom (pixels already visible). The during-gesture downscale is applied in
+ * updateCanvasScale (opt-in via applyMotionScale) so it affects ONLY the image
+ * canvas (the costly blit). The vector label/control canvases keep full
+ * resolution during a gesture, so label/tag sizes stay constant while zooming.
  *
  * @param viewScale current zoom level
  */
 export function getUpResRatio(viewScale: number): number {
-  if (isInteracting()) {
-    return MOTION_RESOLUTION_SCALE
-  }
   return viewScale > 3 ? 1 : 2
 }
 /** The zoom ratio */
@@ -307,7 +306,8 @@ export function updateCanvasScale(
   context: CanvasRenderingContext2D | null,
   config: ImageViewerConfigType,
   zoomRatio: number,
-  upRes: boolean
+  upRes: boolean,
+  applyMotionScale: boolean = false
 ): number[] {
   const displayRect = display.getBoundingClientRect()
 
@@ -332,8 +332,13 @@ export function updateCanvasScale(
     displayToImageRatio = canvasWidth / image.width
   }
 
-  // Adaptive up-res ratio based on current zoom level
-  const upResRatio = getUpResRatio(config.viewScale)
+  // Adaptive up-res ratio based on current zoom level. Only the image canvas
+  // opts into the during-gesture downscale (applyMotionScale); the label/
+  // control canvases keep full resolution so label/tag sizes stay constant.
+  const upResRatio =
+    applyMotionScale && isInteracting()
+      ? MOTION_RESOLUTION_SCALE
+      : getUpResRatio(config.viewScale)
 
   // Calculate target canvas backing resolution
   let targetWidth = upRes ? canvasWidth * upResRatio : canvasWidth
@@ -351,10 +356,11 @@ export function updateCanvasScale(
   // thickness adaptation correct (styleFactor = 1/√viewScale applied in
   // polygon2d.draw() maps directly to visual width in CSS pixels).
   //
-  // EXCEPTION — during an active gesture getUpResRatio returns
-  // MOTION_RESOLUTION_SCALE (< 1) on purpose, so the backing is intentionally
-  // sub-1:1 (cheap-but-blurry while moving). The gesture-settled idle repaint
-  // re-runs this at full resolution, so the < 1 ratio is never seen at rest.
+  // EXCEPTION — the image canvas (applyMotionScale) uses MOTION_RESOLUTION_SCALE
+  // (< 1) during an active gesture, so its backing is intentionally sub-1:1
+  // (cheap-but-blurry while moving); the gesture-settled idle repaint restores
+  // full resolution. The label/control canvases never opt in, so they stay
+  // >= 1 at all times.
   if (targetWidth > MAX_CANVAS_DIMENSION || targetHeight > MAX_CANVAS_DIMENSION) {
     const scaleFactor = Math.min(
       MAX_CANVAS_DIMENSION / targetWidth,
@@ -389,9 +395,9 @@ export function updateCanvasScale(
   canvas.style.bottom = "auto"
 
   // Effective upRes ratio = actual backing pixels per CSS pixel.
-  // At rest canvas.width >= canvasWidth so this is >= 1; during an active
-  // gesture it is intentionally < 1 (see MOTION_RESOLUTION_SCALE), restored on
-  // the idle repaint.
+  // >= 1 except for the image canvas during an active gesture, where it is
+  // intentionally < 1 (see MOTION_RESOLUTION_SCALE / applyMotionScale),
+  // restored on the idle repaint. Label/control canvases are always >= 1.
   //
   // The label drawing invariant:
   //   drawingRatio = displayToImageRatio × effectiveUpResRatio
