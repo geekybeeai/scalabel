@@ -1,3 +1,4 @@
+import { isInteracting } from "../common/interaction_state"
 import Session from "../common/session"
 import { decodeControlIndex, rgbToIndex } from "../drawable/util"
 import { getCurrentItem } from "../functional/state_util"
@@ -16,14 +17,20 @@ export const MIN_SCALE = 1.0
  * 4096 is a safe limit for most GPUs; 8192 for high-end.
  */
 export const MAX_CANVAS_DIMENSION = 4096
+/** Backing-resolution multiplier applied while a gesture is in progress. */
+export const MOTION_RESOLUTION_SCALE = 0.7
+
 /**
- * Adaptive high-resolution ratio.
- * At low zoom (≤3×) use 2× for retina sharpness.
- * At high zoom (>3×) drop to 1× because individual pixels are already visible.
+ * Adaptive up-resolution ratio. 2x retina sharpness at low zoom, 1x at high
+ * zoom (pixels already visible). While interacting, render cheaper so the
+ * gesture stays smooth; the idle pass restores full resolution.
  *
  * @param viewScale current zoom level
  */
 export function getUpResRatio(viewScale: number): number {
+  if (isInteracting()) {
+    return MOTION_RESOLUTION_SCALE
+  }
   return viewScale > 3 ? 1 : 2
 }
 /** The zoom ratio */
@@ -340,9 +347,14 @@ export function updateCanvasScale(
   // The cap only reduces the *extra* pixels added by the upRes 2× retina
   // factor; the base 1:1 resolution is always preserved.
   //
-  // This also guarantees effectiveUpResRatio >= 1, which keeps polyline
+  // At rest this guarantees effectiveUpResRatio >= 1, which keeps polyline
   // thickness adaptation correct (styleFactor = 1/√viewScale applied in
   // polygon2d.draw() maps directly to visual width in CSS pixels).
+  //
+  // EXCEPTION — during an active gesture getUpResRatio returns
+  // MOTION_RESOLUTION_SCALE (< 1) on purpose, so the backing is intentionally
+  // sub-1:1 (cheap-but-blurry while moving). The gesture-settled idle repaint
+  // re-runs this at full resolution, so the < 1 ratio is never seen at rest.
   if (targetWidth > MAX_CANVAS_DIMENSION || targetHeight > MAX_CANVAS_DIMENSION) {
     const scaleFactor = Math.min(
       MAX_CANVAS_DIMENSION / targetWidth,
@@ -377,7 +389,9 @@ export function updateCanvasScale(
   canvas.style.bottom = "auto"
 
   // Effective upRes ratio = actual backing pixels per CSS pixel.
-  // Because canvas.width >= canvasWidth always, this is always >= 1.
+  // At rest canvas.width >= canvasWidth so this is >= 1; during an active
+  // gesture it is intentionally < 1 (see MOTION_RESOLUTION_SCALE), restored on
+  // the idle repaint.
   //
   // The label drawing invariant:
   //   drawingRatio = displayToImageRatio × effectiveUpResRatio

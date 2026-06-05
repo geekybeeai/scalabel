@@ -3,6 +3,7 @@ import * as React from "react"
 import { connect } from "react-redux"
 
 import Session from "../common/session"
+import { onIdle } from "../common/interaction_state"
 import { getCurrentViewerConfig, isFrameLoaded } from "../functional/state_util"
 import { imageViewStyle } from "../styles/label"
 import { ImageViewerConfigType, State } from "../types/state"
@@ -49,6 +50,9 @@ export class ImageCanvas extends DrawableCanvas<Props> {
   /** The current scale */
   private scale: number
 
+  /** unsubscribe from interaction-idle notifications */
+  private _offIdle: (() => void) | null = null
+
   /**
    * Constructor, handles subscription to store
    *
@@ -65,6 +69,20 @@ export class ImageCanvas extends DrawableCanvas<Props> {
     this.imageContext = null
     this.imageCanvas = null
     this.display = null
+  }
+
+  public componentDidMount(): void {
+    super.componentDidMount()
+    // After a gesture settles, re-render at full resolution (crisp pass).
+    this._offIdle = onIdle(() => this.forceUpdate())
+  }
+
+  public componentWillUnmount(): void {
+    super.componentWillUnmount()
+    if (this._offIdle !== null) {
+      this._offIdle()
+      this._offIdle = null
+    }
   }
 
   /**
@@ -94,6 +112,11 @@ export class ImageCanvas extends DrawableCanvas<Props> {
               this.imageContext !== null
             ) {
               this.updateScale(this.imageCanvas, this.imageContext, true)
+              // Draw synchronously in the same commit so the freshly-resized
+              // (and therefore cleared) canvas is never shown blank. The
+              // deferred RAF redraw in componentDidUpdate would otherwise leave
+              // a blank gap that is visible while a slow blit is pending.
+              this.redraw()
             }
           }
         }}

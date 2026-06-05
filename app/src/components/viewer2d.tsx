@@ -9,6 +9,7 @@ import React from "react"
 
 import { changeViewerConfig } from "../action/common"
 import Session from "../common/session"
+import { notifyGesture } from "../common/interaction_state"
 import * as types from "../const/common"
 import { Vector2D } from "../math/vector2d"
 import { viewerStyles } from "../styles/viewer"
@@ -47,6 +48,10 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   private _pendingZoomOffset: Vector2D = new Vector2D(0, 0)
   /** Whether a requestAnimationFrame has already been scheduled for zoom */
   private _zoomRAFPending: boolean = false
+  /** pending pan offset accumulated within a frame */
+  private _pendingPan: { left: number; top: number } | null = null
+  /** whether a pan RAF is already scheduled */
+  private _panRAFPending: boolean = false
 
   /**
    * Render function
@@ -206,17 +211,36 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         const dx = this._mX - oldX
         const dy = this._mY - oldY
 
-        const config = this._viewerConfig as ImageViewerConfigType
-        const { displayLeft: ox, displayTop: oy } = config
-
-        const displayLeft = ox + dx
-        const displayTop = oy + dy
-        const newConfig = {
-          ...this._viewerConfig,
-          displayLeft,
-          displayTop
+        notifyGesture()
+        // Accumulate raw deltas within the frame so fast drags don't drop
+        // sub-frame movement. _pendingPan holds the SUMMED delta; the RAF
+        // applies it on top of the latest committed config. (Storing an
+        // absolute snapshot off a stale displayLeft would discard every
+        // mousemove except the last one before the frame ticked.)
+        if (this._pendingPan === null) {
+          this._pendingPan = { left: dx, top: dy }
+        } else {
+          this._pendingPan.left += dx
+          this._pendingPan.top += dy
         }
-        Session.dispatch(changeViewerConfig(this._viewerId, newConfig))
+        if (!this._panRAFPending) {
+          this._panRAFPending = true
+          requestAnimationFrame(() => {
+            this._panRAFPending = false
+            const pan = this._pendingPan
+            this._pendingPan = null
+            if (pan === null) {
+              return
+            }
+            const rafConfig = this._viewerConfig as ImageViewerConfigType
+            const newConfig = {
+              ...rafConfig,
+              displayLeft: rafConfig.displayLeft + pan.left,
+              displayTop: rafConfig.displayTop + pan.top
+            }
+            Session.dispatch(changeViewerConfig(this._viewerId, newConfig))
+          })
+        }
       }
     }
   }
@@ -259,6 +283,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
    * @param e
    */
   protected onWheel(e: WheelEvent): void {
+    notifyGesture()
     e.preventDefault()
     if (this._viewerConfig !== undefined && this._container !== null) {
       // Read the modifier from the event itself rather than tracked key state.
@@ -298,6 +323,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
    * @param offset
    */
   protected zoom(zoomRatio: number, offset: Vector2D): void {
+    notifyGesture()
     const config = this._viewerConfig as ImageViewerConfigType
     const newScale = config.viewScale * zoomRatio
     const newConfig = { ...config }

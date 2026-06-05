@@ -3,6 +3,7 @@ import * as React from "react"
 import { connect } from "react-redux"
 
 import Session from "../common/session"
+import { isInteracting, onIdle } from "../common/interaction_state"
 import { Key } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
@@ -89,6 +90,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _keyDownMap: { [key: string]: boolean }
   /** drawable callback */
   private readonly _drawableUpdateCallback: () => void
+  /** unsubscribe from interaction-idle notifications */
+  private _offIdle: (() => void) | null = null
 
   /**
    * Constructor, handles subscription to store
@@ -134,6 +137,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     document.addEventListener("keydown", this._keyDownListener)
     document.addEventListener("keyup", this._keyUpListener)
     this._labelList.subscribe(this._drawableUpdateCallback)
+    // Use forceUpdate (not redraw) so the gesture-settled repaint goes through
+    // render -> updateScale, which resizes the canvas back to full resolution
+    // and refreshes _upResRatio. Calling redraw() directly would repaint at the
+    // stale 0.7x motion resolution, leaving labels blurry until the next state
+    // change. Mirrors ImageCanvas's idle handler.
+    this._offIdle = onIdle(() => this.forceUpdate())
   }
 
   /**
@@ -144,6 +153,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     document.removeEventListener("keydown", this._keyDownListener)
     document.removeEventListener("keyup", this._keyUpListener)
     this._labelList.unsubscribe(this._drawableUpdateCallback)
+    if (this._offIdle !== null) {
+      this._offIdle()
+      this._offIdle = null
+    }
   }
 
   /**
@@ -282,7 +295,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         viewScale,
         viewportBounds,
         hiddenLabelTypes,
-        hiddenCategories
+        hiddenCategories,
+        !isInteracting()
       )
     }
     return true
@@ -492,7 +506,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @param isContorl
    */
   private updateCanvas(canvas: HTMLCanvasElement, isContorl: boolean): void {
-    const context = canvas.getContext("2d")
+    // The control canvas is read back every interaction via getImageData for
+    // hit-testing; willReadFrequently avoids GPU readback stalls. The visible
+    // label canvas is composited, so it keeps the default (GPU) context.
+    const context = canvas.getContext(
+      "2d",
+      isContorl ? { willReadFrequently: true } : undefined
+    )
     if (context === null) {
       return
     }
@@ -515,6 +535,15 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         !isNaN(displayRect.height)
       ) {
         this.updateScale(canvas, context, true)
+        // Draw synchronously in the same commit so the freshly-resized (and
+        // therefore cleared) label/control canvases are never painted blank.
+        // React re-renders this component on every pan frame (viewer config
+        // changes), which clears the canvases; without an immediate redraw the
+        // deferred RAF redraw leaves a blank frame and the labels visibly
+        // flicker/disappear while panning. redraw() is a no-op until both the
+        // label and control contexts are set, so calling it from each canvas's
+        // ref is safe regardless of ref order. Mirrors ImageCanvas.
+        this.redraw()
       }
     }
   }

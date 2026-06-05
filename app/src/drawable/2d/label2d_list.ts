@@ -192,7 +192,8 @@ export class Label2DList {
     viewScale?: number,
     viewportBounds?: [number, number, number, number],
     hiddenLabelTypes?: string[],
-    hiddenCategories?: number[]
+    hiddenCategories?: number[],
+    drawControl: boolean = true
   ): void {
     const isTrackLinking = this._state.session.trackLinking
     let labelsToDraw =
@@ -245,11 +246,14 @@ export class Label2DList {
       })
     }
 
-    labelsToDraw.forEach((v) =>
-      [
-        { ctx: labelContext, mode: DrawMode.VIEW },
-        { ctx: controlContext, mode: DrawMode.CONTROL }
-      ].forEach(({ ctx, mode }) => {
+    labelsToDraw.forEach((v) => {
+      const passes = drawControl
+        ? [
+            { ctx: labelContext, mode: DrawMode.VIEW },
+            { ctx: controlContext, mode: DrawMode.CONTROL }
+          ]
+        : [{ ctx: labelContext, mode: DrawMode.VIEW }]
+      passes.forEach(({ ctx, mode }) => {
         v.draw(
           ctx,
           ratio,
@@ -260,7 +264,7 @@ export class Label2DList {
           viewScale
         )
       })
-    )
+    })
   }
 
   /**
