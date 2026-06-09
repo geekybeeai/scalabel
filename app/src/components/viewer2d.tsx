@@ -4,13 +4,16 @@ import Fade from "@mui/material/Fade"
 import AddIcon from "@material-ui/icons/Add"
 import FindReplaceIcon from "@material-ui/icons/FindReplace"
 import LineWeightIcon from "@material-ui/icons/LineWeight"
+import RedoIcon from "@material-ui/icons/Redo"
 import RemoveIcon from "@material-ui/icons/Remove"
+import UndoIcon from "@material-ui/icons/Undo"
 import ZoomInIcon from "@material-ui/icons/ZoomIn"
 import ZoomOutIcon from "@material-ui/icons/ZoomOut"
 import { withStyles } from "@material-ui/styles"
 import React from "react"
 
 import { changeViewerConfig } from "../action/common"
+import { drawHistory } from "../common/draw_history"
 import Session from "../common/session"
 import { notifyGesture } from "../common/interaction_state"
 import { isFrameLoaded } from "../functional/state_util"
@@ -261,10 +264,56 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         resetZoomButton,
         widthUpButton,
         widthDownButton,
-        widthResetButton
+        widthResetButton,
+        ...this.getHistoryButtons()
       ]
     }
     return []
+  }
+
+  /**
+   * Build the polyline undo/redo toolbar buttons
+   *
+   * @return {JSX.Element[]} undo and redo buttons
+   */
+  protected getHistoryButtons(): JSX.Element[] {
+    const undoButton = (
+      <Tooltip
+        key={`undo2dButton${this.props.id}`}
+        title="Undo last polyline"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => drawHistory.undo()}
+          className={this.props.classes.viewer_button}
+          edge={"start"}
+        >
+          <UndoIcon />
+        </IconButton>
+      </Tooltip>
+    )
+    const redoButton = (
+      <Tooltip
+        key={`redo2dButton${this.props.id}`}
+        title="Redo polyline"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => drawHistory.redo()}
+          className={this.props.classes.viewer_button}
+          edge={"start"}
+        >
+          <RedoIcon />
+        </IconButton>
+      </Tooltip>
+    )
+    return [undoButton, redoButton]
   }
 
   /**
