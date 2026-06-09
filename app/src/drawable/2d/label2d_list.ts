@@ -141,6 +141,33 @@ export class Label2DList {
     return this._labels[id]
   }
 
+  /** Whether a polyline/polygon is currently being drawn (unfinished) */
+  public isDrawingInProgress(): boolean {
+    const label = this._selectedLabels[0]
+    return label instanceof Polygon2D && label.isDrawing
+  }
+
+  /**
+   * Discard the in-progress (temporary) drawing without committing it.
+   * Mirrors how commit2DLabels drops invalid temporary drawables, but on demand.
+   */
+  public cancelDrawing(): void {
+    const label = this._selectedLabels[0]
+    if (!(label instanceof Polygon2D && label.isDrawing)) {
+      return
+    }
+    label.editing = false
+    const selectedIndex = this._selectedLabels.indexOf(label)
+    if (selectedIndex >= 0) {
+      this._selectedLabels.splice(selectedIndex, 1)
+    }
+    const listIndex = this._labelList.indexOf(label)
+    if (listIndex >= 0) {
+      this._labelList.splice(listIndex, 1)
+    }
+    this.onDrawableUpdate()
+  }
+
   /** get label list for state inspection */
   public get labelList(): Label2D[] {
     return this._labelList

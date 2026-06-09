@@ -93,6 +93,11 @@ export class Polygon2D extends Label2D {
     }
   }
 
+  /** Whether this polygon is currently being drawn (vertices being placed) */
+  public get isDrawing(): boolean {
+    return this._state === Polygon2DState.DRAW
+  }
+
   /**
    * Set (cloned) points
    */
