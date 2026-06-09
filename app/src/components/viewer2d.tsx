@@ -57,8 +57,10 @@ export interface Viewer2DProps extends ViewerProps {
 export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   /** Accumulated zoom ratio waiting for the next animation frame */
   private _pendingZoomRatio: number = 1
-  /** Cursor position at the time the first pending scroll tick arrived */
-  private _pendingZoomOffset: Vector2D = new Vector2D(0, 0)
+  /** Latest wheel cursor (viewport client coords) for the pending zoom */
+  private _pendingZoomClientX: number = 0
+  /** Latest wheel cursor (viewport client coords) for the pending zoom */
+  private _pendingZoomClientY: number = 0
   /** Whether a requestAnimationFrame has already been scheduled for zoom */
   private _zoomRAFPending: boolean = false
   /** pending pan offset accumulated within a frame */
@@ -397,17 +399,28 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         // cause of lag at high zoom. Batching into one rAF means exactly one
         // repaint per rendered frame regardless of scroll speed.
         this._pendingZoomRatio *= zoomRatio
-        const wheelRect = this._container.getBoundingClientRect()
-        this._pendingZoomOffset = new Vector2D(
-          e.clientX - wheelRect.left,
-          e.clientY - wheelRect.top
-        )
+        // Store only the raw cursor coords here. Computing the container-
+        // relative offset needs getBoundingClientRect(), which forces a
+        // synchronous layout; doing that on every wheel event (60-120/sec
+        // during a pinch) thrashes layout and causes the zoom lag. Defer it to
+        // the once-per-frame RAF below.
+        this._pendingZoomClientX = e.clientX
+        this._pendingZoomClientY = e.clientY
         if (!this._zoomRAFPending) {
           this._zoomRAFPending = true
           requestAnimationFrame(() => {
-            this.zoom(this._pendingZoomRatio, this._pendingZoomOffset)
-            this._pendingZoomRatio = 1
             this._zoomRAFPending = false
+            if (this._container === null) {
+              this._pendingZoomRatio = 1
+              return
+            }
+            const rect = this._container.getBoundingClientRect()
+            const offset = new Vector2D(
+              this._pendingZoomClientX - rect.left,
+              this._pendingZoomClientY - rect.top
+            )
+            this.zoom(this._pendingZoomRatio, offset)
+            this._pendingZoomRatio = 1
           })
         }
       }
