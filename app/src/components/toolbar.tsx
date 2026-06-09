@@ -355,8 +355,12 @@ export class ToolBar extends Component<Props> {
                   style={{ margin: 0 }}
                 />
               </ListItem>
-              {/* Per label-type toggles */}
-              {this.state.task.config.labelTypes.map((labelType) => {
+              {/* Per label-type toggles. Polylines are intentionally omitted:
+                  the Category "Show all" checkbox already toggles every polyline,
+                  so a separate "Show Polylines" toggle is redundant. */}
+              {this.state.task.config.labelTypes
+                .filter((labelType) => labelType !== "polyline2d")
+                .map((labelType) => {
                 const hidden = (
                   (activeConfig.hiddenLabelTypes ?? [])
                 ).includes(labelType)

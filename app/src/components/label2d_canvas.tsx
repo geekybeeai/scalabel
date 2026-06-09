@@ -4,6 +4,13 @@ import { connect } from "react-redux"
 
 import Session from "../common/session"
 import { isInteracting, onIdle } from "../common/interaction_state"
+import {
+  armEmptyDrag,
+  isArmed,
+  didPan,
+  reset as resetPanState,
+  inPanWindow
+} from "../common/pointer_pan_state"
 import { Key } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
@@ -260,6 +267,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : []
       const hiddenCategories: number[] =
         config.hiddenCategories !== undefined ? config.hiddenCategories : []
+      const lineWidthMultiplier: number =
+        "lineWidthMultiplier" in config &&
+        (config as unknown as { lineWidthMultiplier?: number })
+          .lineWidthMultiplier !== undefined
+          ? (config as unknown as { lineWidthMultiplier: number })
+              .lineWidthMultiplier
+          : 1
 
       // Compute viewport bounds in image coordinates for culling
       let viewportBounds: [number, number, number, number] | undefined
@@ -296,7 +310,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         viewportBounds,
         hiddenLabelTypes,
         hiddenCategories,
-        !isInteracting()
+        !isInteracting(),
+        lineWidthMultiplier
       )
     }
     return true
@@ -342,6 +357,24 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // get mouse position in image coordinates
     const mousePos = this.getMousePos(e)
     const [labelIndex, handleIndex] = this.fetchHandleId(mousePos)
+    // Start every gesture from a clean pan state. Guards against a lost mouseup
+    // (e.g. the pointer was released outside the window during a previous drag),
+    // which would otherwise leave the empty-drag "armed" and suppress drawing.
+    resetPanState()
+    // Ctrl/Cmd drag pans anywhere via Viewer2D; never draw/edit on it.
+    if (e.ctrlKey || e.metaKey) {
+      return
+    }
+    // Empty canvas, OR within the post-double-click pan window: defer the
+    // action. A drag pans (Viewer2D, via the armed flag); a click replays the
+    // draw/select in onMouseUp. Arming (rather than returning early) inside the
+    // pan window ensures a click there is not silently dropped.
+    if (labelIndex < 0 || inPanWindow(Date.now())) {
+      const rect = (this.display as HTMLDivElement).getBoundingClientRect()
+      armEmptyDrag(e.clientX - rect.left, e.clientY - rect.top)
+      this.setCursor("grab")
+      return
+    }
     if (this._labelHandler.onMouseDown(mousePos, labelIndex, handleIndex)) {
       // Panning requires the event being propagated to upper view. Not sure
       // if there is any side-effect of this propagation. Let's see.
@@ -357,6 +390,22 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   public onMouseUp(e: React.MouseEvent<HTMLCanvasElement>): void {
     if (e.button !== 0 || this.checkFreeze()) {
+      return
+    }
+
+    if (isArmed()) {
+      const panned = didPan()
+      resetPanState()
+      this.setDefaultCursor()
+      if (!panned) {
+        // It was a click, not a pan: perform the deferred draw now (down then
+        // up) so an empty-space click still adds a polyline point.
+        const pos = this.getMousePos(e)
+        const [li, hi] = this.fetchHandleId(pos)
+        this._labelHandler.onMouseDown(pos, li, hi)
+        this._labelHandler.onMouseUp(pos, li, hi)
+        this._labelList.onDrawableUpdate()
+      }
       return
     }
 
@@ -378,6 +427,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
 
     if (this.crosshair.current !== null) {
       this.crosshair.current.onMouseMove(e)
+    }
+
+    if (isArmed()) {
+      // While a deferred empty-space gesture is in progress, do not draw/edit.
+      // Viewer2D decides pan-vs-nothing from the movement threshold.
+      return
     }
 
     // Update the currently hovered shape

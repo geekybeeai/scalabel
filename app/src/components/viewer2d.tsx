@@ -1,7 +1,10 @@
 import { IconButton } from "@material-ui/core"
 import Tooltip from "@mui/material/Tooltip"
 import Fade from "@mui/material/Fade"
+import AddIcon from "@material-ui/icons/Add"
 import FindReplaceIcon from "@material-ui/icons/FindReplace"
+import LineWeightIcon from "@material-ui/icons/LineWeight"
+import RemoveIcon from "@material-ui/icons/Remove"
 import ZoomInIcon from "@material-ui/icons/ZoomIn"
 import ZoomOutIcon from "@material-ui/icons/ZoomOut"
 import { withStyles } from "@material-ui/styles"
@@ -10,6 +13,16 @@ import React from "react"
 import { changeViewerConfig } from "../action/common"
 import Session from "../common/session"
 import { notifyGesture } from "../common/interaction_state"
+import { isFrameLoaded } from "../functional/state_util"
+import {
+  isArmed,
+  markPanned,
+  didPan,
+  reset as resetPanState,
+  exceededThreshold,
+  openPanWindow,
+  inPanWindow
+} from "../common/pointer_pan_state"
 import * as types from "../const/common"
 import { Vector2D } from "../math/vector2d"
 import { viewerStyles } from "../styles/viewer"
@@ -186,7 +199,68 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           </IconButton>
         </Tooltip>
       )
-      return [zoomInButton, zoomOutButton, resetZoomButton]
+      const widthUpButton = (
+        <Tooltip
+          key={`widthUp2dButton${this.props.id}`}
+          title="Thicker lines"
+          enterDelay={500}
+          TransitionComponent={Fade}
+          TransitionProps={{ timeout: 600 }}
+          arrow
+        >
+          <IconButton
+            onClick={() => this.changeLineWidth(0.5)}
+            className={this.props.classes.viewer_button}
+            edge={"start"}
+          >
+            <AddIcon />
+          </IconButton>
+        </Tooltip>
+      )
+      const widthDownButton = (
+        <Tooltip
+          key={`widthDown2dButton${this.props.id}`}
+          title="Thinner lines"
+          enterDelay={500}
+          TransitionComponent={Fade}
+          TransitionProps={{ timeout: 600 }}
+          arrow
+        >
+          <IconButton
+            onClick={() => this.changeLineWidth(-0.5)}
+            className={this.props.classes.viewer_button}
+            edge={"start"}
+          >
+            <RemoveIcon />
+          </IconButton>
+        </Tooltip>
+      )
+      const widthResetButton = (
+        <Tooltip
+          key={`widthReset2dButton${this.props.id}`}
+          title="Reset line width"
+          enterDelay={500}
+          TransitionComponent={Fade}
+          TransitionProps={{ timeout: 600 }}
+          arrow
+        >
+          <IconButton
+            onClick={() => this.changeLineWidth(0, true)}
+            className={this.props.classes.viewer_button}
+            edge={"start"}
+          >
+            <LineWeightIcon />
+          </IconButton>
+        </Tooltip>
+      )
+      return [
+        zoomInButton,
+        zoomOutButton,
+        resetZoomButton,
+        widthUpButton,
+        widthDownButton,
+        widthResetButton
+      ]
     }
     return []
   }
@@ -207,7 +281,14 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     ) {
       // Read the modifier from the event (see onWheel) so ctrl+drag pan works
       // immediately, without first clicking the iframe to focus it.
-      if (e.ctrlKey || e.metaKey) {
+      const allowPan =
+        e.ctrlKey ||
+        e.metaKey ||
+        didPan() ||
+        inPanWindow(Date.now()) ||
+        (isArmed() && exceededThreshold(this._mX, this._mY))
+      if (allowPan) {
+        markPanned()
         const dx = this._mX - oldX
         const dy = this._mY - oldY
 
@@ -250,7 +331,20 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
    *
    * @param e
    */
-  protected onDoubleClick(): void {}
+  protected onDoubleClick(): void {
+    // A drag begun shortly after a double-click pans anywhere (trackpad-friendly).
+    openPanWindow(Date.now())
+  }
+
+  /**
+   * Handle mouse up
+   *
+   * @param e
+   */
+  protected onMouseUp(e: React.MouseEvent): void {
+    resetPanState()
+    super.onMouseUp(e)
+  }
 
   /**
    * Handle key down
@@ -303,7 +397,11 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         // cause of lag at high zoom. Batching into one rAF means exactly one
         // repaint per rendered frame regardless of scroll speed.
         this._pendingZoomRatio *= zoomRatio
-        this._pendingZoomOffset = new Vector2D(this._mX, this._mY)
+        const wheelRect = this._container.getBoundingClientRect()
+        this._pendingZoomOffset = new Vector2D(
+          e.clientX - wheelRect.left,
+          e.clientY - wheelRect.top
+        )
         if (!this._zoomRAFPending) {
           this._zoomRAFPending = true
           requestAnimationFrame(() => {
@@ -332,39 +430,82 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
 
       const item = this.state.user.select.item
       const sensor = this.state.user.viewerConfigs[this.props.id].sensor
-      const image = Session.images[item][sensor]
 
-      const iw = image.width * newScale
-      const ih = image.height * newScale
-
-      if (this._container !== null) {
+      // Guard: skip the offset math if the image hasn't loaded yet (avoids a
+      // crash on early keyboard/button/wheel zoom). The scale still updates.
+      if (this._container !== null && isFrameLoaded(this.state, item, sensor)) {
         const rect = this._container.getBoundingClientRect()
+        const image = Session.images[item][sensor]
+        const imageAspect = image.width / image.height
 
-        let displayLeft = zoomRatio * (offset.x + config.displayLeft) - offset.x
-        let displayTop = zoomRatio * (offset.y + config.displayTop) - offset.y
-        // The difference between the display area and the displayed image in
-        // aspect ratio gives rise to blank regions. Expected behavior
-        // is zooming to the center when the blank region exists,
-        // or zooming to the cursor otherwise.
-        if (rect.height / rect.width > ih / iw) {
-          // Zoomed height < that of the display area, blanks on top/bottom
-          if ((image.width * rect.height) / rect.width > ih) {
-            // Set offset to 0
-            displayTop = 0
+        // Displayed image size + centering padding (CSS px) at a given scale,
+        // matching updateCanvasScale's letterboxing.
+        const dims = (
+          s: number
+        ): { w: number; h: number; padX: number; padY: number } => {
+          let w: number
+          let h: number
+          if (rect.width / rect.height > imageAspect) {
+            h = rect.height * s
+            w = h * imageAspect
+          } else {
+            w = rect.width * s
+            h = w / imageAspect
           }
-        } else {
-          // Zoomed width < that of the display area, blanks on sides
-          if ((image.height * rect.width) / rect.height > iw) {
-            // Set offset to 0
-            displayLeft = 0
+          return {
+            w,
+            h,
+            padX: Math.max(0, (rect.width - w) / 2),
+            padY: Math.max(0, (rect.height - h) / 2)
           }
         }
+        const cur = dims(config.viewScale)
+        const next = dims(newScale)
+
+        // Cursor-focal zoom: keep the image point under the cursor fixed.
+        // `offset` is the cursor relative to the container. Convert it to an
+        // image-relative point by subtracting the current pan + padding, scale
+        // that point, then re-add the new padding. (The previous formula had
+        // the offset sign inverted, so zooming drifted toward the top.)
+        let displayLeft =
+          offset.x -
+          next.padX -
+          (offset.x - config.displayLeft - cur.padX) * zoomRatio
+        let displayTop =
+          offset.y -
+          next.padY -
+          (offset.y - config.displayTop - cur.padY) * zoomRatio
+
+        // Clamp so the image can't be pulled past the viewport edges into blank.
+        const loL = Math.min(-next.padX, rect.width - next.w - next.padX)
+        const hiL = Math.max(-next.padX, rect.width - next.w - next.padX)
+        const loT = Math.min(-next.padY, rect.height - next.h - next.padY)
+        const hiT = Math.max(-next.padY, rect.height - next.h - next.padY)
+        displayLeft = Math.min(hiL, Math.max(loL, displayLeft))
+        displayTop = Math.min(hiT, Math.max(loT, displayTop))
+
         newConfig.displayLeft = displayLeft
         newConfig.displayTop = displayTop
       }
 
       Session.dispatch(changeViewerConfig(this._viewerId, newConfig))
     }
+  }
+
+  /**
+   * Change the polyline line-width multiplier (display-only).
+   *
+   * @param delta additive change applied to the current value
+   * @param reset when true, reset the multiplier to 1
+   */
+  protected changeLineWidth(delta: number, reset = false): void {
+    const config = this._viewerConfig as ImageViewerConfigType
+    const current = config.lineWidthMultiplier ?? 1
+    const value = reset
+      ? 1
+      : Math.min(4, Math.max(0.5, Math.round((current + delta) * 10) / 10))
+    const newConfig = { ...config, lineWidthMultiplier: value }
+    Session.dispatch(changeViewerConfig(this._viewerId, newConfig))
   }
 }
 

@@ -220,6 +220,8 @@ export interface ImageViewerConfigType extends ViewerConfigType {
   displayTop: number
   /** Display Scroll Left */
   displayLeft: number
+  /** Display-only multiplier for polyline stroke thickness (1 = default) */
+  lineWidthMultiplier?: number
 }
 
 export interface PointCloudViewerConfigType extends ViewerConfigType {

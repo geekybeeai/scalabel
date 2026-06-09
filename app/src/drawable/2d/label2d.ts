@@ -305,7 +305,8 @@ export abstract class Label2D {
     isTrackLinking: boolean,
     hideLabelTags: boolean,
     sessionMode: ModeStatus | undefined,
-    viewScale?: number
+    viewScale?: number,
+    lineWidthMultiplier?: number
   ): void
 
   /**

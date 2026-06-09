@@ -193,7 +193,8 @@ export class Label2DList {
     viewportBounds?: [number, number, number, number],
     hiddenLabelTypes?: string[],
     hiddenCategories?: number[],
-    drawControl: boolean = true
+    drawControl: boolean = true,
+    lineWidthMultiplier: number = 1
   ): void {
     const isTrackLinking = this._state.session.trackLinking
     let labelsToDraw =
@@ -261,7 +262,8 @@ export class Label2DList {
           isTrackLinking,
           hideLabelTags ?? false,
           sessionMode,
-          viewScale
+          viewScale,
+          lineWidthMultiplier
         )
       })
     })

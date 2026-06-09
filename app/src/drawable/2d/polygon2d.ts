@@ -150,7 +150,8 @@ export class Polygon2D extends Label2D {
     isTrackLinking: boolean,
     hideLabelTags: boolean,
     sessionMode: ModeStatus | undefined,
-    viewScale: number = 1
+    viewScale: number = 1,
+    lineWidthMultiplier: number = 1
   ): void {
     const numPoints = this._points.length
 
@@ -172,7 +173,10 @@ export class Polygon2D extends Label2D {
         // Scale styles inversely with zoom for better precision at high zoom
         pointStyle.radius = Math.max(2, pointStyle.radius * styleFactor)
         highPointStyle.radius = Math.max(3, highPointStyle.radius * styleFactor)
-        edgeStyle.lineWidth = Math.max(1, edgeStyle.lineWidth * styleFactor)
+        edgeStyle.lineWidth = Math.max(
+          1,
+          edgeStyle.lineWidth * styleFactor * lineWidthMultiplier
+        )
         assignColor = (i: number): number[] => {
           if (
             i > 0 &&
@@ -251,27 +255,31 @@ export class Polygon2D extends Label2D {
     context.restore()
 
     if (mode === DrawMode.CONTROL || this._selected || this._highlighted) {
-      // For bezier curve
-      context.save()
-      context.setLineDash(DASH_LINE)
-      context.beginPath()
-      for (let i = 0; i < numPoints; ++i) {
-        const point = this._points[i]
-        const nextPoint = this._points[(i + 1) % numPoints]
-        if (
-          (point.type === PathPointType.LINE &&
-            nextPoint.type === PathPointType.CURVE) ||
-          point.type === PathPointType.CURVE
-        ) {
-          const coord0 = point.vector().scale(ratio)
-          const coord1 = nextPoint.vector().scale(ratio)
-          context.moveTo(coord0.x, coord0.y)
-          context.lineTo(coord1.x, coord1.y)
-          context.stroke()
+      // Bezier control-polygon: the dashed line linking a vertex to its curve
+      // control point. Drawn ONLY on the hit-detection (control) canvas; hidden
+      // from the visible view because it clutters the curve while drawing.
+      if (mode === DrawMode.CONTROL) {
+        context.save()
+        context.setLineDash(DASH_LINE)
+        context.beginPath()
+        for (let i = 0; i < numPoints; ++i) {
+          const point = this._points[i]
+          const nextPoint = this._points[(i + 1) % numPoints]
+          if (
+            (point.type === PathPointType.LINE &&
+              nextPoint.type === PathPointType.CURVE) ||
+            point.type === PathPointType.CURVE
+          ) {
+            const coord0 = point.vector().scale(ratio)
+            const coord1 = nextPoint.vector().scale(ratio)
+            context.moveTo(coord0.x, coord0.y)
+            context.lineTo(coord1.x, coord1.y)
+            context.stroke()
+          }
         }
+        context.closePath()
+        context.restore()
       }
-      context.closePath()
-      context.restore()
 
       // Draw points
       if (this._state === Polygon2DState.DRAW) {
