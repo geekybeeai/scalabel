@@ -2,6 +2,7 @@ import { withStyles } from "@material-ui/core/styles"
 import * as React from "react"
 import { connect } from "react-redux"
 
+import { drawHistory } from "../common/draw_history"
 import Session from "../common/session"
 import { isInteracting, onIdle } from "../common/interaction_state"
 import {
@@ -466,6 +467,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   public onKeyDown(e: KeyboardEvent): void {
     if (this.checkFreeze()) {
+      return
+    }
+
+    // Polyline-level undo/redo (Ctrl/Cmd+Z / Ctrl/Cmd+Y / Ctrl/Cmd+Shift+Z).
+    // Only swallow the shortcut when it actually did something.
+    if (drawHistory.handleKeyboard(e)) {
+      e.preventDefault()
       return
     }
 
