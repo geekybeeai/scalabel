@@ -145,6 +145,45 @@ describe("DrawHistory.handleKeyboard", () => {
   })
 })
 
+describe("Redo stack clears when a new polyline is drawn", () => {
+  test("drawing after undo invalidates redo", () => {
+    const itemIndex = 0
+    const [label2dHandler] = initializeTestingObjects()
+    const canvasSize = new Size2D(1000, 1000)
+    drawHistory.clearRedo()
+    Session.dispatch(action.changeSelect({ labelType: 1 }))
+
+    drawPolygon(label2dHandler, canvasSize, [
+      [10, 10],
+      [100, 100],
+      [200, 100],
+      [100, 0]
+    ])
+    drawPolygon(label2dHandler, canvasSize, [
+      [500, 500],
+      [600, 400],
+      [700, 700]
+    ])
+    expect(getNumLabels(getState(), itemIndex)).toEqual(2)
+
+    // Undo the second polyline (redo stack now has 1 entry)
+    expect(drawHistory.undo()).toBe(true)
+    expect(getNumLabels(getState(), itemIndex)).toEqual(1)
+
+    // Draw a NEW polyline — this must clear the redo stack via commit2DLabels
+    drawPolygon(label2dHandler, canvasSize, [
+      [300, 300],
+      [350, 350],
+      [400, 300]
+    ])
+    expect(getNumLabels(getState(), itemIndex)).toEqual(2)
+
+    // Redo must now be a no-op
+    expect(drawHistory.redo()).toBe(false)
+    expect(getNumLabels(getState(), itemIndex)).toEqual(2)
+  })
+})
+
 /** Select the polygon label type (index 1 in the test config) */
 function dispatchPolygonMode(): void {
   Session.dispatch(action.changeSelect({ labelType: 1 }))

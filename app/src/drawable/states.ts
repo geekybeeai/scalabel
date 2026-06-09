@@ -9,8 +9,10 @@ import {
   makeSequential
 } from "../action/common"
 import { deleteTracks, terminateTracks } from "../action/track"
+import { drawHistory } from "../common/draw_history"
 import Session, { dispatch, getState } from "../common/session"
 import { Track } from "../common/track"
+import { LabelTypeName } from "../const/common"
 import {
   ActionType,
   AddLabelsAction,
@@ -234,6 +236,7 @@ export function commit2DLabels(
   const updatedLabels: ItemLabelIdMap = {}
   const tracking = state.task.config.tracking
   const actions: BaseAction[] = []
+  let newPolylineCommitted = false
   updatedLabelDrawables.forEach((drawable) => {
     drawable.setManual()
     if (drawable.isValid()) {
@@ -247,6 +250,12 @@ export function commit2DLabels(
         }
       } else {
         // New drawable
+        if (
+          drawable.type === LabelTypeName.POLYGON_2D ||
+          drawable.type === LabelTypeName.POLYLINE_2D
+        ) {
+          newPolylineCommitted = true
+        }
         if (tracking) {
           // Add track
           actions.push(addNewTrack(drawable, numItems))
@@ -271,6 +280,9 @@ export function commit2DLabels(
   actions.push(commitLabelsToState(updatedLabels))
   actions.push(commitShapesToState(updatedShapes))
   dispatch(makeSequential(actions, true))
+  if (newPolylineCommitted) {
+    drawHistory.clearRedo()
+  }
 }
 
 /**
