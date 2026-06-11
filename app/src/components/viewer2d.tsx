@@ -277,6 +277,10 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
    * @return {JSX.Element[]} undo and redo buttons
    */
   protected getHistoryButtons(): JSX.Element[] {
+    // When there is nothing to undo/redo the button is dimmed (still visible)
+    // rather than hidden. Clicking a dimmed button is a no-op (undo/redo return
+    // early), so no `disabled` attribute is needed and the icon keeps its color.
+    const DIMMED = 0.4
     const undoButton = (
       <Tooltip
         key={`undo2dButton${this.props.id}`}
@@ -289,6 +293,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         <IconButton
           onClick={() => drawHistory.undo()}
           className={this.props.classes.viewer_button}
+          style={{ opacity: drawHistory.canUndo() ? 1 : DIMMED }}
           edge={"start"}
         >
           <UndoIcon />
@@ -307,6 +312,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         <IconButton
           onClick={() => drawHistory.redo()}
           className={this.props.classes.viewer_button}
+          style={{ opacity: drawHistory.canRedo() ? 1 : DIMMED }}
           edge={"start"}
         >
           <RedoIcon />
@@ -431,47 +437,46 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     notifyGesture()
     e.preventDefault()
     if (this._viewerConfig !== undefined && this._container !== null) {
-      // Read the modifier from the event itself rather than tracked key state.
-      // In an embedded iframe the document only receives keydown events once the
-      // iframe is focused (first click), so isKeyDown(CTRL) stays false until
-      // then — which blocked ctrl+scroll zoom on load. e.ctrlKey is always
-      // current, and trackpad pinch-zoom also arrives as a wheel event with
-      // ctrlKey set, so this enables pinch-to-zoom too.
-      if (e.ctrlKey || e.metaKey) {
-        let zoomRatio = SCROLL_ZOOM_RATIO
-        if (-e.deltaY < 0) {
-          zoomRatio = 1 / zoomRatio
-        }
-        // Accumulate all scroll ticks that arrive within the same animation
-        // frame. Without this, fast scrolling fires 60-120 Redux dispatches
-        // per second each triggering a full canvas repaint, which is the root
-        // cause of lag at high zoom. Batching into one rAF means exactly one
-        // repaint per rendered frame regardless of scroll speed.
-        this._pendingZoomRatio *= zoomRatio
-        // Store only the raw cursor coords here. Computing the container-
-        // relative offset needs getBoundingClientRect(), which forces a
-        // synchronous layout; doing that on every wheel event (60-120/sec
-        // during a pinch) thrashes layout and causes the zoom lag. Defer it to
-        // the once-per-frame RAF below.
-        this._pendingZoomClientX = e.clientX
-        this._pendingZoomClientY = e.clientY
-        if (!this._zoomRAFPending) {
-          this._zoomRAFPending = true
-          requestAnimationFrame(() => {
-            this._zoomRAFPending = false
-            if (this._container === null) {
-              this._pendingZoomRatio = 1
-              return
-            }
-            const rect = this._container.getBoundingClientRect()
-            const offset = new Vector2D(
-              this._pendingZoomClientX - rect.left,
-              this._pendingZoomClientY - rect.top
-            )
-            this.zoom(this._pendingZoomRatio, offset)
+      // Plain mouse-wheel scroll zooms directly — no modifier required. Ctrl/
+      // Meta scroll zooms too, and trackpad pinch arrives as a wheel event with
+      // ctrlKey set, so pinch-to-zoom is covered as well. Reading deltaY from
+      // the event (not tracked key state) keeps this correct inside an embedded
+      // iframe that hasn't received a focus/keydown yet.
+      // One wheel notch zooms by ZOOM_RATIO (the same step as the +/- keys and
+      // toolbar buttons) so wheel zoom feels as fast as keyboard/button zoom.
+      let zoomRatio = ZOOM_RATIO
+      if (-e.deltaY < 0) {
+        zoomRatio = 1 / zoomRatio
+      }
+      // Accumulate all scroll ticks that arrive within the same animation
+      // frame. Without this, fast scrolling fires 60-120 Redux dispatches
+      // per second each triggering a full canvas repaint, which is the root
+      // cause of lag at high zoom. Batching into one rAF means exactly one
+      // repaint per rendered frame regardless of scroll speed.
+      this._pendingZoomRatio *= zoomRatio
+      // Store only the raw cursor coords here. Computing the container-
+      // relative offset needs getBoundingClientRect(), which forces a
+      // synchronous layout; doing that on every wheel event (60-120/sec
+      // during a pinch) thrashes layout and causes the zoom lag. Defer it to
+      // the once-per-frame RAF below.
+      this._pendingZoomClientX = e.clientX
+      this._pendingZoomClientY = e.clientY
+      if (!this._zoomRAFPending) {
+        this._zoomRAFPending = true
+        requestAnimationFrame(() => {
+          this._zoomRAFPending = false
+          if (this._container === null) {
             this._pendingZoomRatio = 1
-          })
-        }
+            return
+          }
+          const rect = this._container.getBoundingClientRect()
+          const offset = new Vector2D(
+            this._pendingZoomClientX - rect.left,
+            this._pendingZoomClientY - rect.top
+          )
+          this.zoom(this._pendingZoomRatio, offset)
+          this._pendingZoomRatio = 1
+        })
       }
     }
   }

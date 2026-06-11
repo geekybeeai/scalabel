@@ -24,6 +24,7 @@ import {
   terminateSelectedTracks
 } from "../action/select"
 import { addLabelTag } from "../action/tag"
+import { drawHistory } from "../common/draw_history"
 import { renderTemplate } from "../common/label"
 import Session from "../common/session"
 import { Key, LabelTypeName, ViewerConfigTypeName } from "../const/common"
@@ -419,10 +420,12 @@ export class ToolBar extends Component<Props> {
               { keys: ["Delete"], label: "delete line" },
               { keys: ["Ctrl", "C"], label: "copy line" },
               { keys: ["Ctrl", "V"], label: "paste line" },
+              { keys: ["Ctrl", "Z"], label: "undo" },
+              { keys: ["Ctrl", "Y"], label: "redo" },
               { keys: ["C"], label: "control curve" },
-              { keys: ["Ctrl", "Scroll"], label: "zoom (mouse)" },
-              { keys: ["Ctrl", "Pinch"], label: "zoom (trackpad)" },
-              { keys: ["Ctrl", "Drag"], label: "pan (mouse / trackpad)" }
+              { keys: ["Scroll"], label: "zoom (mouse)" },
+              { keys: ["Pinch"], label: "zoom (trackpad)" },
+              { keys: ["Drag"], label: "pan (mouse / trackpad)" }
             ].map((row) => (
               <div
                 key={row.label}
@@ -608,6 +611,8 @@ export class ToolBar extends Component<Props> {
             )
           }
         } else {
+          // Record the deletion so undo can restore the polyline(s).
+          drawHistory.recordDeletion(this.state)
           Session.dispatch(deleteSelectedLabels(this.state))
         }
       }

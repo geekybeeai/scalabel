@@ -11,9 +11,10 @@ import {
   splitTrack
 } from "../../action/common"
 import { selectLabel, selectLabels, unselectLabels } from "../../action/select"
+import { drawHistory } from "../../common/draw_history"
 import Session from "../../common/session"
 import { addVisibilityListener } from "../../common/window"
-import { Key } from "../../const/common"
+import { Key, LabelTypeName } from "../../const/common"
 import { getLinkedLabelIds } from "../../functional/common"
 import { getSelectedTracks } from "../../functional/state_util"
 import { tracksOverlapping } from "../../functional/track"
@@ -395,6 +396,9 @@ export class Label2DHandler {
     this._state = state
     if (this._selectedItemIndex !== state.user.select.item) {
       this._highlightedLabel = null
+      // The draw history refers to lines on the previous image; an undo after
+      // navigating would silently mutate that off-screen item, so clear it.
+      drawHistory.reset()
     }
     this._selectedItemIndex = state.user.select.item
   }
@@ -700,6 +704,14 @@ export class Label2DHandler {
     // Dispatch the add
     const action = addLabel(itemIndex, newLabel, newShapes)
     Session.dispatch(action)
+
+    // Track the pasted polyline so undo can remove it (paste = a new line).
+    if (
+      newLabel.type === LabelTypeName.POLYGON_2D ||
+      newLabel.type === LabelTypeName.POLYLINE_2D
+    ) {
+      drawHistory.recordUserLine(itemIndex, newLabelId)
+    }
 
     // Select the newly created label
     Session.dispatch(

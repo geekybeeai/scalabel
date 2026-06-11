@@ -1,3 +1,5 @@
+import _ from "lodash"
+
 import {
   addLabel,
   addLabelsToItem,
@@ -9,10 +11,11 @@ import {
   makeSequential
 } from "../action/common"
 import { deleteTracks, terminateTracks } from "../action/track"
-import { drawHistory } from "../common/draw_history"
+import { drawHistory, LineSnapshot } from "../common/draw_history"
 import Session, { dispatch, getState } from "../common/session"
 import { Track } from "../common/track"
 import { LabelTypeName } from "../const/common"
+import { getShapes } from "../functional/state_util"
 import {
   ActionType,
   AddLabelsAction,
@@ -20,7 +23,13 @@ import {
   BaseAction,
   DeleteLabelsAction
 } from "../types/action"
-import { LabelIdMap, ShapeIdMap } from "../types/state"
+import {
+  IdType,
+  LabelIdMap,
+  PathPoint2DType,
+  ShapeIdMap,
+  State
+} from "../types/state"
 import Label2D from "./2d/label2d"
 import Label3D from "./3d/label3d"
 
@@ -236,9 +245,25 @@ export function commit2DLabels(
   const updatedLabels: ItemLabelIdMap = {}
   const tracking = state.task.config.tracking
   const actions: BaseAction[] = []
-  let newPolylineCommitted = false
+  // Polylines the user drew (created) or moved/reshaped (edited) in this
+  // commit. They are recorded for undo so only user-touched lines (never an
+  // untouched inference prediction) enter the undo history.
+  const createdLines: Array<{ itemIndex: number; labelId: IdType }> = []
+  const editedLines: Array<{
+    itemIndex: number
+    labelId: IdType
+    before: LineSnapshot
+  }> = []
+  const deletedLines: Array<{
+    itemIndex: number
+    labelId: IdType
+    snapshot: LineSnapshot
+  }> = []
   updatedLabelDrawables.forEach((drawable) => {
     drawable.setManual()
+    const isPolyline =
+      drawable.type === LabelTypeName.POLYGON_2D ||
+      drawable.type === LabelTypeName.POLYLINE_2D
     if (drawable.isValid()) {
       // Valid drawable
       if (!drawable.temporary) {
@@ -248,20 +273,29 @@ export function commit2DLabels(
         } else {
           updateLabel(drawable, updatedLabels, updatedShapes)
         }
+        // Record only a genuine geometry edit, so merely selecting or grabbing
+        // a prediction (without moving a vertex) does not make it undo-able.
+        if (isPolyline && polylineShapesChanged(state, drawable)) {
+          editedLines.push({
+            itemIndex: drawable.item,
+            labelId: drawable.labelId,
+            before: lineSnapshot(state, drawable.item, drawable.labelId)
+          })
+        }
       } else {
         // New drawable
-        if (
-          drawable.type === LabelTypeName.POLYGON_2D ||
-          drawable.type === LabelTypeName.POLYLINE_2D
-        ) {
-          newPolylineCommitted = true
-        }
         if (tracking) {
           // Add track
           actions.push(addNewTrack(drawable, numItems))
         } else {
           // Add labels
           actions.push(addNewLabel(drawable))
+        }
+        if (isPolyline) {
+          createdLines.push({
+            itemIndex: drawable.item,
+            labelId: drawable.labelId
+          })
         }
       }
     } else {
@@ -271,6 +305,19 @@ export function commit2DLabels(
         if (tracking) {
           actions.push(terminateTrackFromDrawable(drawable, numItems))
         } else {
+          // The line is dropped because an edit made it invalid — record it
+          // so undo can bring it back.
+          if (
+            isPolyline &&
+            state.task.items[drawable.item]?.labels[drawable.labelId] !==
+              undefined
+          ) {
+            deletedLines.push({
+              itemIndex: drawable.item,
+              labelId: drawable.labelId,
+              snapshot: lineSnapshot(state, drawable.item, drawable.labelId)
+            })
+          }
           actions.push(deleteInvalidLabel(drawable))
         }
       }
@@ -280,9 +327,72 @@ export function commit2DLabels(
   actions.push(commitLabelsToState(updatedLabels))
   actions.push(commitShapesToState(updatedShapes))
   dispatch(makeSequential(actions, true))
-  if (newPolylineCommitted) {
-    drawHistory.clearRedo()
+  for (const line of createdLines) {
+    drawHistory.recordUserLine(line.itemIndex, line.labelId)
   }
+  const committed = getState()
+  for (const edit of editedLines) {
+    drawHistory.recordEdit(
+      edit.itemIndex,
+      edit.labelId,
+      edit.before,
+      lineSnapshot(committed, edit.itemIndex, edit.labelId)
+    )
+  }
+  for (const del of deletedLines) {
+    drawHistory.recordDeletedLine(del.itemIndex, del.labelId, del.snapshot)
+  }
+}
+
+/**
+ * Snapshot a line (label + its shapes) from a state, for the draw history.
+ *
+ * @param state the state to read from
+ * @param itemIndex the item the polyline belongs to
+ * @param labelId the polyline's label id
+ */
+function lineSnapshot(
+  state: State,
+  itemIndex: number,
+  labelId: IdType
+): LineSnapshot {
+  return {
+    label: _.cloneDeep(state.task.items[itemIndex].labels[labelId]),
+    shapes: _.cloneDeep(getShapes(state, itemIndex, labelId))
+  }
+}
+
+/**
+ * Whether a polyline/polygon drawable's vertices differ from what is currently
+ * stored in state — i.e. the user actually moved, added, or removed a vertex
+ * rather than merely selecting or grabbing the line. Used so that touching a
+ * prediction without changing it does not make it undo-able.
+ *
+ * @param state the current (pre-commit) state
+ * @param drawable the committed polyline drawable
+ */
+function polylineShapesChanged(
+  state: State,
+  drawable: Readonly<Label2D>
+): boolean {
+  const item = state.task.items[drawable.item]
+  if (item === undefined || item.labels[drawable.labelId] === undefined) {
+    // Not yet in state (cannot compare); treat as no recorded change.
+    return false
+  }
+  const prev = getShapes(state, drawable.item, drawable.labelId)
+  const next = drawable.shapes()
+  if (prev.length !== next.length) {
+    return true
+  }
+  for (let i = 0; i < prev.length; i++) {
+    const a = prev[i] as PathPoint2DType
+    const b = next[i] as PathPoint2DType
+    if (a.x !== b.x || a.y !== b.y || a.pointType !== b.pointType) {
+      return true
+    }
+  }
+  return false
 }
 
 /**
