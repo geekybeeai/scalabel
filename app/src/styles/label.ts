@@ -35,7 +35,7 @@ StyleRules<
     primary: {
       fontWeight: "bold",
       width: "100%",
-      textAlign: "center",
+      textAlign: "left",
       padding: "0px"
     },
     button: {
@@ -314,7 +314,9 @@ export const LayoutStyles = (): StyleRules<
     alerts: {
       display: "block",
       position: "absolute",
+      top: 58,
       right: "3%",
+      maxWidth: 420,
       width: "auto",
       height: "auto",
       zIndex: 10

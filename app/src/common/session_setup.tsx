@@ -158,12 +158,20 @@ function loadImages(
           dispatch(loadItem(item.index, sensorId))
         }
         image.onerror = () => {
-          if (attemptsMap[sensorId] === maxAttempts) {
-            // Append date to url to prevent local caching
-            image.src = `${url}#${new Date().getTime()}`
+          if (attemptsMap[sensorId] < maxAttempts) {
             attemptsMap[sensorId]++
+            // Append a timestamp to bust any cached failure, then retry.
+            image.src = `${url}#${new Date().getTime()}`
           } else {
-            alert(Severity.ERROR, `Failed to load image at ${url}`)
+            // Log the real URL for debugging, but show the user a friendly,
+            // signature-free message (the signed link has usually expired).
+            // eslint-disable-next-line no-console
+            console.error(`Failed to load image at ${url}`)
+            alert(
+              Severity.ERROR,
+              "Couldn't load the image — the link may have expired. " +
+                "Please refresh the page or reopen the editor."
+            )
           }
         }
         image.src = url

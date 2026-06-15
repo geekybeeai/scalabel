@@ -282,6 +282,14 @@ export class ToolBar extends Component<Props> {
             treeCategories={treeCategories}
             headerText={"Category"}
             hiddenCategories={activeConfig.hiddenCategories ?? []}
+            showTags={!(activeConfig.hideTags ?? false)}
+            onToggleTags={() => {
+              const config = { ...activeConfig }
+              config.hideTags = !config.hideTags
+              Session.dispatch(
+                changeViewerConfig(this.safeActiveViewerId, config)
+              )
+            }}
             onToggleCategoryVisibility={(index: number) =>
               this.toggleCategoryVisibility(index)
             }
@@ -310,8 +318,12 @@ export class ToolBar extends Component<Props> {
               this.deletePressed()
             })}
           </div>
-          {/* Visibility toggles — always shown */}
-          {this.state.task.config.labelTypes.length >= 1 && (
+          {/* Per label-type visibility toggles. Polylines are intentionally
+              omitted: the Category "Show all" checkbox already toggles every
+              polyline, so a separate toggle is redundant. */}
+          {this.state.task.config.labelTypes.filter(
+            (labelType) => labelType !== "polyline2d"
+          ).length > 0 && (
             <div
               style={{
                 padding: "4px 8px",
@@ -319,81 +331,41 @@ export class ToolBar extends Component<Props> {
                 marginTop: 4
               }}
             >
-              <div
-                style={{
-                  fontSize: 11,
-                  opacity: 0.7,
-                  marginBottom: 2,
-                  letterSpacing: 1,
-                  textTransform: "uppercase"
-                }}
-              >
-                Visibility
-              </div>
-              {/* Tags (category label boxes, e.g. "yel", "dou") */}
-              <ListItem
-                key="__tags__"
-                dense
-                disableGutters
-                style={{ padding: "0 0 0 4px" }}
-              >
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      size="small"
-                      checked={!(activeConfig.hideTags ?? false)}
-                      onChange={() => {
-                        const config = { ...activeConfig }
-                        config.hideTags = !config.hideTags
-                        Session.dispatch(
-                          changeViewerConfig(this.safeActiveViewerId, config)
-                        )
-                      }}
-                      style={{ padding: 2, color: "inherit" }}
-                    />
-                  }
-                  label={<span style={{ fontSize: 12 }}>Show Tags</span>}
-                  style={{ margin: 0 }}
-                />
-              </ListItem>
-              {/* Per label-type toggles. Polylines are intentionally omitted:
-                  the Category "Show all" checkbox already toggles every polyline,
-                  so a separate "Show Polylines" toggle is redundant. */}
               {this.state.task.config.labelTypes
                 .filter((labelType) => labelType !== "polyline2d")
                 .map((labelType) => {
-                const hidden = (
-                  (activeConfig.hiddenLabelTypes ?? [])
-                ).includes(labelType)
-                const displayName = this.getLabelTypeDisplayName(labelType)
-                return (
-                  <ListItem
-                    key={labelType}
-                    dense
-                    disableGutters
-                    style={{ padding: "0 0 0 4px" }}
-                  >
-                    <FormControlLabel
-                      control={
-                        <Checkbox
-                          size="small"
-                          checked={!hidden}
-                          onChange={() =>
-                            this.toggleLabelTypeVisibility(labelType)
-                          }
-                          style={{ padding: 2, color: "inherit" }}
-                        />
-                      }
-                      label={
-                        <span style={{ fontSize: 12 }}>
-                          Show {displayName}
-                        </span>
-                      }
-                      style={{ margin: 0 }}
-                    />
-                  </ListItem>
-                )
-              })}
+                  const hidden = (
+                    activeConfig.hiddenLabelTypes ?? []
+                  ).includes(labelType)
+                  const displayName = this.getLabelTypeDisplayName(labelType)
+                  return (
+                    <ListItem
+                      key={labelType}
+                      dense
+                      disableGutters
+                      style={{ padding: "0 0 0 4px" }}
+                    >
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            size="small"
+                            checked={!hidden}
+                            onChange={() =>
+                              this.toggleLabelTypeVisibility(labelType)
+                            }
+                            style={{ padding: 2, color: "inherit" }}
+                          />
+                        }
+                        label={
+                          <span style={{ fontSize: 12 }}>
+                            Show {displayName}
+                          </span>
+                        }
+                        style={{ margin: 0 }}
+                      />
+                    </ListItem>
+                  )
+                })}
             </div>
           )}
           {/* Keyboard shortcut legend — always shown, embedded or not */}
@@ -409,8 +381,7 @@ export class ToolBar extends Component<Props> {
                 fontSize: 11,
                 opacity: 0.7,
                 marginBottom: 4,
-                letterSpacing: 1,
-                textTransform: "uppercase"
+                letterSpacing: 1
               }}
             >
               Keyboard Shortcuts

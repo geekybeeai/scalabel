@@ -149,6 +149,10 @@ interface Props {
   onToggleCategoryVisibility?: (index: number) => void
   /** toggle visibility of all categories at once */
   onToggleAllCategoryVisibility?: () => void
+  /** whether category tags are shown on the canvas */
+  showTags?: boolean
+  /** toggle whether category tags are shown on the canvas */
+  onToggleTags?: () => void
 }
 
 /**
@@ -265,14 +269,30 @@ class MultipleSelect extends Component<Props> {
     return (
       <>
         <FormControl className={classes.formControl}>
-          <ListItem dense={true} className={classes.primary}>
+          <ListItem
+            dense
+            disableGutters
+            className={classes.primary}
+            style={{ paddingLeft: 5 }}
+          >
             <ListItemText
               classes={{ primary: classes.primary }}
               primary={headerText}
             />
           </ListItem>
           {this.props.onToggleAllCategoryVisibility !== undefined && (
-            <ListItem dense disableGutters style={{ padding: "0 0 2px 8px" }}>
+            // Identical box model to a category row (border 1px + padding 4px)
+            // with the checkbox as a DIRECT child, so the "Show all" checkbox
+            // lands on the exact same column as the category checkboxes.
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                minHeight: 24,
+                padding: "1px 4px",
+                border: "1px solid transparent"
+              }}
+            >
               <Checkbox
                 size="small"
                 checked={(this.props.hiddenCategories ?? []).length === 0}
@@ -284,8 +304,24 @@ class MultipleSelect extends Component<Props> {
                 title="Toggle visibility of all categories"
                 style={{ padding: 2, color: "inherit" }}
               />
-              <span style={{ fontSize: 12, opacity: 0.75 }}>Show all</span>
-            </ListItem>
+              <span
+                style={{ fontSize: 12, opacity: 0.75, marginRight: 16 }}
+              >
+                Show all
+              </span>
+              {this.props.onToggleTags !== undefined && (
+                <>
+                  <Checkbox
+                    size="small"
+                    checked={this.props.showTags ?? true}
+                    onChange={() => this.props.onToggleTags?.()}
+                    title="Toggle category tags on the canvas"
+                    style={{ padding: 2, color: "inherit" }}
+                  />
+                  <span style={{ fontSize: 12, opacity: 0.75 }}>Show Tags</span>
+                </>
+              )}
+            </div>
           )}
           {treeCategories !== null ? (
             <TreeView
