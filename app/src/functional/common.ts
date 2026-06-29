@@ -1009,18 +1009,41 @@ export function changeSelect(
       }
     }
   }
-  const newSelect = updateObject(state.user.select, action.select)
-  for (const key of Object.keys(newSelect.labels)) {
-    const index = Number(key)
-    if (newSelect.labels[index].length === 0) {
-      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-      delete newSelect.labels[index]
+  try {
+    const newSelect = updateObject(state.user.select, action.select)
+    console.log("[DEBUG] changeSelect processing newSelect:", {
+      selectLabels: newSelect.labels,
+      actionSelectLabels: action.select.labels,
+      stateSelectLabels: state.user.select.labels
+    })
+    for (const key of Object.keys(newSelect.labels)) {
+      const index = Number(key)
+      const val = newSelect.labels[index]
+      console.log("[DEBUG] Checking labels key:", {
+        key,
+        index,
+        val,
+        type: typeof val,
+        isUndefined: val === undefined
+      })
+      if (val === undefined || val === null) {
+        console.error("[DEBUG] val is undefined/null for key:", key)
+        delete newSelect.labels[index]
+        continue
+      }
+      if (val.length === 0) {
+        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+        delete newSelect.labels[index]
+      }
     }
+    if (newSelect.item < 0 || newSelect.item >= state.task.items.length) {
+      newSelect.item = state.user.select.item
+    }
+    return updateObject(state, { user: updateUserSelect(state.user, newSelect) })
+  } catch (err: any) {
+    console.error("[DEBUG] Caught error in changeSelect:", err, err.stack)
+    throw err
   }
-  if (newSelect.item < 0 || newSelect.item >= state.task.items.length) {
-    newSelect.item = state.user.select.item
-  }
-  return updateObject(state, { user: updateUserSelect(state.user, newSelect) })
 }
 
 /**

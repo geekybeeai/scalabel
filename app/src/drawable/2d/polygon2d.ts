@@ -5,6 +5,7 @@ import { makeLabel } from "../../functional/states"
 import { Size2D } from "../../math/size2d"
 import { Vector2D } from "../../math/vector2d"
 import {
+  IdType,
   LabelType,
   ModeStatus,
   PathPoint2DType,
@@ -61,7 +62,7 @@ export class Polygon2D extends Label2D {
   /** The hashed list of keys currently down */
   private _keyDownMap: { [key: string]: boolean }
   /** open or closed */
-  private readonly _closed: boolean
+  private _closed: boolean
   /** snap target polyline */
   private _snapTargetPolyline: Polygon2D | null
   /** snap target endpoint index */
@@ -105,6 +106,25 @@ export class Polygon2D extends Label2D {
   /** Whether this polygon is currently being drawn (vertices being placed) */
   public get isDrawing(): boolean {
     return this._state === Polygon2DState.DRAW
+  }
+
+  /** Get highlighted handle */
+  public get highlightedHandle(): number {
+    return this._highlightedHandle
+  }
+
+  /**
+   * Update state of the label
+   *
+   * @param state
+   * @param itemIndex
+   * @param labelId
+   */
+  public updateState(state: State, itemIndex: number, labelId: IdType): void {
+    super.updateState(state, itemIndex, labelId)
+    if (this._label !== null) {
+      this._closed = this._label.type === LabelTypeName.POLYGON_2D || !!this._label.closed
+    }
   }
 
   /**
@@ -195,6 +215,29 @@ export class Polygon2D extends Label2D {
    * @param isStartB
    */
   private mergeWith(targetPolyline: Polygon2D, isStartB: boolean): void {
+    if (targetPolyline === this) {
+      // Self-closing
+      const vertices = this.getVertices()
+      const draggedIndex = this._highlightedHandle - 1
+      const isStartA = draggedIndex === 0
+
+      if (isStartA) {
+        vertices.shift() // Remove start vertex
+      } else {
+        vertices.pop() // Remove end vertex
+      }
+
+      this._closed = true
+      if (this._label !== null) {
+        this._label.closed = true
+      }
+
+      const shapes = vertices.map((v) => v.shape())
+      this.updateShapes(shapes)
+      this._labelList.addUpdatedLabel(this)
+      return
+    }
+
     const verticesA = this.getVertices()
     const verticesB = targetPolyline.getVertices()
 
@@ -236,6 +279,7 @@ export class Polygon2D extends Label2D {
 
     // Mark target as merged out and queue it for deletion
     targetPolyline._mergedOut = true
+    targetPolyline.clearSnapState()
     this._labelList.addUpdatedLabel(targetPolyline)
     this._labelList.addUpdatedLabel(this)
   }
@@ -621,10 +665,12 @@ export class Polygon2D extends Label2D {
       this._state = Polygon2DState.FINISHED
       this.editing = false
       this.clearSnapState()
+      this._highlightedHandle = -1
     } else if (this.editing && this._state === Polygon2DState.MOVE) {
       // Finish dragging edges
       this._state = Polygon2DState.FINISHED
       this.editing = false
+      this._highlightedHandle = -1
     }
     this._mouseDown = false
     if (!this.isValid() && !this.editing && !this.temporary) {
@@ -634,6 +680,13 @@ export class Polygon2D extends Label2D {
       }
     }
     this.UpdateLabelShapes()
+    console.log("[DEBUG] Polygon2D.onMouseUp completed:", {
+      editing: this.editing,
+      state: this._state,
+      highlightedHandle: this._highlightedHandle,
+      snapTargetPolyline: this._snapTargetPolyline ? { index: this._snapTargetPolyline.index } : null,
+      snapTargetPointIndex: this._snapTargetPointIndex
+    })
     return true
   }
 

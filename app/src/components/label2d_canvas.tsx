@@ -358,10 +358,17 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // get mouse position in image coordinates
     const mousePos = this.getMousePos(e)
     const [labelIndex, handleIndex] = this.fetchHandleId(mousePos)
-    // Start every gesture from a clean pan state. Guards against a lost mouseup
-    // (e.g. the pointer was released outside the window during a previous drag),
-    // which would otherwise leave the empty-drag "armed" and suppress drawing.
+    console.log("[DEBUG] Canvas.onMouseDown hit testing:", {
+      mousePos,
+      labelIndex,
+      handleIndex,
+      inPanWindow: inPanWindow(Date.now()),
+      hasSelectedLabels: this._labelHandler["hasSelectedLabels"](),
+      isEditingSelectedLabels: this._labelHandler["isEditingSelectedLabels"]()
+    })
     resetPanState()
+    // Control + click for dragging
+    // get mouse position in image coordinates
     // Ctrl/Cmd drag pans anywhere via Viewer2D; never draw/edit on it.
     if (e.ctrlKey || e.metaKey) {
       return
@@ -371,6 +378,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // draw/select in onMouseUp. Arming (rather than returning early) inside the
     // pan window ensures a click there is not silently dropped.
     if (labelIndex < 0 || inPanWindow(Date.now())) {
+      console.log("[DEBUG] Canvas.onMouseDown REJECTED: labelIndex < 0 or inPanWindow", { labelIndex })
       const rect = (this.display as HTMLDivElement).getBoundingClientRect()
       armEmptyDrag(e.clientX - rect.left, e.clientY - rect.top)
       this.setCursor("grab")

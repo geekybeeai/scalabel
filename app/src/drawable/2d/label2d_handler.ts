@@ -196,6 +196,11 @@ export class Label2DHandler {
           this._labelList.selectedLabels.splice(selectedIndex, 1)
         }
       }
+      console.log("[DEBUG] Label2DHandler.onMouseUp completed:", {
+        highlightedLabel: this._highlightedLabel ? { index: this._highlightedLabel.index, type: this._highlightedLabel.type } : null,
+        selectedLabels: this._labelList.selectedLabels.map(l => ({ index: l.index, type: l.type, editing: l.editing })),
+        pressedKeys: Array.from(this._pressedKey)
+      })
     }
   }
 
@@ -458,6 +463,13 @@ export class Label2DHandler {
         : [this._highlightedLabel.labelId]
       const highlightedAlreadySelected =
         this._labelList.selectedLabels.includes(this._highlightedLabel)
+      console.log("[DEBUG] selectHighlighted values:", {
+        highlightedLabel: this._highlightedLabel ? { index: this._highlightedLabel.index, type: this._highlightedLabel.type, labelId: this._highlightedLabel.labelId } : null,
+        category: this._highlightedLabel?.category,
+        attributes: this._highlightedLabel?.attributes,
+        labelId: this._highlightedLabel?.labelId,
+        labelIds
+      })
       if (this.isKeyDown(Key.CONTROL) || this.isKeyDown(Key.META)) {
         if (highlightedAlreadySelected) {
           Session.dispatch(
@@ -473,7 +485,7 @@ export class Label2DHandler {
               this._labelList.selectedLabelIds,
               this._selectedItemIndex,
               labelIds,
-              this._highlightedLabel.category[0],
+              this._highlightedLabel.category ? this._highlightedLabel.category[0] : undefined,
               this._highlightedLabel.attributes,
               true
             )
@@ -485,7 +497,7 @@ export class Label2DHandler {
             this._labelList.selectedLabelIds,
             this._selectedItemIndex,
             labelIds,
-            this._highlightedLabel.category[0],
+            this._highlightedLabel.category ? this._highlightedLabel.category[0] : undefined,
             this._highlightedLabel.attributes
           )
         )

@@ -50,6 +50,8 @@ export interface LabelType {
   changed: boolean
   /** whether the label has been annotated as checked. */
   checked: boolean
+  /** whether the polyline is closed */
+  closed?: boolean
 }
 
 export interface TrackType {
