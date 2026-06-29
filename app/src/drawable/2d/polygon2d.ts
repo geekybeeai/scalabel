@@ -62,6 +62,12 @@ export class Polygon2D extends Label2D {
   private _keyDownMap: { [key: string]: boolean }
   /** open or closed */
   private readonly _closed: boolean
+  /** snap target polyline */
+  private _snapTargetPolyline: Polygon2D | null
+  /** snap target endpoint index */
+  private _snapTargetPointIndex: number
+  /** whether this polyline has been merged out into another */
+  private _mergedOut: boolean
 
   /**
    * Constructor
@@ -77,6 +83,9 @@ export class Polygon2D extends Label2D {
     this._startingPoints = []
     this._keyDownMap = {}
     this._closed = closed
+    this._snapTargetPolyline = null
+    this._snapTargetPointIndex = -1
+    this._mergedOut = false
   }
 
   /** Get cursor for highlighting */
@@ -110,6 +119,125 @@ export class Polygon2D extends Label2D {
    */
   public get points(): PathPoint2D[] {
     return this._points.map((p) => p.clone())
+  }
+
+  /**
+   * Get whether the polyline/polygon is closed
+   */
+  public get closed(): boolean {
+    return this._closed
+  }
+
+  /**
+   * Check if a vertex index in this._points is an endpoint
+   * Only applicable to polylines (non-closed)
+   *
+   * @param vertexIndex
+   */
+  public isEndpoint(vertexIndex: number): boolean {
+    if (this._closed) {
+      return false
+    }
+    return vertexIndex === 0 || vertexIndex === this._points.length - 1
+  }
+
+  /**
+   * Draw snap indicator (glowing halo, enlarged green endpoint, white center dot)
+   *
+   * @param context
+   * @param ratio
+   */
+  private drawSnapIndicator(context: Context2D, ratio: number): void {
+    if (this._snapTargetPolyline === null || this._snapTargetPointIndex === -1) {
+      return
+    }
+    const targetPoint = this._snapTargetPolyline._points[this._snapTargetPointIndex]
+    const realCoord = targetPoint.vector().scale(ratio)
+
+    context.save()
+
+    // 1. Green outer halo
+    context.beginPath()
+    context.strokeStyle = "rgba(0, 255, 0, 0.8)"
+    context.fillStyle = "rgba(0, 255, 0, 0.2)"
+    context.lineWidth = 2
+    context.arc(realCoord.x, realCoord.y, 16, 0, 2 * Math.PI)
+    context.fill()
+    context.stroke()
+
+    // 2. Slightly enlarged green endpoint
+    context.beginPath()
+    context.fillStyle = "rgba(0, 255, 0, 0.9)"
+    context.arc(realCoord.x, realCoord.y, 8, 0, 2 * Math.PI)
+    context.fill()
+
+    // 3. White center dot
+    context.beginPath()
+    context.fillStyle = "#ffffff"
+    context.arc(realCoord.x, realCoord.y, 3, 0, 2 * Math.PI)
+    context.fill()
+
+    context.restore()
+  }
+
+  /**
+   * Clear the snap state variables
+   */
+  private clearSnapState(): void {
+    this._snapTargetPolyline = null
+    this._snapTargetPointIndex = -1
+  }
+
+  /**
+   * Merge this polyline with another polyline at the specified endpoint
+   *
+   * @param targetPolyline
+   * @param isStartB
+   */
+  private mergeWith(targetPolyline: Polygon2D, isStartB: boolean): void {
+    const verticesA = this.getVertices()
+    const verticesB = targetPolyline.getVertices()
+
+    const cloneVertex = (v: PathPoint2D) => {
+      return makeDrawablePathPoint2D(v.x, v.y, v.type, this._label?.id)
+    }
+
+    const draggedIndex = this._highlightedHandle - 1
+    const isStartA = draggedIndex === 0
+
+    let mergedVertices: PathPoint2D[] = []
+
+    if (!isStartA && isStartB) {
+      // 1. A.end -> B.start
+      const clonedB = verticesB.map(cloneVertex)
+      clonedB.shift() // remove B.start
+      mergedVertices = [...verticesA, ...clonedB]
+    } else if (isStartA && !isStartB) {
+      // 2. A.start -> B.end
+      const clonedB = verticesB.map(cloneVertex)
+      clonedB.pop() // remove B.end
+      mergedVertices = [...clonedB, ...verticesA]
+    } else if (isStartA && isStartB) {
+      // 3. A.start -> B.start (reverse A)
+      const reversedA = [...verticesA].reverse()
+      const clonedB = verticesB.map(cloneVertex)
+      clonedB.shift() // remove B.start
+      mergedVertices = [...reversedA, ...clonedB]
+    } else {
+      // 4. A.end -> B.end (reverse B)
+      const clonedReversedB = verticesB.map(cloneVertex).reverse()
+      clonedReversedB.shift() // remove B.end
+      mergedVertices = [...verticesA, ...clonedReversedB]
+    }
+
+    // Recreate midpoints automatically by calling updateShapes
+    const shapes = mergedVertices.map((v) => v.shape())
+    this.updateShapes(shapes)
+
+    // Mark target as merged out and queue it for deletion
+    targetPolyline._mergedOut = true
+    this._labelList.addUpdatedLabel(targetPolyline)
+    this._labelList.addUpdatedLabel(this)
   }
 
   /**
@@ -309,7 +437,11 @@ export class Polygon2D extends Label2D {
             numVertices++
           }
         })
-      } else if (this._state === Polygon2DState.FINISHED) {
+      } else if (
+        this._state === Polygon2DState.FINISHED ||
+        this._state === Polygon2DState.RESHAPE ||
+        this._state === Polygon2DState.MOVE
+      ) {
         for (let i = 0; i < numPoints; ++i) {
           const point = this._points[i]
           let style = { ...pointStyle }
@@ -348,6 +480,9 @@ export class Polygon2D extends Label2D {
         isTrackLinking,
         checked
       )
+    }
+    if (mode === DrawMode.VIEW) {
+      this.drawSnapIndicator(context, ratio)
     }
   }
 
@@ -431,6 +566,25 @@ export class Polygon2D extends Label2D {
       this._highlightedHandle = handleIndex
     } else if (this._mouseDown && this._state === Polygon2DState.RESHAPE) {
       // Dragging point
+      const draggedIndex = this._highlightedHandle - 1
+      if (this.isEndpoint(draggedIndex)) {
+        const candidate = this._labelList.findNearestEndpoint(this, coord, 15)
+        if (candidate !== null) {
+          this._snapTargetPolyline = candidate.polyline
+          this._snapTargetPointIndex = candidate.isStart
+            ? 0
+            : candidate.polyline.points.length - 1
+          // Snap the coordinates of the dragged vertex to the target coordinates
+          const targetPoint = candidate.polyline._points[this._snapTargetPointIndex]
+          coord.x = targetPoint.x
+          coord.y = targetPoint.y
+        } else {
+          this.clearSnapState()
+        }
+      } else {
+        this.clearSnapState()
+      }
+
       this.reshape(coord, _limit)
       this._labelList.addUpdatedLabel(this)
     } else if (this._mouseDown && this._state === Polygon2DState.MOVE) {
@@ -461,8 +615,12 @@ export class Polygon2D extends Label2D {
       }
     } else if (this.editing && this._state === Polygon2DState.RESHAPE) {
       // Finish dragging point
+      if (this._snapTargetPolyline !== null && this._snapTargetPointIndex !== -1) {
+        this.mergeWith(this._snapTargetPolyline, this._snapTargetPointIndex === 0)
+      }
       this._state = Polygon2DState.FINISHED
       this.editing = false
+      this.clearSnapState()
     } else if (this.editing && this._state === Polygon2DState.MOVE) {
       // Finish dragging edges
       this._state = Polygon2DState.FINISHED
@@ -511,6 +669,9 @@ export class Polygon2D extends Label2D {
    * to check whether the label is valid
    */
   public isValid(): boolean {
+    if (this._mergedOut) {
+      return false
+    }
     if (this._state !== Polygon2DState.FINISHED) {
       return false
     }

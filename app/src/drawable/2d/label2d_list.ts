@@ -8,6 +8,7 @@ import { Context2D } from "../util"
 import { Box2D } from "./box2d"
 import { CustomLabel2D } from "./custom_label"
 import { DrawMode, Label2D } from "./label2d"
+import { Vector2D } from "../../math/vector2d"
 import { Polygon2D } from "./polygon2d"
 import { Tag2D } from "./tag2d"
 
@@ -58,6 +59,10 @@ export class Label2DList {
   private readonly _callbacks: Array<() => void>
   /** New labels to be committed */
   private readonly _updatedLabels: Set<Label2D>
+  /** last display-to-image ratio from draw */
+  private _lastRatio: number
+  /** last view scale from draw */
+  private _lastViewScale: number
 
   /**
    * Constructor
@@ -70,6 +75,8 @@ export class Label2DList {
     this._callbacks = []
     this._labelTemplates = {}
     this._updatedLabels = new Set()
+    this._lastRatio = 1
+    this._lastViewScale = 1
   }
 
   /**
@@ -223,6 +230,8 @@ export class Label2DList {
     drawControl: boolean = true,
     lineWidthMultiplier: number = 1
   ): void {
+    this._lastRatio = ratio
+    this._lastViewScale = viewScale ?? 1
     const isTrackLinking = this._state.session.trackLinking
     let labelsToDraw =
       hideLabels !== null && hideLabels !== undefined && hideLabels
@@ -381,5 +390,99 @@ export class Label2DList {
   /** Clear uncommitted label list */
   public clearUpdatedLabels(): void {
     this._updatedLabels.clear()
+  }
+
+  /**
+   * Find nearest endpoint of another polyline within screen-space radius.
+   * Returns the polyline and whether it is the start endpoint, or null.
+   *
+   * @param source The polyline being dragged
+   * @param coord Mouse coordinate in image space
+   * @param radiusLimit display/screen-space snap radius (e.g. 15 pixels)
+   */
+  public findNearestEndpoint(
+    source: Polygon2D,
+    coord: Vector2D,
+    radiusLimit: number
+  ): { polyline: Polygon2D, isStart: boolean } | null {
+    const upResRatio = this._lastViewScale > 3 ? 1 : 2
+    const displayToImageRatio = this._lastRatio / upResRatio
+    const snapRadiusImage = radiusLimit / displayToImageRatio
+
+    let bestCandidate: { polyline: Polygon2D, isStart: boolean } | null = null
+    let minDistance = snapRadiusImage
+
+    // Find all active polylines (excluding closed ones)
+    const polylines = this._labelList.filter(
+      (label) => label instanceof Polygon2D && !label.closed
+    ) as Polygon2D[]
+
+    const draggedIndex = source.highlightedHandle - 1
+
+    for (const polyline of polylines) {
+      // If it is the same polyline (self-closing checks)
+      if (polyline === source) {
+        const points = polyline.points
+        if (points.length === 0) {
+          continue
+        }
+        if (draggedIndex === 0) {
+          // Dragging start, can only snap to end
+          const endPoint = points[points.length - 1]
+          const dx = coord.x - endPoint.x
+          const dy = coord.y - endPoint.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          if (dist < minDistance) {
+            minDistance = dist
+            bestCandidate = { polyline, isStart: false }
+          }
+        } else if (draggedIndex === points.length - 1) {
+          // Dragging end, can only snap to start
+          const startPoint = points[0]
+          const dx = coord.x - startPoint.x
+          const dy = coord.y - startPoint.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          if (dist < minDistance) {
+            minDistance = dist
+            bestCandidate = { polyline, isStart: true }
+          }
+        }
+        continue
+      }
+
+      // Check category match for other polylines
+      const sourceCat = source.category[0]
+      const polylineCat = polyline.category[0]
+      if (sourceCat !== polylineCat) {
+        continue
+      }
+
+      const points = polyline.points
+      if (points.length === 0) {
+        continue
+      }
+
+      // Start endpoint (index 0)
+      const startPoint = points[0]
+      const dxStart = coord.x - startPoint.x
+      const dyStart = coord.y - startPoint.y
+      const distStart = Math.sqrt(dxStart * dxStart + dyStart * dyStart)
+      if (distStart < minDistance) {
+        minDistance = distStart
+        bestCandidate = { polyline, isStart: true }
+      }
+
+      // End endpoint (index points.length - 1)
+      const endPoint = points[points.length - 1]
+      const dxEnd = coord.x - endPoint.x
+      const dyEnd = coord.y - endPoint.y
+      const distEnd = Math.sqrt(dxEnd * dxEnd + dyEnd * dyEnd)
+      if (distEnd < minDistance) {
+        minDistance = distEnd
+        bestCandidate = { polyline, isStart: false }
+      }
+    }
+
+    return bestCandidate
   }
 }
