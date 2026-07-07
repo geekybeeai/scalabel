@@ -16,8 +16,11 @@ import {
 } from "../common/pointer_pan_state"
 import { isCutMode, setCutMode } from "../common/cut_state"
 import {
+  getPickData,
+  getPreviewData,
   getSegmentDeletePhase,
   isSegmentDeleteActive,
+  onSegmentDeleteChange,
   resetSegmentDelete
 } from "../common/segment_delete_state"
 import {
@@ -25,7 +28,12 @@ import {
   CUT_SNAP_RADIUS_PX,
   performCut
 } from "../drawable/2d/polyline_cut"
-import { handleSegmentDeletePick } from "../drawable/2d/polyline_segment_delete"
+import {
+  commitPendingSegmentDelete,
+  handleSegmentDeletePick,
+  SEGMENT_DELETE_PREVIEW_MS
+} from "../drawable/2d/polyline_segment_delete"
+import { DASH_LINE } from "../drawable/2d/common"
 import { ContentCutIcon, CUT_CURSOR } from "./cut_icon"
 import { Key } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
@@ -119,6 +127,14 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _cutItemIndex: number = -1
   /** context-menu anchor (viewport px), null while the menu is closed */
   private _menuAnchor: { left: number; top: number } | null = null
+  /** unsubscribe from delete-segment state changes */
+  private _offSegmentDelete: (() => void) | null = null
+  /** pending commit timer for the delete-segment preview */
+  private _segmentDeleteTimer: number | null = null
+  /** rAF handle for the marching-ants animation */
+  private _antsRAF: number | null = null
+  /** marching-ants dash offset (canvas px) */
+  private _antsOffset: number = 0
 
   /**
    * Constructor, handles subscription to store
@@ -170,6 +186,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // stale 0.7x motion resolution, leaving labels blurry until the next state
     // change. Mirrors ImageCanvas's idle handler.
     this._offIdle = onIdle(() => this.forceUpdate())
+    this._offSegmentDelete = onSegmentDeleteChange(() =>
+      this.onSegmentDeleteStateChange()
+    )
   }
 
   /**
@@ -184,6 +203,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this._offIdle()
       this._offIdle = null
     }
+    if (this._offSegmentDelete !== null) {
+      this._offSegmentDelete()
+      this._offSegmentDelete = null
+    }
+    this.clearSegmentDeleteTimers()
   }
 
   /**
@@ -367,6 +391,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         hiddenCategories,
         !isInteracting(),
         lineWidthMultiplier
+      )
+      this.drawSegmentDeleteOverlay(
+        this.labelContext,
+        this.displayToImageRatio * this._upResRatio
       )
     }
     return true
@@ -641,6 +669,109 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     }
     this._menuAnchor = { left: e.clientX, top: e.clientY }
     this.forceUpdate()
+  }
+
+  /**
+   * React to delete-segment phase changes: start the commit countdown and the
+   * marching-ants animation when a preview begins; tear both down on any
+   * other transition (cancel, commit, disarm).
+   */
+  private onSegmentDeleteStateChange(): void {
+    if (getSegmentDeletePhase() === "preview") {
+      if (this._segmentDeleteTimer === null) {
+        this._segmentDeleteTimer = window.setTimeout(() => {
+          this._segmentDeleteTimer = null
+          const outcome = commitPendingSegmentDelete()
+          if (outcome === "stale") {
+            alert(
+              Severity.WARNING,
+              "The line changed — segment delete cancelled."
+            )
+          }
+          this.setDefaultCursor()
+        }, SEGMENT_DELETE_PREVIEW_MS)
+      }
+      if (this._antsRAF === null) {
+        const step = (): void => {
+          this._antsOffset += 0.75
+          this.redraw()
+          this._antsRAF =
+            getSegmentDeletePhase() === "preview"
+              ? window.requestAnimationFrame(step)
+              : null
+        }
+        this._antsRAF = window.requestAnimationFrame(step)
+      }
+    } else {
+      this.clearSegmentDeleteTimers()
+      // Repaint to add/remove the pick halo or erase the overlay.
+      this.redraw()
+    }
+  }
+
+  /**
+   * Clear the delete-segment preview timer and animation, if running.
+   */
+  private clearSegmentDeleteTimers(): void {
+    if (this._segmentDeleteTimer !== null) {
+      window.clearTimeout(this._segmentDeleteTimer)
+      this._segmentDeleteTimer = null
+    }
+    if (this._antsRAF !== null) {
+      window.cancelAnimationFrame(this._antsRAF)
+      this._antsRAF = null
+    }
+  }
+
+  /**
+   * Draw the delete-segment overlay: a green halo on the first pick and,
+   * during the preview, the doomed piece as a green dashed marching-ants
+   * path. Drawn after the labels so it always sits on top.
+   *
+   * @param context the label canvas context
+   * @param ratio image-to-canvas scale (displayToImageRatio * upResRatio)
+   */
+  private drawSegmentDeleteOverlay(
+    context: CanvasRenderingContext2D,
+    ratio: number
+  ): void {
+    const pickData = getPickData()
+    if (pickData === null) {
+      return
+    }
+    context.save()
+    // Pick-1 halo (matches the endpoint-snap indicator styling).
+    const hx = pickData.pick1Point.x * ratio
+    const hy = pickData.pick1Point.y * ratio
+    context.beginPath()
+    context.strokeStyle = "rgba(0, 255, 0, 0.8)"
+    context.fillStyle = "rgba(0, 255, 0, 0.2)"
+    context.lineWidth = 2
+    context.arc(hx, hy, 12, 0, 2 * Math.PI)
+    context.fill()
+    context.stroke()
+    context.beginPath()
+    context.fillStyle = "rgba(0, 255, 0, 0.9)"
+    context.arc(hx, hy, 5, 0, 2 * Math.PI)
+    context.fill()
+
+    const preview = getPreviewData()
+    if (preview !== null && preview.doomed.length >= 2) {
+      context.beginPath()
+      context.strokeStyle = "rgba(0, 230, 0, 0.95)"
+      context.lineWidth = 4
+      context.setLineDash(DASH_LINE)
+      context.lineDashOffset = -this._antsOffset
+      context.moveTo(preview.doomed[0].x * ratio, preview.doomed[0].y * ratio)
+      for (let i = 1; i < preview.doomed.length; i++) {
+        context.lineTo(
+          preview.doomed[i].x * ratio,
+          preview.doomed[i].y * ratio
+        )
+      }
+      context.stroke()
+    }
+    context.restore()
   }
 
   /**
