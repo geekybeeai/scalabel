@@ -1,6 +1,10 @@
 import {
   buildCutHalves,
-  findCutSite
+  DeleteSitePick,
+  findCutSite,
+  normalizeDeletePicks,
+  resolvePickPoint,
+  sitePositionKey
 } from "../../src/drawable/2d/polyline_cut_geometry"
 import { PathPointType, SimplePathPoint2DType } from "../../src/types/state"
 
@@ -17,6 +21,25 @@ function pt(
   pointType: PathPointType = PathPointType.LINE
 ): SimplePathPoint2DType {
   return { x, y, pointType }
+}
+
+/**
+ * Shorthand: an interior projection pick on segment i at (x, y).
+ *
+ * @param segmentIndex the segment start index
+ * @param x cut x
+ * @param y cut y
+ */
+function interior(segmentIndex: number, x: number, y: number): DeleteSitePick {
+  return {
+    kind: "interior",
+    site: {
+      segmentIndex,
+      point: { x, y },
+      snappedVertexIndex: null,
+      distance: 0
+    }
+  }
 }
 
 describe("findCutSite", () => {
@@ -162,5 +185,82 @@ describe("buildCutHalves", () => {
       pt(150, 0)
     ])
     expect(second).toEqual([pt(150, 0), pt(200, 0)])
+  })
+})
+
+describe("near-endpoint endpointIndex", () => {
+  test("identifies the start endpoint", () => {
+    const points = [pt(0, 0), pt(100, 0)]
+    const result = findCutSite(points, { x: 2, y: 3 }, 10, 8)
+    expect(result.kind).toBe("near-endpoint")
+    if (result.kind === "near-endpoint") {
+      expect(result.endpointIndex).toBe(0)
+    }
+  })
+
+  test("identifies the last endpoint", () => {
+    const points = [pt(0, 0), pt(100, 0), pt(200, 0)]
+    const result = findCutSite(points, { x: 198, y: 3 }, 10, 8)
+    expect(result.kind).toBe("near-endpoint")
+    if (result.kind === "near-endpoint") {
+      expect(result.endpointIndex).toBe(2)
+    }
+  })
+})
+
+describe("delete-pick normalization", () => {
+  const line = [pt(0, 0), pt(100, 0), pt(200, 0)]
+
+  test("resolvePickPoint resolves interior and end picks", () => {
+    expect(resolvePickPoint(line, interior(0, 50, 0))).toEqual({ x: 50, y: 0 })
+    expect(resolvePickPoint(line, { kind: "end", endpointIndex: 2 })).toEqual({
+      x: 200,
+      y: 0
+    })
+  })
+
+  test("orders picks along the line regardless of click order", () => {
+    const a = interior(1, 150, 0)
+    const b = interior(0, 50, 0)
+    const result = normalizeDeletePicks(line, a, b, 8)
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") {
+      expect(result.first).toBe(b)
+      expect(result.second).toBe(a)
+    }
+  })
+
+  test("orders end picks before/after interior picks", () => {
+    const start: DeleteSitePick = { kind: "end", endpointIndex: 0 }
+    const mid = interior(1, 150, 0)
+    expect(sitePositionKey(line, start)).toBeLessThan(
+      sitePositionKey(line, mid)
+    )
+    expect(
+      sitePositionKey(line, { kind: "end", endpointIndex: 2 })
+    ).toBeGreaterThan(sitePositionKey(line, mid))
+  })
+
+  test("orders two picks on the same segment by projection position", () => {
+    const nearer = interior(0, 30, 0)
+    const farther = interior(0, 80, 0)
+    const result = normalizeDeletePicks(line, farther, nearer, 8)
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") {
+      expect(result.first).toBe(nearer)
+      expect(result.second).toBe(farther)
+    }
+  })
+
+  test("rejects picks closer than the snap radius", () => {
+    const a = interior(0, 50, 0)
+    const b = interior(0, 55, 0)
+    expect(normalizeDeletePicks(line, a, b, 8).kind).toBe("too-close")
+  })
+
+  test("rejects two trims at the same end", () => {
+    const a: DeleteSitePick = { kind: "end", endpointIndex: 0 }
+    const b: DeleteSitePick = { kind: "end", endpointIndex: 0 }
+    expect(normalizeDeletePicks(line, a, b, 8).kind).toBe("too-close")
   })
 })

@@ -16,7 +16,7 @@ export interface CutSite {
 export type CutSiteResult =
   | { kind: "site"; site: CutSite }
   | { kind: "curve"; distance: number }
-  | { kind: "near-endpoint"; distance: number }
+  | { kind: "near-endpoint"; distance: number; endpointIndex: number }
   | { kind: "miss" }
 
 /** Both halves of a cut polyline, as plain (id-less) path points. */
@@ -139,7 +139,11 @@ export function findCutSite(
     snapped = bestIndex + 1
   }
   if (snapped !== null && (snapped === 0 || snapped === points.length - 1)) {
-    return { kind: "near-endpoint", distance: best.dist }
+    return {
+      kind: "near-endpoint",
+      distance: best.dist,
+      endpointIndex: snapped
+    }
   }
   const point =
     snapped !== null
@@ -194,4 +198,90 @@ export function buildCutHalves(
     first: [...points.slice(0, i + 1).map(copy), { ...cutPoint }],
     second: [{ ...cutPoint }, ...points.slice(i + 1).map(copy)]
   }
+}
+
+/**
+ * One of the two user picks for a segment delete: an interior cut site or a
+ * pick near the line's first/last vertex (an end trim).
+ */
+export type DeleteSitePick =
+  | { kind: "interior"; site: CutSite }
+  | { kind: "end"; endpointIndex: number }
+
+/** Result of ordering/validating a pair of delete picks. */
+export type NormalizedDeletePicks =
+  | { kind: "ok"; first: DeleteSitePick; second: DeleteSitePick }
+  | { kind: "too-close" }
+
+/**
+ * Resolve a pick to its coordinate on the polyline (image frame).
+ *
+ * @param points the polyline's stored vertices
+ * @param pick the pick to resolve
+ */
+export function resolvePickPoint(
+  points: readonly SimplePathPoint2DType[],
+  pick: DeleteSitePick
+): { x: number; y: number } {
+  if (pick.kind === "end") {
+    const p = points[pick.endpointIndex]
+    return { x: p.x, y: p.y }
+  }
+  return { x: pick.site.point.x, y: pick.site.point.y }
+}
+
+/**
+ * Monotonic position of a pick along the polyline, for ordering the two
+ * delete picks: start end < vertex/segment positions < last end.
+ *
+ * @param points the polyline's stored vertices
+ * @param pick the pick to position
+ */
+export function sitePositionKey(
+  points: readonly SimplePathPoint2DType[],
+  pick: DeleteSitePick
+): number {
+  if (pick.kind === "end") {
+    return pick.endpointIndex === 0 ? -1 : points.length
+  }
+  if (pick.site.snappedVertexIndex !== null) {
+    return pick.site.snappedVertexIndex
+  }
+  const i = pick.site.segmentIndex
+  const a = points[i]
+  const b = points[i + 1]
+  const segLen = Math.hypot(b.x - a.x, b.y - a.y)
+  const t =
+    segLen > 0
+      ? Math.hypot(pick.site.point.x - a.x, pick.site.point.y - a.y) / segLen
+      : 0
+  return i + t
+}
+
+/**
+ * Validate and order the two picks of a segment delete. Picks whose resolved
+ * coordinates are within `snapRadius` of each other (including two trims at
+ * the same end) are rejected as "too-close"; otherwise the picks are returned
+ * ordered by position along the line, so the caller never cares which one
+ * the user clicked first.
+ *
+ * @param points the polyline's stored vertices
+ * @param a one pick
+ * @param b the other pick
+ * @param snapRadius minimum separation (image px)
+ */
+export function normalizeDeletePicks(
+  points: readonly SimplePathPoint2DType[],
+  a: DeleteSitePick,
+  b: DeleteSitePick,
+  snapRadius: number
+): NormalizedDeletePicks {
+  const pa = resolvePickPoint(points, a)
+  const pb = resolvePickPoint(points, b)
+  if (Math.hypot(pa.x - pb.x, pa.y - pb.y) <= snapRadius) {
+    return { kind: "too-close" }
+  }
+  return sitePositionKey(points, a) <= sitePositionKey(points, b)
+    ? { kind: "ok", first: a, second: b }
+    : { kind: "ok", first: b, second: a }
 }
