@@ -1,4 +1,7 @@
-import { findCutSite } from "../../src/drawable/2d/polyline_cut_geometry"
+import {
+  buildCutHalves,
+  findCutSite
+} from "../../src/drawable/2d/polyline_cut_geometry"
 import { PathPointType, SimplePathPoint2DType } from "../../src/types/state"
 
 /**
@@ -104,5 +107,60 @@ describe("findCutSite", () => {
       expect(result.site.snappedVertexIndex).toBe(1)
       expect(result.site.point).toEqual({ x: 100, y: 0 })
     }
+  })
+})
+
+describe("buildCutHalves", () => {
+  test("splits mid-segment, both halves sharing the cut coordinate", () => {
+    const points = [pt(0, 0), pt(100, 0), pt(200, 0)]
+    const site = {
+      segmentIndex: 0,
+      point: { x: 50, y: 0 },
+      snappedVertexIndex: null,
+      distance: 0
+    }
+    const { first, second } = buildCutHalves(points, site)
+    expect(first).toEqual([pt(0, 0), pt(50, 0)])
+    expect(second).toEqual([pt(50, 0), pt(100, 0), pt(200, 0)])
+    // Input is not mutated
+    expect(points).toHaveLength(3)
+  })
+
+  test("splits at a snapped interior vertex without duplicating it in a half", () => {
+    const points = [pt(0, 0), pt(100, 0), pt(200, 0)]
+    const site = {
+      segmentIndex: 0,
+      point: { x: 100, y: 0 },
+      snappedVertexIndex: 1,
+      distance: 0
+    }
+    const { first, second } = buildCutHalves(points, site)
+    expect(first).toEqual([pt(0, 0), pt(100, 0)])
+    expect(second).toEqual([pt(100, 0), pt(200, 0)])
+  })
+
+  test("preserves bezier spans away from the cut", () => {
+    const points = [
+      pt(0, 0),
+      pt(30, 10, PathPointType.CURVE),
+      pt(60, 10, PathPointType.CURVE),
+      pt(100, 0),
+      pt(200, 0)
+    ]
+    const site = {
+      segmentIndex: 3,
+      point: { x: 150, y: 0 },
+      snappedVertexIndex: null,
+      distance: 0
+    }
+    const { first, second } = buildCutHalves(points, site)
+    expect(first).toEqual([
+      pt(0, 0),
+      pt(30, 10, PathPointType.CURVE),
+      pt(60, 10, PathPointType.CURVE),
+      pt(100, 0),
+      pt(150, 0)
+    ])
+    expect(second).toEqual([pt(150, 0), pt(200, 0)])
   })
 })

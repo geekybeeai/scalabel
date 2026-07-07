@@ -155,3 +155,43 @@ export function findCutSite(
     }
   }
 }
+
+/**
+ * Build the two halves of a cut polyline.
+ *
+ * Mid-segment cut: the first half ends with a new vertex at the cut point and
+ * the second half starts with its own vertex at the same coordinate
+ * (coincident, no gap). Vertex-snapped cut: no new coordinate is introduced
+ * within a half — the halves share only the snapped vertex's coordinate.
+ * Returned points are fresh copies; the input is never mutated.
+ *
+ * @param points the polyline's stored vertices
+ * @param site a "site" result from findCutSite for these points
+ */
+export function buildCutHalves(
+  points: readonly SimplePathPoint2DType[],
+  site: CutSite
+): CutHalves {
+  const copy = (p: SimplePathPoint2DType): SimplePathPoint2DType => ({
+    x: p.x,
+    y: p.y,
+    pointType: p.pointType
+  })
+  if (site.snappedVertexIndex !== null) {
+    const j = site.snappedVertexIndex
+    return {
+      first: points.slice(0, j + 1).map(copy),
+      second: points.slice(j).map(copy)
+    }
+  }
+  const i = site.segmentIndex
+  const cutPoint: SimplePathPoint2DType = {
+    x: site.point.x,
+    y: site.point.y,
+    pointType: PathPointType.LINE
+  }
+  return {
+    first: [...points.slice(0, i + 1).map(copy), { ...cutPoint }],
+    second: [{ ...cutPoint }, ...points.slice(i + 1).map(copy)]
+  }
+}
