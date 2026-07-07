@@ -30,9 +30,15 @@ Open when: changing how a line is drawn, edited, its vertices/curves, merge, val
   rarely needed for lanes).
 - `app/src/drawable/2d/polyline_cut_geometry.ts` — pure cut-site math:
   `findCutSite` (nearest-span projection, curve/endpoint guards, vertex snap),
-  `buildCutHalves`. No Session/DOM imports — testable with the node-env recipe.
+  `buildCutHalves`. Also the delete-segment geometry: `DeleteSitePick`,
+  `normalizeDeletePicks`, `buildSegmentDeletePieces` (survivors + doomed path).
+  No Session/DOM imports — testable with the node-env recipe.
 - `app/src/drawable/2d/polyline_cut.ts` — `performCut` (scan open polylines →
   split → delete+add original id, add new label → `drawHistory.recordCut`).
+- `app/src/drawable/2d/polyline_segment_delete.ts` — delete-segment tool:
+  `handleSegmentDeletePick` (two picks; end picks = trims),
+  `commitPendingSegmentDelete` (atomic; records cut/edited/deleted per
+  outcome — no new history kinds).
 
 ## 2. Drawable list + interaction controller
 Open when: selection, the drawing lifecycle, mouse/keyboard routing, copy/paste.
@@ -106,6 +112,10 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   `app/src/components/cut_icon.tsx` — scissors icon + CSS cursor. Toolbar
   button in `viewer2d.tsx getCutButton`; click/cursor/Escape/context-menu
   wiring in `label2d_canvas.tsx`.
+- `app/src/common/segment_delete_state.ts` — delete-segment phase machine
+  (awaitFirst/awaitSecond/preview, mutually exclusive with cut mode);
+  toolbar button in `viewer2d.tsx getDeleteSegmentButton`; picks/overlay/
+  timer wiring in `label2d_canvas.tsx` (marching-ants preview, 3 s commit).
 - `app/src/components/toolbar_category.tsx` — category rows, Show all / Show Tags.
 - `app/src/styles/label.ts` — `categoryStyle`, `alerts` toast style.
 - `app/src/components/alert.tsx` + `app/src/components/label_layout.tsx` — alert toasts
