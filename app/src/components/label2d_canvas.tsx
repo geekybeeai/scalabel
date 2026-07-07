@@ -16,6 +16,7 @@ import {
 } from "../common/pointer_pan_state"
 import { isCutMode, setCutMode } from "../common/cut_state"
 import {
+  armSegmentDelete,
   getPickData,
   getPreviewData,
   getSegmentDeletePhase,
@@ -34,7 +35,7 @@ import {
   SEGMENT_DELETE_PREVIEW_MS
 } from "../drawable/2d/polyline_segment_delete"
 import { DASH_LINE } from "../drawable/2d/common"
-import { ContentCutIcon, CUT_CURSOR } from "./cut_icon"
+import { ContentCutIcon, CUT_CURSOR, DeleteSegmentIcon } from "./cut_icon"
 import { Key } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
@@ -316,6 +317,22 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         >
           <ContentCutIcon fontSize="small" style={{ marginRight: 8 }} />
           Cut polyline
+        </MenuItem>
+        <MenuItem
+          dense
+          disabled={
+            Session.label2dList.isDrawingInProgress() ||
+            this.state.task.config.tracking
+          }
+          onClick={() => {
+            this._menuAnchor = null
+            armSegmentDelete()
+            this.setCursor(CUT_CURSOR)
+            this.forceUpdate()
+          }}
+        >
+          <DeleteSegmentIcon fontSize="small" style={{ marginRight: 8 }} />
+          Delete segment
         </MenuItem>
       </Menu>
     )

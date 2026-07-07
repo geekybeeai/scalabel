@@ -40,3 +40,23 @@ const CUT_CURSOR_SVG =
 export const CUT_CURSOR = `url('data:image/svg+xml;utf8,${encodeURIComponent(
   CUT_CURSOR_SVG
 )}') 12 12, crosshair`
+
+/**
+ * Glyph for the delete-segment tool: a line with its dashed middle removed
+ * (two solid end stubs, two middle dashes). Inlined like CONTENT_CUT_PATH.
+ */
+export const DELETE_SEGMENT_PATH =
+  "M2 11h5v2H2v-2zm15 0h5v2h-5v-2zm-8 0h2v2H9v-2zm4 0h2v2h-2v-2z"
+
+/**
+ * Delete-segment icon (toolbar button + context-menu item).
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function DeleteSegmentIcon(props: SvgIconProps): JSX.Element {
+  return (
+    <SvgIcon {...props}>
+      <path d={DELETE_SEGMENT_PATH} />
+    </SvgIcon>
+  )
+}

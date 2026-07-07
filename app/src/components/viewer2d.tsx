@@ -16,6 +16,12 @@ import { changeViewerConfig } from "../action/common"
 import { drawHistory } from "../common/draw_history"
 import Session from "../common/session"
 import { isCutMode, onCutModeChange, setCutMode } from "../common/cut_state"
+import {
+  armSegmentDelete,
+  isSegmentDeleteActive,
+  onSegmentDeleteChange,
+  resetSegmentDelete
+} from "../common/segment_delete_state"
 import { notifyGesture } from "../common/interaction_state"
 import { isFrameLoaded } from "../functional/state_util"
 import {
@@ -42,7 +48,7 @@ import {
   ViewerClassTypes,
   ViewerProps
 } from "./drawable_viewer"
-import { ContentCutIcon } from "./cut_icon"
+import { ContentCutIcon, DeleteSegmentIcon } from "./cut_icon"
 import ImageCanvas from "./image_canvas"
 import Label2dCanvas from "./label2d_canvas"
 
@@ -74,24 +80,34 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   private _panRAFPending: boolean = false
   /** unsubscribe from cut-mode change notifications */
   private _offCutModeChange: (() => void) | null = null
+  /** unsubscribe from delete-segment state changes */
+  private _offSegmentDeleteChange: (() => void) | null = null
 
   /**
-   * Mount: re-render the toolbar tint when cut mode changes elsewhere
-   * (Escape in the canvas, a successful one-shot cut, context-menu arming).
+   * Mount: re-render the toolbar tints when the cut tools change state
+   * elsewhere (Escape in the canvas, a successful cut/delete, context-menu
+   * arming).
    */
   public componentDidMount(): void {
     super.componentDidMount()
     this._offCutModeChange = onCutModeChange(() => this.forceUpdate())
+    this._offSegmentDeleteChange = onSegmentDeleteChange(() =>
+      this.forceUpdate()
+    )
   }
 
   /**
-   * Unmount: stop listening for cut-mode changes.
+   * Unmount: stop listening for cut-tool state changes.
    */
   public componentWillUnmount(): void {
     super.componentWillUnmount()
     if (this._offCutModeChange !== null) {
       this._offCutModeChange()
       this._offCutModeChange = null
+    }
+    if (this._offSegmentDeleteChange !== null) {
+      this._offSegmentDeleteChange()
+      this._offSegmentDeleteChange = null
     }
   }
 
@@ -290,7 +306,8 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         widthDownButton,
         widthResetButton,
         ...this.getHistoryButtons(),
-        this.getCutButton()
+        this.getCutButton(),
+        this.getDeleteSegmentButton()
       ]
     }
     return []
@@ -380,6 +397,44 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           edge={"start"}
         >
           <ContentCutIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the delete-segment toolbar button. Arms the two-pick delete tool;
+   * clicking it while armed cancels. Mutually exclusive with the cut tool.
+   *
+   * @return {JSX.Element} the delete-segment button
+   */
+  protected getDeleteSegmentButton(): JSX.Element {
+    const armed = isSegmentDeleteActive()
+    return (
+      <Tooltip
+        key={`deleteSegment2dButton${this.props.id}`}
+        title="Delete segment"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              resetSegmentDelete()
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking
+            ) {
+              armSegmentDelete()
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <DeleteSegmentIcon />
         </IconButton>
       </Tooltip>
     )
