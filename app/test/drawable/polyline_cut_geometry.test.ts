@@ -89,4 +89,20 @@ describe("findCutSite", () => {
       expect(result.site.point).toEqual({ x: 150, y: 0 })
     }
   })
+
+  test("rejects a cut too close to the last endpoint", () => {
+    const points = [pt(0, 0), pt(100, 0)]
+    const result = findCutSite(points, { x: 98, y: 3 }, RADIUS, SNAP)
+    expect(result.kind).toBe("near-endpoint")
+  })
+
+  test("snaps via the segment-end vertex when the click is nearer to it", () => {
+    const points = [pt(0, 0), pt(100, 0), pt(200, 0)]
+    const result = findCutSite(points, { x: 97, y: 4 }, RADIUS, SNAP)
+    expect(result.kind).toBe("site")
+    if (result.kind === "site") {
+      expect(result.site.snappedVertexIndex).toBe(1)
+      expect(result.site.point).toEqual({ x: 100, y: 0 })
+    }
+  })
 })

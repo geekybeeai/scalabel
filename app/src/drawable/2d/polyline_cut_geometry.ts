@@ -82,6 +82,8 @@ function projectOntoSegment(
  *
  * @param points the polyline's stored vertices (never contains MID points)
  * @param click the click position
+ * @param click.x click x (image px)
+ * @param click.y click y (image px)
  * @param radius max click-to-line distance for a cut (image px)
  * @param snapRadius vertex snap / endpoint-guard distance (image px)
  */
