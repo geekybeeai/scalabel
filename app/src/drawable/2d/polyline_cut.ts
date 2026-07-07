@@ -32,6 +32,16 @@ interface Candidate {
   site: CutSite
 }
 
+/** Visibility filters the cut scan must respect (mirrors Label2DList.redraw). */
+export interface CutVisibilityFilter {
+  /** all labels hidden */
+  hideLabels: boolean
+  /** hidden label type names */
+  hiddenLabelTypes: string[]
+  /** hidden category indices */
+  hiddenCategories: number[]
+}
+
 /**
  * Read a label's stored path points as plain (id-less) points.
  *
@@ -62,14 +72,20 @@ function storedPoints(
  * @param click.y click y (image px)
  * @param radius max click-to-line distance (image px)
  * @param snapRadius vertex snap / endpoint-guard distance (image px)
+ * @param visibility optional viewer-config visibility filter; labels the
+ * renderer would hide are excluded from the scan
  */
 export function performCut(
   click: { x: number; y: number },
   radius: number,
-  snapRadius: number
+  snapRadius: number,
+  visibility?: CutVisibilityFilter
 ): CutResult {
   const state = getState()
   if (state.task.config.tracking) {
+    return "miss"
+  }
+  if (visibility?.hideLabels === true) {
     return "miss"
   }
   const itemIndex = state.user.select.item
@@ -87,6 +103,12 @@ export function performCut(
       label.type !== LabelTypeName.POLYLINE_2D &&
       label.type !== LabelTypeName.POLYGON_2D
     ) {
+      continue
+    }
+    if (visibility?.hiddenLabelTypes.includes(label.type) === true) {
+      continue
+    }
+    if (visibility?.hiddenCategories.includes(label.category[0]) === true) {
       continue
     }
     const isOpen =
@@ -168,6 +190,7 @@ function commitCut(itemIndex: number, candidate: Candidate): CutResult {
   )
   const labelA: LabelType = _.cloneDeep(label)
   labelA.shapes = shapesA.map((s) => s.id)
+  labelA.manual = true
 
   // Second half is a brand-new polyline inheriting category/attributes.
   const newLabelId = uid()

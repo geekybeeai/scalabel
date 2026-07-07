@@ -425,10 +425,22 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // It never starts a draw or select; a successful cut disarms the tool,
     // any rejection keeps it armed so the user can re-aim.
     if (isCutMode()) {
+      const config = this.state.user.viewerConfigs[this.props.id]
       const result = performCut(
         mousePos,
         CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
-        CUT_SNAP_RADIUS_PX / this.displayToImageRatio
+        CUT_SNAP_RADIUS_PX / this.displayToImageRatio,
+        {
+          hideLabels: config.hideLabels,
+          hiddenLabelTypes:
+            config.hiddenLabelTypes !== undefined
+              ? config.hiddenLabelTypes
+              : [],
+          hiddenCategories:
+            config.hiddenCategories !== undefined
+              ? config.hiddenCategories
+              : []
+        }
       )
       switch (result) {
         case "cut":

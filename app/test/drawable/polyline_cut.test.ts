@@ -14,11 +14,13 @@ import { initializeTestingObjects } from "./util"
  * @param labelId the label id to use
  * @param vertices [x, y] pairs (all plain LINE vertices)
  * @param labelType label type name
+ * @param category category indices (defaults to none)
  */
 function seedLine(
   labelId: string,
   vertices: number[][],
-  labelType: string = LabelTypeName.POLYLINE_2D
+  labelType: string = LabelTypeName.POLYLINE_2D,
+  category: number[] = []
 ): void {
   const shapes = vertices.map(([x, y]) =>
     makePathPoint2D({ x, y, pointType: PathPointType.LINE, label: [labelId] })
@@ -28,6 +30,7 @@ function seedLine(
       id: labelId,
       item: 0,
       type: labelType,
+      category,
       shapes: shapes.map((s) => s.id)
     },
     false
@@ -154,5 +157,76 @@ describe("performCut", () => {
     Session.dispatch(action.addLabel(0, label, shapes))
     expect(performCut({ x: 45, y: 12 }, 20, 8)).toBe("curve")
     expect(Object.keys(getState().task.items[0].labels)).toHaveLength(1)
+  })
+
+  test("marks both halves manual after cutting a prediction", () => {
+    initializeTestingObjects()
+    drawHistory.reset()
+    const shapes = [
+      makePathPoint2D({
+        x: 0,
+        y: 0,
+        pointType: PathPointType.LINE,
+        label: ["predLine"]
+      }),
+      makePathPoint2D({
+        x: 100,
+        y: 0,
+        pointType: PathPointType.LINE,
+        label: ["predLine"]
+      }),
+      makePathPoint2D({
+        x: 200,
+        y: 0,
+        pointType: PathPointType.LINE,
+        label: ["predLine"]
+      })
+    ]
+    const label = makeLabel(
+      {
+        id: "predLine",
+        item: 0,
+        type: LabelTypeName.POLYLINE_2D,
+        shapes: shapes.map((s) => s.id),
+        manual: false
+      },
+      false
+    )
+    Session.dispatch(action.addLabel(0, label, shapes))
+
+    expect(performCut({ x: 50, y: 3 }, 20, 8)).toBe("cut")
+
+    const state = getState()
+    const ids = Object.keys(state.task.items[0].labels)
+    expect(ids).toHaveLength(2)
+    expect(state.task.items[0].labels.predLine.manual).toBe(true)
+    const newId = ids.filter((id) => id !== "predLine")[0]
+    expect(state.task.items[0].labels[newId].manual).toBe(true)
+  })
+
+  test("does not cut a hidden polyline", () => {
+    initializeTestingObjects()
+    drawHistory.reset()
+    // Category 1 stands in for a sidebar-hidden category; the visibility
+    // filter below mirrors a user toggling it off.
+    seedLine(
+      "lineA",
+      [
+        [0, 0],
+        [100, 0],
+        [200, 0]
+      ],
+      LabelTypeName.POLYLINE_2D,
+      [1]
+    )
+    expect(
+      performCut({ x: 50, y: 3 }, 20, 8, {
+        hideLabels: false,
+        hiddenLabelTypes: [],
+        hiddenCategories: [1]
+      })
+    ).toBe("miss")
+    expect(Object.keys(getState().task.items[0].labels)).toHaveLength(1)
+    expect(getShapes(getState(), 0, "lineA")).toHaveLength(3)
   })
 })

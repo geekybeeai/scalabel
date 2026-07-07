@@ -71,13 +71,17 @@ coordinates, no gap — exported geometry stays faithful).
     each carrying the distance so callers can compare across polylines.
   - `buildCutHalves(points, site)` — the two halves as plain point lists.
 - **`app/src/drawable/2d/polyline_cut.ts`** — `performCut(click, radius,
-  snapRadius)`: **scans every open polyline in the current item** from redux,
-  runs `findCutSite` on each, takes the globally nearest site, dispatches,
-  records history, returns a result the caller maps to toasts. Scanning (vs
-  requiring a control-canvas hit) makes the cut click forgiving on thin lines —
-  the same concern that motivated the right-click arming path. Closed shapes
-  are scanned too, but only so a click nearest to one yields the
-  "open polylines only" toast.
+  snapRadius, visibility?)`: **scans every open polyline in the current item**
+  from redux, runs `findCutSite` on each, takes the globally nearest site,
+  dispatches, records history, returns a result the caller maps to toasts.
+  Scanning (vs requiring a control-canvas hit) makes the cut click forgiving
+  on thin lines — the same concern that motivated the right-click arming
+  path. Closed shapes are scanned too, but only so a click nearest to one
+  yields the "open polylines only" toast. The optional `visibility` filter
+  (`CutVisibilityFilter`: `hideLabels`, `hiddenLabelTypes`,
+  `hiddenCategories`) mirrors `Label2DList.redraw`'s viewer-config
+  visibility rules exactly — the scan skips any label the renderer is
+  currently hiding, so a user can never cut a polyline they cannot see.
 - **`app/src/components/cut_icon.tsx`** — the shared `content_cut` SVG path,
   the `ContentCutIcon` component (toolbar + menu item), and the `CUT_CURSOR`
   CSS value (SVG data-URI scissors cursor).
@@ -131,7 +135,8 @@ Guards, in order:
 With cut point `C` projected onto segment `(i, i+1)`:
 
 - Half **A** = `V[0..i] + C` — keeps the original label id, category,
-  attributes.
+  attributes, and is marked `manual: true` (the truncated geometry is a
+  user edit even if the original label was an untouched prediction).
 - Half **B** = `C + V[i+1..end]` — new `uid()` label id, cloned
   category/attributes, `type: POLYLINE_2D`, `closed: false`, `manual: true`,
   fresh shape ids.
