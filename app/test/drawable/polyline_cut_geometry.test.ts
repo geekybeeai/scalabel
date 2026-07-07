@@ -1,5 +1,6 @@
 import {
   buildCutHalves,
+  buildSegmentDeletePieces,
   DeleteSitePick,
   findCutSite,
   normalizeDeletePicks,
@@ -262,5 +263,110 @@ describe("delete-pick normalization", () => {
     const a: DeleteSitePick = { kind: "end", endpointIndex: 0 }
     const b: DeleteSitePick = { kind: "end", endpointIndex: 0 }
     expect(normalizeDeletePicks(line, a, b, 8).kind).toBe("too-close")
+  })
+})
+
+describe("buildSegmentDeletePieces", () => {
+  const line = [pt(0, 0), pt(100, 0), pt(200, 0), pt(300, 0)]
+
+  test("middle delete: left keeps head, right keeps tail, doomed spans picks", () => {
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      line,
+      interior(0, 50, 0),
+      interior(2, 250, 0)
+    )
+    expect(left).toEqual([pt(0, 0), pt(50, 0)])
+    expect(right).toEqual([pt(250, 0), pt(300, 0)])
+    expect(doomed).toEqual([pt(50, 0), pt(100, 0), pt(200, 0), pt(250, 0)])
+    expect(line).toHaveLength(4) // input not mutated
+  })
+
+  test("both picks on the same segment", () => {
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      line,
+      interior(1, 130, 0),
+      interior(1, 170, 0)
+    )
+    expect(left).toEqual([pt(0, 0), pt(100, 0), pt(130, 0)])
+    expect(right).toEqual([pt(170, 0), pt(200, 0), pt(300, 0)])
+    expect(doomed).toEqual([pt(130, 0), pt(170, 0)])
+  })
+
+  test("vertex-snapped picks share the vertex without duplicating it", () => {
+    const snapped = (v: number): DeleteSitePick => ({
+      kind: "interior",
+      site: {
+        segmentIndex: v - 1,
+        point: { x: line[v].x, y: line[v].y },
+        snappedVertexIndex: v,
+        distance: 0
+      }
+    })
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      line,
+      snapped(1),
+      snapped(2)
+    )
+    expect(left).toEqual([pt(0, 0), pt(100, 0)])
+    expect(right).toEqual([pt(200, 0), pt(300, 0)])
+    expect(doomed).toEqual([pt(100, 0), pt(200, 0)])
+  })
+
+  test("start trim: no left piece", () => {
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      line,
+      { kind: "end", endpointIndex: 0 },
+      interior(1, 150, 0)
+    )
+    expect(left).toBeUndefined()
+    expect(right).toEqual([pt(150, 0), pt(200, 0), pt(300, 0)])
+    expect(doomed).toEqual([pt(0, 0), pt(100, 0), pt(150, 0)])
+  })
+
+  test("end trim: no right piece", () => {
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      line,
+      interior(1, 150, 0),
+      { kind: "end", endpointIndex: 3 }
+    )
+    expect(left).toEqual([pt(0, 0), pt(100, 0), pt(150, 0)])
+    expect(right).toBeUndefined()
+    expect(doomed).toEqual([pt(150, 0), pt(200, 0), pt(300, 0)])
+  })
+
+  test("both ends: whole line doomed, no survivors", () => {
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      line,
+      { kind: "end", endpointIndex: 0 },
+      { kind: "end", endpointIndex: 3 }
+    )
+    expect(left).toBeUndefined()
+    expect(right).toBeUndefined()
+    expect(doomed).toEqual(line)
+  })
+
+  test("curve spans in survivors are preserved verbatim", () => {
+    const curvy = [
+      pt(0, 0),
+      pt(30, 10, PathPointType.CURVE),
+      pt(60, 10, PathPointType.CURVE),
+      pt(100, 0),
+      pt(200, 0),
+      pt(300, 0)
+    ]
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      curvy,
+      interior(3, 150, 0),
+      interior(4, 250, 0)
+    )
+    expect(left).toEqual([
+      pt(0, 0),
+      pt(30, 10, PathPointType.CURVE),
+      pt(60, 10, PathPointType.CURVE),
+      pt(100, 0),
+      pt(150, 0)
+    ])
+    expect(right).toEqual([pt(250, 0), pt(300, 0)])
+    expect(doomed).toEqual([pt(150, 0), pt(200, 0), pt(250, 0)])
   })
 })

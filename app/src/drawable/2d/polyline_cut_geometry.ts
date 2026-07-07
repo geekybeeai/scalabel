@@ -285,3 +285,90 @@ export function normalizeDeletePicks(
     ? { kind: "ok", first: a, second: b }
     : { kind: "ok", first: b, second: a }
 }
+
+/** The pieces of a segment delete: optional survivors and the removed path. */
+export interface SegmentDeletePieces {
+  /** survivor before the first pick (absent on a start trim / whole-line) */
+  left?: SimplePathPoint2DType[]
+  /** survivor after the second pick (absent on an end trim / whole-line) */
+  right?: SimplePathPoint2DType[]
+  /** the removed path, including the pick coordinates (for the preview) */
+  doomed: SimplePathPoint2DType[]
+}
+
+/**
+ * Build the survivors and the doomed piece of a segment delete.
+ *
+ * `first`/`second` MUST already be ordered by normalizeDeletePicks. Interior
+ * picks split exactly like the cut tool (projection point becomes a new LINE
+ * vertex in both the survivor and the doomed piece; a vertex-snapped pick
+ * shares the snapped vertex's coordinate without duplicating it within any
+ * piece). End picks produce no survivor on their side. Returned points are
+ * fresh copies; the input is never mutated.
+ *
+ * @param points the polyline's stored vertices
+ * @param first the earlier pick along the line
+ * @param second the later pick along the line
+ */
+export function buildSegmentDeletePieces(
+  points: readonly SimplePathPoint2DType[],
+  first: DeleteSitePick,
+  second: DeleteSitePick
+): SegmentDeletePieces {
+  const copy = (p: SimplePathPoint2DType): SimplePathPoint2DType => ({
+    x: p.x,
+    y: p.y,
+    pointType: p.pointType
+  })
+
+  let left: SimplePathPoint2DType[] | undefined
+  let head: SimplePathPoint2DType[]
+  let from: number
+  if (first.kind === "end") {
+    left = undefined
+    head = []
+    from = 0
+  } else if (first.site.snappedVertexIndex !== null) {
+    const s = first.site.snappedVertexIndex
+    left = points.slice(0, s + 1).map(copy)
+    head = [copy(points[s])]
+    from = s + 1
+  } else {
+    const i = first.site.segmentIndex
+    const p1: SimplePathPoint2DType = {
+      x: first.site.point.x,
+      y: first.site.point.y,
+      pointType: PathPointType.LINE
+    }
+    left = [...points.slice(0, i + 1).map(copy), { ...p1 }]
+    head = [{ ...p1 }]
+    from = i + 1
+  }
+
+  let right: SimplePathPoint2DType[] | undefined
+  let tail: SimplePathPoint2DType[]
+  let to: number
+  if (second.kind === "end") {
+    right = undefined
+    tail = []
+    to = points.length - 1
+  } else if (second.site.snappedVertexIndex !== null) {
+    const u = second.site.snappedVertexIndex
+    right = points.slice(u).map(copy)
+    tail = []
+    to = u
+  } else {
+    const j = second.site.segmentIndex
+    const p2: SimplePathPoint2DType = {
+      x: second.site.point.x,
+      y: second.site.point.y,
+      pointType: PathPointType.LINE
+    }
+    right = [{ ...p2 }, ...points.slice(j + 1).map(copy)]
+    tail = [{ ...p2 }]
+    to = j
+  }
+
+  const doomed = [...head, ...points.slice(from, to + 1).map(copy), ...tail]
+  return { left, right, doomed }
+}
