@@ -1,3 +1,5 @@
+import Menu from "@material-ui/core/Menu"
+import MenuItem from "@material-ui/core/MenuItem"
 import { withStyles } from "@material-ui/core/styles"
 import * as React from "react"
 import { connect } from "react-redux"
@@ -18,7 +20,7 @@ import {
   CUT_SNAP_RADIUS_PX,
   performCut
 } from "../drawable/2d/polyline_cut"
-import { CUT_CURSOR } from "./cut_icon"
+import { ContentCutIcon, CUT_CURSOR } from "./cut_icon"
 import { Key } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
@@ -109,6 +111,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _offIdle: (() => void) | null = null
   /** last seen item index, to disarm the cut tool on item navigation */
   private _cutItemIndex: number = -1
+  /** context-menu anchor (viewport px), null while the menu is closed */
+  private _menuAnchor: { left: number; top: number } | null = null
 
   /**
    * Constructor, handles subscription to store
@@ -230,6 +234,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         onMouseMove={(e) => {
           this.onMouseMove(e)
         }}
+        onContextMenu={(e) => {
+          this.onContextMenu(e)
+        }}
       />
     )
     const ch = (
@@ -251,7 +258,39 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       })
     }
 
-    return [ch, controlCanvas, labelCanvas]
+    const contextMenu = (
+      <Menu
+        key="cut-context-menu"
+        open={this._menuAnchor !== null}
+        onClose={() => {
+          this._menuAnchor = null
+          this.forceUpdate()
+        }}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          this._menuAnchor !== null ? this._menuAnchor : undefined
+        }
+      >
+        <MenuItem
+          dense
+          disabled={
+            Session.label2dList.isDrawingInProgress() ||
+            this.state.task.config.tracking
+          }
+          onClick={() => {
+            this._menuAnchor = null
+            setCutMode(true)
+            this.setCursor(CUT_CURSOR)
+            this.forceUpdate()
+          }}
+        >
+          <ContentCutIcon fontSize="small" style={{ marginRight: 8 }} />
+          Cut polyline
+        </MenuItem>
+      </Menu>
+    )
+
+    return [ch, controlCanvas, labelCanvas, contextMenu]
   }
 
   /**
@@ -511,6 +550,22 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       // The scissors cursor overrides hover cursors while the tool is armed.
       this.setCursor(CUT_CURSOR)
     }
+  }
+
+  /**
+   * Open the canvas context menu on right-click. The menu's only entry arms
+   * the one-shot cut tool — arming via menu beats cutting at the right-click
+   * point because precisely right-clicking a thin polyline is hard.
+   *
+   * @param {MouseEvent} e - event
+   */
+  public onContextMenu(e: React.MouseEvent<HTMLCanvasElement>): void {
+    e.preventDefault()
+    if (this.checkFreeze()) {
+      return
+    }
+    this._menuAnchor = { left: e.clientX, top: e.clientY }
+    this.forceUpdate()
   }
 
   /**
