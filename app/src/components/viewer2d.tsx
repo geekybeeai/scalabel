@@ -15,6 +15,7 @@ import React from "react"
 import { changeViewerConfig } from "../action/common"
 import { drawHistory } from "../common/draw_history"
 import Session from "../common/session"
+import { isCutMode, onCutModeChange, setCutMode } from "../common/cut_state"
 import { notifyGesture } from "../common/interaction_state"
 import { isFrameLoaded } from "../functional/state_util"
 import {
@@ -41,6 +42,7 @@ import {
   ViewerClassTypes,
   ViewerProps
 } from "./drawable_viewer"
+import { ContentCutIcon } from "./cut_icon"
 import ImageCanvas from "./image_canvas"
 import Label2dCanvas from "./label2d_canvas"
 
@@ -70,6 +72,28 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   private _pendingPan: { left: number; top: number } | null = null
   /** whether a pan RAF is already scheduled */
   private _panRAFPending: boolean = false
+  /** unsubscribe from cut-mode change notifications */
+  private _offCutModeChange: (() => void) | null = null
+
+  /**
+   * Mount: re-render the toolbar tint when cut mode changes elsewhere
+   * (Escape in the canvas, a successful one-shot cut, context-menu arming).
+   */
+  public componentDidMount(): void {
+    super.componentDidMount()
+    this._offCutModeChange = onCutModeChange(() => this.forceUpdate())
+  }
+
+  /**
+   * Unmount: stop listening for cut-mode changes.
+   */
+  public componentWillUnmount(): void {
+    super.componentWillUnmount()
+    if (this._offCutModeChange !== null) {
+      this._offCutModeChange()
+      this._offCutModeChange = null
+    }
+  }
 
   /**
    * Render function
@@ -265,7 +289,8 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         widthUpButton,
         widthDownButton,
         widthResetButton,
-        ...this.getHistoryButtons()
+        ...this.getHistoryButtons(),
+        this.getCutButton()
       ]
     }
     return []
@@ -320,6 +345,44 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
       </Tooltip>
     )
     return [undoButton, redoButton]
+  }
+
+  /**
+   * Build the scissor (cut polyline) toolbar button. One-shot: arming it cuts
+   * on the next canvas click; a successful cut (or Escape) disarms it.
+   *
+   * @return {JSX.Element} the cut button
+   */
+  protected getCutButton(): JSX.Element {
+    const armed = isCutMode()
+    return (
+      <Tooltip
+        key={`cut2dButton${this.props.id}`}
+        title="Cut polyline"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              setCutMode(false)
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking
+            ) {
+              setCutMode(true)
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <ContentCutIcon />
+        </IconButton>
+      </Tooltip>
+    )
   }
 
   /**
