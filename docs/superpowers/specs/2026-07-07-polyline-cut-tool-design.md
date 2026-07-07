@@ -61,16 +61,26 @@ coordinates, no gap — exported geometry stays faithful).
 ### New files
 
 - **`app/src/common/cut_state.ts`** — mode singleton, same shape as
-  `pointer_pan_state.ts`: `isCutMode()`, `setCutMode(on)`. No redux, no React
-  state.
-- **`app/src/drawable/2d/polyline_cut.ts`** — all cut logic:
-  - `findCutSite(points, click, radius)` — **pure** geometry: returns the
-    nearest straight-segment index + projected cut point, or a rejection reason
-    (`"curve" | "near-endpoint" | "miss"`). Pure ⇒ unit-testable with the
-    `--env=node` jest recipe that works in this environment.
-  - `performCut(itemIndex, labelId, click)` — reads label + shapes from redux,
-    runs `findCutSite`, builds the two halves, dispatches, records history,
-    returns a result the caller maps to toasts.
+  `pointer_pan_state.ts`: `isCutMode()`, `setCutMode(on)`, plus a tiny
+  `onCutModeChange(listener)` subscription so the toolbar button can re-render
+  when the mode is cleared from elsewhere (Escape, successful cut). No redux.
+- **`app/src/drawable/2d/polyline_cut_geometry.ts`** — **pure** geometry (no
+  Session/DOM imports, so it unit-tests with the `--env=node` jest recipe):
+  - `findCutSite(points, click, radius, snapRadius)` — returns the nearest
+    span's cut site or a rejection (`"curve" | "near-endpoint" | "miss"`),
+    each carrying the distance so callers can compare across polylines.
+  - `buildCutHalves(points, site)` — the two halves as plain point lists.
+- **`app/src/drawable/2d/polyline_cut.ts`** — `performCut(click, radius,
+  snapRadius)`: **scans every open polyline in the current item** from redux,
+  runs `findCutSite` on each, takes the globally nearest site, dispatches,
+  records history, returns a result the caller maps to toasts. Scanning (vs
+  requiring a control-canvas hit) makes the cut click forgiving on thin lines —
+  the same concern that motivated the right-click arming path. Closed shapes
+  are scanned too, but only so a click nearest to one yields the
+  "open polylines only" toast.
+- **`app/src/components/cut_icon.tsx`** — the shared `content_cut` SVG path,
+  the `ContentCutIcon` component (toolbar + menu item), and the `CUT_CURSOR`
+  CSS value (SVG data-URI scissors cursor).
 
 ### Modified files
 
@@ -78,9 +88,9 @@ coordinates, no gap — exported geometry stays faithful).
   `getHistoryButtons()`; onClick toggles `cut_state` (with the mid-draw /
   tracking guards) and re-renders for the tint.
 - **`app/src/components/label2d_canvas.tsx`** — four hooks:
-  1. `onMouseDown` checks cut mode **first** (before pan/empty-drag arming) and
-     consumes the click: `getMousePos` → `fetchHandleId` → resolve drawable →
-     `performCut` → toast/disarm per result.
+  1. `onMouseDown` checks cut mode **before the pan/empty-drag arming** and
+     consumes the click: `getMousePos` → `performCut` → toast/disarm per
+     result. (No `fetchHandleId` dependency — `performCut` scans state.)
   2. Cursor logic shows the scissors cursor while armed.
   3. Escape in `onKeyDown` disarms.
   4. `onContextMenu` + component state (anchor position) render the MUI `Menu`
@@ -174,8 +184,9 @@ New command kind in `draw_history.ts` alongside `created`/`edited`/`deleted`:
 - 2-point polyline → two 2-point halves; fine.
 - Self-closed polyline (`label.closed === true`) excluded along with
   `POLYGON_2D`.
-- Overlapping polylines → top-most wins via the existing control-canvas
-  hit-test (`fetchHandleId`), same as selection.
+- Overlapping polylines → the one whose segment is **nearest to the click**
+  wins (the cut scans all open polylines; it does not use the paint-order
+  control-canvas hit-test).
 - After a successful one-shot cut, the next click behaves normally (may start
   a draw) — intended.
 - Item navigation already resets `drawHistory`; it also disarms cut mode.
