@@ -15,7 +15,7 @@ export interface LineSnapshot {
 }
 
 /** Kind of recorded user action on a polyline. */
-type CommandKind = "created" | "deleted" | "edited"
+type CommandKind = "created" | "deleted" | "edited" | "cut"
 
 /**
  * One recorded user action on a polyline.
@@ -24,6 +24,8 @@ type CommandKind = "created" | "deleted" | "edited"
  * - "deleted": the user deleted a line. Undo restores it; redo deletes it.
  * - "edited": the user moved/reshaped a line. Undo reverts it to `before`;
  * redo re-applies `after`.
+ * - "cut": the user cut a line in two. Undo removes the new half and restores
+ * the original; redo re-truncates the original and re-adds the new half.
  */
 interface Command {
   /** What the user did */
@@ -38,6 +40,8 @@ interface Command {
   before?: LineSnapshot
   /** "edited": geometry after the edit (redo target). */
   after?: LineSnapshot
+  /** "cut": the new second-half polyline created by the cut. */
+  newLine?: LineSnapshot
 }
 
 /**
@@ -98,6 +102,34 @@ export class DrawHistory {
     after: LineSnapshot
   ): void {
     this._undoStack.push({ kind: "edited", itemIndex, labelId, before, after })
+    this._redoStack = []
+  }
+
+  /**
+   * Record that the user cut a polyline in two, as ONE atomic undo step.
+   * Any pending redo is invalidated.
+   *
+   * @param itemIndex the item the polyline belongs to
+   * @param labelId the original polyline's label id (kept by the first half)
+   * @param before the original geometry before the cut (undo target)
+   * @param after the truncated original after the cut (redo target)
+   * @param newLine the new second-half polyline (id inside its label)
+   */
+  public recordCut(
+    itemIndex: number,
+    labelId: IdType,
+    before: LineSnapshot,
+    after: LineSnapshot,
+    newLine: LineSnapshot
+  ): void {
+    this._undoStack.push({
+      kind: "cut",
+      itemIndex,
+      labelId,
+      before,
+      after,
+      newLine
+    })
     this._redoStack = []
   }
 
@@ -183,6 +215,15 @@ export class DrawHistory {
         this.setLine(command.itemIndex, command.snapshot)
         this._redoStack.push(command)
         return true
+      } else if (command.kind === "cut") {
+        // Undo a cut = remove the new second half, restore the original line.
+        if (command.before === undefined || command.newLine === undefined) {
+          continue
+        }
+        this.removeLine(command.itemIndex, command.newLine.label.id)
+        this.setLine(command.itemIndex, command.before)
+        this._redoStack.push(command)
+        return true
       } else {
         // Undo an edit = revert to the geometry before the edit.
         if (command.before === undefined) {
@@ -215,6 +256,15 @@ export class DrawHistory {
       } else if (command.kind === "deleted") {
         // Redo a delete = delete the line again.
         this.removeLine(command.itemIndex, command.labelId)
+        this._undoStack.push(command)
+        return true
+      } else if (command.kind === "cut") {
+        // Redo a cut = re-truncate the original, re-add the second half.
+        if (command.after === undefined || command.newLine === undefined) {
+          continue
+        }
+        this.setLine(command.itemIndex, command.after)
+        this.setLine(command.itemIndex, command.newLine)
         this._undoStack.push(command)
         return true
       } else {
