@@ -741,9 +741,36 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   }
 
   /**
-   * Draw the delete-segment overlay: a green halo on the first pick and,
-   * during the preview, the doomed piece as a green dashed marching-ants
-   * path. Drawn after the labels so it always sits on top.
+   * Draw one green pick halo (matches the endpoint-snap indicator styling).
+   *
+   * @param context the label canvas context
+   * @param x halo center x (canvas px)
+   * @param y halo center y (canvas px)
+   */
+  private drawPickHalo(
+    context: CanvasRenderingContext2D,
+    x: number,
+    y: number
+  ): void {
+    context.beginPath()
+    context.strokeStyle = "rgba(0, 255, 0, 0.8)"
+    context.fillStyle = "rgba(0, 255, 0, 0.2)"
+    context.lineWidth = 2
+    context.arc(x, y, 12, 0, 2 * Math.PI)
+    context.fill()
+    context.stroke()
+    context.beginPath()
+    context.fillStyle = "rgba(0, 255, 0, 0.9)"
+    context.arc(x, y, 5, 0, 2 * Math.PI)
+    context.fill()
+  }
+
+  /**
+   * Draw the delete-segment overlay: a green halo on the first pick while
+   * waiting for the second and, during the preview, the doomed piece as a
+   * green dashed marching-ants path with halos on BOTH picked points (the
+   * doomed path's ends are exactly the two pick coordinates). Drawn after
+   * the labels so it always sits on top.
    *
    * @param context the label canvas context
    * @param ratio image-to-canvas scale (displayToImageRatio * upResRatio)
@@ -757,21 +784,6 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       return
     }
     context.save()
-    // Pick-1 halo (matches the endpoint-snap indicator styling).
-    const hx = pickData.pick1Point.x * ratio
-    const hy = pickData.pick1Point.y * ratio
-    context.beginPath()
-    context.strokeStyle = "rgba(0, 255, 0, 0.8)"
-    context.fillStyle = "rgba(0, 255, 0, 0.2)"
-    context.lineWidth = 2
-    context.arc(hx, hy, 12, 0, 2 * Math.PI)
-    context.fill()
-    context.stroke()
-    context.beginPath()
-    context.fillStyle = "rgba(0, 255, 0, 0.9)"
-    context.arc(hx, hy, 5, 0, 2 * Math.PI)
-    context.fill()
-
     const preview = getPreviewData()
     if (preview !== null && preview.doomed.length >= 2) {
       context.beginPath()
@@ -787,6 +799,18 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         )
       }
       context.stroke()
+      // Halos on both picked points, on top of the dashed path.
+      context.setLineDash([])
+      const first = preview.doomed[0]
+      const last = preview.doomed[preview.doomed.length - 1]
+      this.drawPickHalo(context, first.x * ratio, first.y * ratio)
+      this.drawPickHalo(context, last.x * ratio, last.y * ratio)
+    } else {
+      this.drawPickHalo(
+        context,
+        pickData.pick1Point.x * ratio,
+        pickData.pick1Point.y * ratio
+      )
     }
     context.restore()
   }

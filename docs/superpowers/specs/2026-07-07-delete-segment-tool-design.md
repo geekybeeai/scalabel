@@ -37,7 +37,8 @@ piece(s) survive as independent polylines. One Ctrl+Z restores the original.
    hidden labels excluded via the existing `CutVisibilityFilter`. One
    difference: a click within the endpoint-guard radius of the line's first or
    last vertex is a **valid trim pick** ("from that end"), not a rejection.
-   A green halo marker (snap-indicator styling) stays on pick 1.
+   A green halo marker (snap-indicator styling) stays on pick 1; during the
+   preview both picked points carry the halo, on top of the dashed path.
 3. **Pick 2** — must resolve on the **same polyline**:
    - different polyline → toast "Pick both points on the same polyline";
      still waiting
