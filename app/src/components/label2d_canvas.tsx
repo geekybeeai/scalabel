@@ -12,6 +12,13 @@ import {
   reset as resetPanState,
   inPanWindow
 } from "../common/pointer_pan_state"
+import { isCutMode, setCutMode } from "../common/cut_state"
+import {
+  CUT_CLICK_RADIUS_PX,
+  CUT_SNAP_RADIUS_PX,
+  performCut
+} from "../drawable/2d/polyline_cut"
+import { CUT_CURSOR } from "./cut_icon"
 import { Key } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
@@ -100,6 +107,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private readonly _drawableUpdateCallback: () => void
   /** unsubscribe from interaction-idle notifications */
   private _offIdle: (() => void) | null = null
+  /** last seen item index, to disarm the cut tool on item navigation */
+  private _cutItemIndex: number = -1
 
   /**
    * Constructor, handles subscription to store
@@ -373,6 +382,37 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (e.ctrlKey || e.metaKey) {
       return
     }
+    // One-shot cut tool: while armed, this click belongs to the scissors.
+    // It never starts a draw or select; a successful cut disarms the tool,
+    // any rejection keeps it armed so the user can re-aim.
+    if (isCutMode()) {
+      const result = performCut(
+        mousePos,
+        CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+        CUT_SNAP_RADIUS_PX / this.displayToImageRatio
+      )
+      switch (result) {
+        case "cut":
+          setCutMode(false)
+          this.setDefaultCursor()
+          break
+        case "curve":
+          alert(
+            Severity.WARNING,
+            "Cannot cut a curved segment — straighten it first."
+          )
+          break
+        case "closed":
+          alert(Severity.WARNING, "Cut works on open polylines only.")
+          break
+        case "near-endpoint":
+          alert(Severity.WARNING, "Too close to an endpoint to cut.")
+          break
+        case "miss":
+          break
+      }
+      return
+    }
     // Empty canvas, OR within the post-double-click pan window: defer the
     // action. A drag pans (Viewer2D, via the armed flag); a click replays the
     // draw/select in onMouseUp. Arming (rather than returning early) inside the
@@ -466,6 +506,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     } else {
       this.setDefaultCursor()
     }
+
+    if (isCutMode()) {
+      // The scissors cursor overrides hover cursors while the tool is armed.
+      this.setCursor(CUT_CURSOR)
+    }
   }
 
   /**
@@ -475,6 +520,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   public onKeyDown(e: KeyboardEvent): void {
     if (this.checkFreeze()) {
+      return
+    }
+
+    if (e.key === Key.ESCAPE && isCutMode()) {
+      // Escape disarms the one-shot cut tool.
+      setCutMode(false)
+      this.setDefaultCursor()
       return
     }
 
@@ -521,6 +573,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (this.display !== this.props.display) {
       this.display = this.props.display
       this.forceUpdate()
+    }
+    if (this._cutItemIndex !== state.user.select.item) {
+      // Navigating to another image disarms the one-shot cut tool.
+      if (this._cutItemIndex !== -1) {
+        setCutMode(false)
+      }
+      this._cutItemIndex = state.user.select.item
     }
     this._labelHandler.updateState(state)
   }
