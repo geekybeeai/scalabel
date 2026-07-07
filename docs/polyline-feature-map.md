@@ -28,6 +28,11 @@ Open when: changing how a line is drawn, edited, its vertices/curves, merge, val
   `labelId`, `item`, `label`, `shapes()`, `setManual`, `draw`, `updateState`.
 - `app/src/drawable/2d/polygon2d_boundary_cloner.ts` — segment-clone modifier (advanced;
   rarely needed for lanes).
+- `app/src/drawable/2d/polyline_cut_geometry.ts` — pure cut-site math:
+  `findCutSite` (nearest-span projection, curve/endpoint guards, vertex snap),
+  `buildCutHalves`. No Session/DOM imports — testable with the node-env recipe.
+- `app/src/drawable/2d/polyline_cut.ts` — `performCut` (scan open polylines →
+  split → delete+add original id, add new label → `drawHistory.recordCut`).
 
 ## 2. Drawable list + interaction controller
 Open when: selection, the drawing lifecycle, mouse/keyboard routing, copy/paste.
@@ -69,8 +74,9 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   invalid → `deleteInvalidLabel` (+ record). Helpers `polylineShapesChanged`, `lineSnapshot`.
   **Only path that turns drawing into `ADD_LABELS`.**
 - `app/src/common/draw_history.ts` — **`DrawHistory`** (polyline-level undo/redo). Command
-  kinds `created`/`edited`/`deleted`; `undo`/`redo`/`recordUserLine`/`recordEdit`/
-  `recordDeletion`/`recordDeletedLine`/`canUndo`/`canRedo`/`handleKeyboard`/`reset`.
+  kinds `created`/`edited`/`deleted`/`cut`; `undo`/`redo`/`recordUserLine`/`recordEdit`/
+  `recordDeletion`/`recordDeletedLine`/`recordCut`/`canUndo`/`canRedo`/`handleKeyboard`/
+  `reset`. `recordCut` records the split as one atomic command (single undo/redo step).
   Only tracks **user-touched** lines (never untouched predictions).
 - `app/src/action/common.ts` — `addLabel`/`addLabelsToItem`/`deleteLabel`/`deleteLabels`/
   `changeShapes`/`changeViewerConfig`.
@@ -96,6 +102,10 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
 ## 7. Toolbar / sidebar / alerts / image load
 - `app/src/components/toolbar.tsx` — category list, delete, keyboard-shortcut legend;
   `deletePressed` (Delete key → `drawHistory.recordDeletion` + `deleteSelectedLabels`).
+- `app/src/common/cut_state.ts` — cut-tool armed flag (+ change listeners);
+  `app/src/components/cut_icon.tsx` — scissors icon + CSS cursor. Toolbar
+  button in `viewer2d.tsx getCutButton`; click/cursor/Escape/context-menu
+  wiring in `label2d_canvas.tsx`.
 - `app/src/components/toolbar_category.tsx` — category rows, Show all / Show Tags.
 - `app/src/styles/label.ts` — `categoryStyle`, `alerts` toast style.
 - `app/src/components/alert.tsx` + `app/src/components/label_layout.tsx` — alert toasts
@@ -114,8 +124,12 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   `tsc`/`lint`/runtime.
 - **Pure-logic** tests DO run with:
   `npx jest <file> --env=node --globalSetup=<noop> --globalTeardown=<noop>`
-  (a `<noop>` is a JS file exporting `module.exports = async () => {}`), which bypasses
-  redis and jsdom's canvas.
+  (a `<noop>` is a JS file exporting a no-op function), which bypasses redis and
+  jsdom's canvas. `app/test/setup/noop.js` is the ready-made noop globalSetup/
+  globalTeardown for this recipe — it exports a **synchronous** noop
+  (`module.exports = () => {}`), not an `async` one: babel-jest transpiles async
+  arrows in `.js` files to regenerator-runtime code that fails inside jest's setup
+  context, so keep it sync.
 - `npx tsc --noEmit` and `npm run lint` always work. Lint has pervasive **pre-existing
   CRLF `prettier/prettier`** noise on Windows checkouts — filter it and compare a changed
   file's *non-prettier* rule violations to HEAD before assuming you introduced them.
