@@ -16,10 +16,16 @@ import {
 } from "../common/pointer_pan_state"
 import { isCutMode, setCutMode } from "../common/cut_state"
 import {
+  getSegmentDeletePhase,
+  isSegmentDeleteActive,
+  resetSegmentDelete
+} from "../common/segment_delete_state"
+import {
   CUT_CLICK_RADIUS_PX,
   CUT_SNAP_RADIUS_PX,
   performCut
 } from "../drawable/2d/polyline_cut"
+import { handleSegmentDeletePick } from "../drawable/2d/polyline_segment_delete"
 import { ContentCutIcon, CUT_CURSOR } from "./cut_icon"
 import { Key } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
@@ -109,7 +115,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private readonly _drawableUpdateCallback: () => void
   /** unsubscribe from interaction-idle notifications */
   private _offIdle: (() => void) | null = null
-  /** last seen item index, to disarm the cut tool on item navigation */
+  /** last seen item index, to disarm the cut tools on item navigation */
   private _cutItemIndex: number = -1
   /** context-menu anchor (viewport px), null while the menu is closed */
   private _menuAnchor: { left: number; top: number } | null = null
@@ -421,6 +427,63 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (e.ctrlKey || e.metaKey) {
       return
     }
+    // Delete-segment tool: while active, clicks are picks (or ignored
+    // entirely during the preview countdown).
+    if (isSegmentDeleteActive()) {
+      if (getSegmentDeletePhase() === "preview") {
+        return
+      }
+      const config = this.state.user.viewerConfigs[this.props.id]
+      const outcome = handleSegmentDeletePick(
+        mousePos,
+        CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+        CUT_SNAP_RADIUS_PX / this.displayToImageRatio,
+        {
+          hideLabels: config.hideLabels,
+          hiddenLabelTypes:
+            config.hiddenLabelTypes !== undefined
+              ? config.hiddenLabelTypes
+              : [],
+          hiddenCategories:
+            config.hiddenCategories !== undefined
+              ? config.hiddenCategories
+              : []
+        }
+      )
+      switch (outcome) {
+        case "curve":
+          alert(
+            Severity.WARNING,
+            "Cannot cut a curved segment — straighten it first."
+          )
+          break
+        case "closed":
+          alert(
+            Severity.WARNING,
+            "Delete segment works on open polylines only."
+          )
+          break
+        case "wrong-line":
+          alert(Severity.WARNING, "Pick both points on the same polyline.")
+          break
+        case "too-close":
+          alert(Severity.WARNING, "Picked points are too close.")
+          break
+        case "stale":
+          alert(
+            Severity.WARNING,
+            "The line changed — segment delete cancelled."
+          )
+          this.setDefaultCursor()
+          break
+        case "first-picked":
+        case "preview-started":
+        case "miss":
+        case "ignored":
+          break
+      }
+      return
+    }
     // One-shot cut tool: while armed, this click belongs to the scissors.
     // It never starts a draw or select; a successful cut disarms the tool,
     // any rejection keeps it armed so the user can re-aim.
@@ -558,8 +621,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.setDefaultCursor()
     }
 
-    if (isCutMode()) {
-      // The scissors cursor overrides hover cursors while the tool is armed.
+    if (isCutMode() || isSegmentDeleteActive()) {
+      // The scissors cursor overrides hover cursors while a tool is armed.
       this.setCursor(CUT_CURSOR)
     }
   }
@@ -587,6 +650,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   public onKeyDown(e: KeyboardEvent): void {
     if (this.checkFreeze()) {
+      return
+    }
+
+    if (e.key === Key.ESCAPE && isSegmentDeleteActive()) {
+      // Escape cancels the pending delete at any phase — nothing committed.
+      resetSegmentDelete()
+      this.setDefaultCursor()
       return
     }
 
@@ -642,9 +712,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.forceUpdate()
     }
     if (this._cutItemIndex !== state.user.select.item) {
-      // Navigating to another image disarms the one-shot cut tool.
+      // Navigating to another image disarms the cut tools.
       if (this._cutItemIndex !== -1) {
         setCutMode(false)
+        resetSegmentDelete()
       }
       this._cutItemIndex = state.user.select.item
     }
