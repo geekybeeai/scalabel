@@ -15,6 +15,7 @@ import {
 } from "../../types/state"
 import { blendColor, Context2D, encodeControlColor, getColorByCategory, toCssColor } from "../util"
 import { DASH_LINE, MIN_SIZE, OPACITY } from "./common"
+import { curveGroupIndices } from "./curve_groups"
 import { DrawMode, Label2D } from "./label2d"
 import { Label2DList } from "./label2d_list"
 import {
@@ -146,6 +147,13 @@ export class Polygon2D extends Label2D {
    */
   public get closed(): boolean {
     return this._closed
+  }
+
+  /**
+   * Whether this shape contains at least one bezier control point.
+   */
+  public get hasCurves(): boolean {
+    return this._points.some((p) => p.type === PathPointType.CURVE)
   }
 
   /**
@@ -319,6 +327,8 @@ export class Polygon2D extends Label2D {
    * @param hideLabelTags
    * @param sessionMode
    * @param viewScale: current zoom level (1 = no zoom)
+   * @param lineWidthMultiplier
+   * @param curvesOnly draw only bezier groups (curves-only display)
    */
   public draw(
     context: Context2D,
@@ -328,9 +338,23 @@ export class Polygon2D extends Label2D {
     hideLabelTags: boolean,
     sessionMode: ModeStatus | undefined,
     viewScale: number = 1,
-    lineWidthMultiplier: number = 1
+    lineWidthMultiplier: number = 1,
+    curvesOnly: boolean = false
   ): void {
     const numPoints = this._points.length
+
+    // Curves-only display: stroke only bezier groups; the label being
+    // actively edited is exempt and renders in full.
+    const curvesOnlyActive = curvesOnly && !this.editing
+    const curveGroups = curvesOnlyActive
+      ? curveGroupIndices(
+          this._points.map((p) => p.type),
+          this._closed
+        )
+      : null
+    if (curveGroups !== null && curveGroups.length === 0) {
+      return
+    }
 
     // Compute zoom-aware scale factor: styles thin out as you zoom in
     const zoomScale = Math.max(1, viewScale)
@@ -385,47 +409,58 @@ export class Polygon2D extends Label2D {
     context.strokeStyle = toCssColor(edgeStyle.color)
     context.lineWidth = edgeStyle.lineWidth
     context.beginPath()
-    const begin = this._points[0].vector().scale(ratio)
-    context.moveTo(begin.x, begin.y)
-    for (let i = 1; i < numPoints; ++i) {
-      const point = this._points[i]
-      const pointToDraw = point.vector().scale(ratio)
-      if (point.type === PathPointType.CURVE) {
-        const nextPointToDraw = this._points[(i + 1) % numPoints]
-          .vector()
-          .scale(ratio)
-        const nextVertexToDraw = this._points[(i + 2) % numPoints]
-          .vector()
-          .scale(ratio)
-        context.bezierCurveTo(
-          pointToDraw.x,
-          pointToDraw.y,
-          nextPointToDraw.x,
-          nextPointToDraw.y,
-          nextVertexToDraw.x,
-          nextVertexToDraw.y
-        )
-        i = i + 2
-      } else if (point.type === PathPointType.LINE) {
-        context.lineTo(pointToDraw.x, pointToDraw.y)
+    if (curveGroups !== null) {
+      for (const [a, c1, c2, b] of curveGroups) {
+        const pa = this._points[a].vector().scale(ratio)
+        const p1 = this._points[c1].vector().scale(ratio)
+        const p2 = this._points[c2].vector().scale(ratio)
+        const pb = this._points[b].vector().scale(ratio)
+        context.moveTo(pa.x, pa.y)
+        context.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, pb.x, pb.y)
       }
-    }
+    } else {
+      const begin = this._points[0].vector().scale(ratio)
+      context.moveTo(begin.x, begin.y)
+      for (let i = 1; i < numPoints; ++i) {
+        const point = this._points[i]
+        const pointToDraw = point.vector().scale(ratio)
+        if (point.type === PathPointType.CURVE) {
+          const nextPointToDraw = this._points[(i + 1) % numPoints]
+            .vector()
+            .scale(ratio)
+          const nextVertexToDraw = this._points[(i + 2) % numPoints]
+            .vector()
+            .scale(ratio)
+          context.bezierCurveTo(
+            pointToDraw.x,
+            pointToDraw.y,
+            nextPointToDraw.x,
+            nextPointToDraw.y,
+            nextVertexToDraw.x,
+            nextVertexToDraw.y
+          )
+          i = i + 2
+        } else if (point.type === PathPointType.LINE) {
+          context.lineTo(pointToDraw.x, pointToDraw.y)
+        }
+      }
 
-    if (this._state === Polygon2DState.DRAW) {
-      const tmp = this._mouseCoord.clone().scale(ratio)
-      context.lineTo(tmp.x, tmp.y)
-    }
+      if (this._state === Polygon2DState.DRAW) {
+        const tmp = this._mouseCoord.clone().scale(ratio)
+        context.lineTo(tmp.x, tmp.y)
+      }
 
-    if (this._closed) {
-      context.lineTo(begin.x, begin.y)
-      context.closePath()
-      if (mode === DrawMode.VIEW) {
-        const fillStyle = this._color.concat(OPACITY)
-        context.fillStyle = toCssColor(fillStyle)
-        context.fill()
-      } else if (sessionMode === ModeStatus.SELECTING) {
-        context.fillStyle = toCssColor(edgeStyle.color)
-        context.fill()
+      if (this._closed) {
+        context.lineTo(begin.x, begin.y)
+        context.closePath()
+        if (mode === DrawMode.VIEW) {
+          const fillStyle = this._color.concat(OPACITY)
+          context.fillStyle = toCssColor(fillStyle)
+          context.fill()
+        } else if (sessionMode === ModeStatus.SELECTING) {
+          context.fillStyle = toCssColor(edgeStyle.color)
+          context.fill()
+        }
       }
     }
     context.stroke()
@@ -487,6 +522,12 @@ export class Polygon2D extends Label2D {
         this._state === Polygon2DState.MOVE
       ) {
         for (let i = 0; i < numPoints; ++i) {
+          if (
+            curveGroups !== null &&
+            !curveGroups.some((g) => g.includes(i))
+          ) {
+            continue
+          }
           const point = this._points[i]
           let style = { ...pointStyle }
           if (i + 1 === this._highlightedHandle) {

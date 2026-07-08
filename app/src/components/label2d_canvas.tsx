@@ -370,6 +370,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
           ? (config as unknown as { lineWidthMultiplier: number })
               .lineWidthMultiplier
           : 1
+      const showCurvesOnly: boolean =
+        "showCurvesOnly" in config &&
+        (config as unknown as { showCurvesOnly?: boolean }).showCurvesOnly ===
+          true
 
       // Compute viewport bounds in image coordinates for culling
       let viewportBounds: [number, number, number, number] | undefined
@@ -407,7 +411,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         hiddenLabelTypes,
         hiddenCategories,
         !isInteracting(),
-        lineWidthMultiplier
+        lineWidthMultiplier,
+        showCurvesOnly
       )
       this.drawSegmentDeleteOverlay(
         this.labelContext,

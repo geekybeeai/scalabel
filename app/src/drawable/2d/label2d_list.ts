@@ -215,6 +215,9 @@ export class Label2DList {
    * @param viewportBounds: optional viewport bounds for culling [x, y, width, height] in image coords
    * @param hiddenLabelTypes: label type names to hide (e.g. ['box2d'])
    * @param hiddenCategories: category indices to hide (e.g. [0, 2])
+   * @param drawControl
+   * @param lineWidthMultiplier
+   * @param showCurvesOnly display only curved parts of lines
    */
   public redraw(
     labelContext: Context2D,
@@ -228,7 +231,8 @@ export class Label2DList {
     hiddenLabelTypes?: string[],
     hiddenCategories?: number[],
     drawControl: boolean = true,
-    lineWidthMultiplier: number = 1
+    lineWidthMultiplier: number = 1,
+    showCurvesOnly: boolean = false
   ): void {
     this._lastRatio = ratio
     this._lastViewScale = viewScale ?? 1
@@ -256,6 +260,16 @@ export class Label2DList {
       labelsToDraw = labelsToDraw.filter(
         (label) =>
           label.editing || !hiddenCategories.includes(label.category[0])
+      )
+    }
+
+    // Curves-only display: keep only shapes that contain a bezier group.
+    // The label being actively drawn/edited is exempt (same rule as the
+    // category filter). Non-polygon label types are hidden while active.
+    if (showCurvesOnly) {
+      labelsToDraw = labelsToDraw.filter(
+        (label) =>
+          label.editing || (label instanceof Polygon2D && label.hasCurves)
       )
     }
 
@@ -299,7 +313,8 @@ export class Label2DList {
           hideLabelTags ?? false,
           sessionMode,
           viewScale,
-          lineWidthMultiplier
+          lineWidthMultiplier,
+          showCurvesOnly
         )
       })
     })

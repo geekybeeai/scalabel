@@ -297,6 +297,8 @@ export abstract class Label2D {
    * @param {boolean} hideLabelTags
    * @param {ModeStatus} sessionMode
    * @param {number} viewScale: current zoom level (1 = no zoom)
+   * @param lineWidthMultiplier
+   * @param curvesOnly draw only bezier groups (curves-only display)
    */
   public abstract draw(
     canvas: Context2D,
@@ -306,7 +308,8 @@ export abstract class Label2D {
     hideLabelTags: boolean,
     sessionMode: ModeStatus | undefined,
     viewScale?: number,
-    lineWidthMultiplier?: number
+    lineWidthMultiplier?: number,
+    curvesOnly?: boolean
   ): void
 
   /**
