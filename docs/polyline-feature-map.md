@@ -116,6 +116,11 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   (awaitFirst/awaitSecond/preview, mutually exclusive with cut mode);
   toolbar button in `viewer2d.tsx getDeleteSegmentButton`; picks/overlay/
   timer wiring in `label2d_canvas.tsx` (marching-ants preview, 3 s commit).
+- "Curves only" sidebar checkbox — `showCurvesOnly` viewer-config flag
+  (`toolbar.tsx` toggle → `label2d_canvas.tsx redraw` →
+  `label2d_list.ts redraw` filter → `polygon2d.ts draw` curves-only branch,
+  both canvases). Pure group finder: `app/src/drawable/2d/curve_groups.ts`
+  (`curveGroupIndices`). Cut/delete-segment arming is guarded while on.
 - `app/src/components/toolbar_category.tsx` — category rows, Show all / Show Tags.
 - `app/src/styles/label.ts` — `categoryStyle`, `alerts` toast style.
 - `app/src/components/alert.tsx` + `app/src/components/label_layout.tsx` — alert toasts
