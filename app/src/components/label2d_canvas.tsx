@@ -306,7 +306,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
           dense
           disabled={
             Session.label2dList.isDrawingInProgress() ||
-            this.state.task.config.tracking
+            this.state.task.config.tracking ||
+            (
+              this.state.user.viewerConfigs[this.props.id] as unknown as {
+                showCurvesOnly?: boolean
+              }
+            ).showCurvesOnly === true
           }
           onClick={() => {
             this._menuAnchor = null
@@ -322,7 +327,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
           dense
           disabled={
             Session.label2dList.isDrawingInProgress() ||
-            this.state.task.config.tracking
+            this.state.task.config.tracking ||
+            (
+              this.state.user.viewerConfigs[this.props.id] as unknown as {
+                showCurvesOnly?: boolean
+              }
+            ).showCurvesOnly === true
           }
           onClick={() => {
             this._menuAnchor = null

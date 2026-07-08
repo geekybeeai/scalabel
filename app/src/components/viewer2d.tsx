@@ -387,7 +387,9 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
               setCutMode(false)
             } else if (
               !Session.label2dList.isDrawingInProgress() &&
-              !this.state.task.config.tracking
+              !this.state.task.config.tracking &&
+              (this._viewerConfig as ImageViewerConfigType)?.showCurvesOnly !==
+                true
             ) {
               setCutMode(true)
             }
@@ -425,7 +427,9 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
               resetSegmentDelete()
             } else if (
               !Session.label2dList.isDrawingInProgress() &&
-              !this.state.task.config.tracking
+              !this.state.task.config.tracking &&
+              (this._viewerConfig as ImageViewerConfigType)?.showCurvesOnly !==
+                true
             ) {
               armSegmentDelete()
             }
