@@ -153,6 +153,10 @@ interface Props {
   showTags?: boolean
   /** toggle whether category tags are shown on the canvas */
   onToggleTags?: () => void
+  /** whether only curved parts of lines are displayed on the canvas */
+  showCurvesOnly?: boolean
+  /** toggle curves-only display */
+  onToggleCurvesOnly?: () => void
 }
 
 /**
@@ -319,6 +323,20 @@ class MultipleSelect extends Component<Props> {
                     style={{ padding: 2, color: "inherit" }}
                   />
                   <span style={{ fontSize: 12, opacity: 0.75 }}>Show Tags</span>
+                  {this.props.onToggleCurvesOnly !== undefined && (
+                    <>
+                      <Checkbox
+                        size="small"
+                        checked={this.props.showCurvesOnly ?? false}
+                        onChange={() => this.props.onToggleCurvesOnly?.()}
+                        title="Show only the curved parts of lines"
+                        style={{ padding: 2, color: "inherit", marginLeft: 8 }}
+                      />
+                      <span style={{ fontSize: 12, opacity: 0.75 }}>
+                        Curves only
+                      </span>
+                    </>
+                  )}
                 </>
               )}
             </div>

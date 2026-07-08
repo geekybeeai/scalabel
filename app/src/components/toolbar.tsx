@@ -24,8 +24,10 @@ import {
   terminateSelectedTracks
 } from "../action/select"
 import { addLabelTag } from "../action/tag"
+import { setCutMode } from "../common/cut_state"
 import { drawHistory } from "../common/draw_history"
 import { renderTemplate } from "../common/label"
+import { resetSegmentDelete } from "../common/segment_delete_state"
 import Session from "../common/session"
 import { Key, LabelTypeName, ViewerConfigTypeName } from "../const/common"
 import { getSelectedTracks } from "../functional/state_util"
@@ -286,6 +288,19 @@ export class ToolBar extends Component<Props> {
             onToggleTags={() => {
               const config = { ...activeConfig }
               config.hideTags = !config.hideTags
+              Session.dispatch(
+                changeViewerConfig(this.safeActiveViewerId, config)
+              )
+            }}
+            showCurvesOnly={activeConfig.showCurvesOnly ?? false}
+            onToggleCurvesOnly={() => {
+              const config = { ...activeConfig }
+              config.showCurvesOnly = !(config.showCurvesOnly ?? false)
+              if (config.showCurvesOnly) {
+                // Tools must never act on hidden geometry.
+                setCutMode(false)
+                resetSegmentDelete()
+              }
               Session.dispatch(
                 changeViewerConfig(this.safeActiveViewerId, config)
               )

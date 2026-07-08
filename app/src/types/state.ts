@@ -209,6 +209,8 @@ export interface ViewerConfigType {
   hiddenLabelTypes: string[]
   /** list of category indices to hide; empty means all categories visible */
   hiddenCategories?: number[]
+  /** display only the curved parts of polylines (view-only filter) */
+  showCurvesOnly?: boolean
 }
 
 export interface ImageViewerConfigType extends ViewerConfigType {
