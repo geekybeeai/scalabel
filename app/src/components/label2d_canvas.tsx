@@ -25,6 +25,12 @@ import {
   resetSegmentDelete
 } from "../common/segment_delete_state"
 import {
+  clearMarked,
+  markedCount,
+  onMarkedChange,
+  toggleMarked
+} from "../common/multi_delete_state"
+import {
   CUT_CLICK_RADIUS_PX,
   CUT_SNAP_RADIUS_PX,
   performCut
@@ -36,7 +42,7 @@ import {
 } from "../drawable/2d/polyline_segment_delete"
 import { DASH_LINE } from "../drawable/2d/common"
 import { ContentCutIcon, CUT_CURSOR, DeleteSegmentIcon } from "./cut_icon"
-import { Key } from "../const/common"
+import { Key, LabelTypeName } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
 import { getCurrentViewerConfig, isFrameLoaded } from "../functional/state_util"
@@ -130,6 +136,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _menuAnchor: { left: number; top: number } | null = null
   /** unsubscribe from delete-segment state changes */
   private _offSegmentDelete: (() => void) | null = null
+  /** unsubscribe from marked-for-deletion set changes */
+  private _offMarkedChange: (() => void) | null = null
   /** pending commit timer for the delete-segment preview */
   private _segmentDeleteTimer: number | null = null
   /** rAF handle for the marching-ants animation */
@@ -190,6 +198,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     this._offSegmentDelete = onSegmentDeleteChange(() =>
       this.onSegmentDeleteStateChange()
     )
+    this._offMarkedChange = onMarkedChange(() => this.redraw())
   }
 
   /**
@@ -207,6 +216,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (this._offSegmentDelete !== null) {
       this._offSegmentDelete()
       this._offSegmentDelete = null
+    }
+    if (this._offMarkedChange !== null) {
+      this._offMarkedChange()
+      this._offMarkedChange = null
     }
     this.clearSegmentDeleteTimers()
   }
@@ -485,6 +498,20 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // get mouse position in image coordinates
     // Ctrl/Cmd drag pans anywhere via Viewer2D; never draw/edit on it.
     if (e.ctrlKey || e.metaKey) {
+      // Ctrl/Cmd+click directly on a polyline/polygon toggles it into the
+      // batch-delete set; anywhere else (empty canvas, a box) falls through to
+      // the pan behavior. Disabled for tracking tasks.
+      if (labelIndex >= 0 && !this.state.task.config.tracking) {
+        const drawable = this._labelList.labelList[labelIndex]
+        if (
+          drawable !== undefined &&
+          (drawable.type === LabelTypeName.POLYLINE_2D ||
+            drawable.type === LabelTypeName.POLYGON_2D)
+        ) {
+          toggleMarked(drawable.labelId)
+          return
+        }
+      }
       return
     }
     // Delete-segment tool: while active, clicks are picks (or ignored
@@ -854,6 +881,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       return
     }
 
+    if (e.key === Key.ESCAPE && markedCount() > 0) {
+      // Escape clears the batch-delete selection (redraw via the subscription).
+      clearMarked()
+      return
+    }
+
     // Polyline-level undo/redo (Ctrl/Cmd+Z / Ctrl/Cmd+Y / Ctrl/Cmd+Shift+Z).
     // Only swallow the shortcut when it actually did something.
     if (drawHistory.handleKeyboard(e)) {
@@ -903,6 +936,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       if (this._cutItemIndex !== -1) {
         setCutMode(false)
         resetSegmentDelete()
+        clearMarked()
       }
       this._cutItemIndex = state.user.select.item
     }
