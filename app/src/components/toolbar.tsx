@@ -30,6 +30,7 @@ import { renderTemplate } from "../common/label"
 import { resetSegmentDelete } from "../common/segment_delete_state"
 import Session from "../common/session"
 import { Key, LabelTypeName, ViewerConfigTypeName } from "../const/common"
+import { commitMarkedDelete } from "../drawable/2d/multi_delete"
 import { getSelectedTracks } from "../functional/state_util"
 import { isValidId, makeTrack } from "../functional/states"
 import { tracksOverlapping } from "../functional/track"
@@ -583,6 +584,11 @@ export class ToolBar extends Component<Props> {
    *
    */
   private deletePressed(): void {
+    // Batch-delete any Ctrl+click-marked lines first; if none, fall through to
+    // the normal selected-label deletion.
+    if (commitMarkedDelete() === "deleted") {
+      return
+    }
     const select = this.state.user.select
     if (Object.keys(select.labels).length > 0) {
       const item = this.state.task.items[select.item]
