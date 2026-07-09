@@ -1,5 +1,6 @@
 import _ from "lodash"
 
+import { isMarked } from "../../common/multi_delete_state"
 import { Cursor, Key, LabelTypeName } from "../../const/common"
 import { makeLabel } from "../../functional/states"
 import { Size2D } from "../../math/size2d"
@@ -31,6 +32,10 @@ const DEFAULT_VIEW_HIGH_POINT_STYLE = makePathPoint2DStyle({ radius: 12 })
 const DEFAULT_CONTROL_EDGE_STYLE = makeEdge2DStyle({ lineWidth: 10 })
 const DEFAULT_CONTROL_POINT_STYLE = makePathPoint2DStyle({ radius: 12 })
 const DEFAULT_CONTROL_HIGH_POINT_STYLE = makePathPoint2DStyle({ radius: 14 })
+/** Stroke color for a line marked for batch deletion (segment-delete green). */
+const MULTI_DELETE_HIGHLIGHT_COLOR = "rgba(0, 230, 0, 0.95)"
+/** Extra stroke width multiplier for a marked line, for emphasis. */
+const MULTI_DELETE_HIGHLIGHT_WIDTH_FACTOR = 1.5
 
 /** list all states */
 export enum Polygon2DState {
@@ -408,6 +413,13 @@ export class Polygon2D extends Label2D {
     context.save()
     context.strokeStyle = toCssColor(edgeStyle.color)
     context.lineWidth = edgeStyle.lineWidth
+    // Lines Ctrl+clicked for batch deletion are stroked green (view canvas
+    // only — never override the CONTROL canvas, whose color encodes hit ids).
+    if (mode === DrawMode.VIEW && isMarked(this.labelId)) {
+      context.strokeStyle = MULTI_DELETE_HIGHLIGHT_COLOR
+      context.lineWidth =
+        edgeStyle.lineWidth * MULTI_DELETE_HIGHLIGHT_WIDTH_FACTOR
+    }
     context.beginPath()
     if (curveGroups !== null) {
       for (const [a, c1, c2, b] of curveGroups) {
