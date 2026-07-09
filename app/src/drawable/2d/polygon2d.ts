@@ -15,8 +15,9 @@ import {
   State
 } from "../../types/state"
 import { blendColor, Context2D, encodeControlColor, getColorByCategory, toCssColor } from "../util"
-import { DASH_LINE, MIN_SIZE, OPACITY } from "./common"
+import { DASH_LINE, DELETE_HIGHLIGHT_COLOR, MIN_SIZE, OPACITY } from "./common"
 import { curveGroupIndices } from "./curve_groups"
+import { getAntsOffset } from "./marching_ants"
 import { DrawMode, Label2D } from "./label2d"
 import { Label2DList } from "./label2d_list"
 import {
@@ -32,8 +33,6 @@ const DEFAULT_VIEW_HIGH_POINT_STYLE = makePathPoint2DStyle({ radius: 12 })
 const DEFAULT_CONTROL_EDGE_STYLE = makeEdge2DStyle({ lineWidth: 10 })
 const DEFAULT_CONTROL_POINT_STYLE = makePathPoint2DStyle({ radius: 12 })
 const DEFAULT_CONTROL_HIGH_POINT_STYLE = makePathPoint2DStyle({ radius: 14 })
-/** Stroke color for a line marked for batch deletion (segment-delete green). */
-const MULTI_DELETE_HIGHLIGHT_COLOR = "rgba(0, 230, 0, 0.95)"
 /** Extra stroke width multiplier for a marked line, for emphasis. */
 const MULTI_DELETE_HIGHLIGHT_WIDTH_FACTOR = 1.5
 
@@ -413,12 +412,16 @@ export class Polygon2D extends Label2D {
     context.save()
     context.strokeStyle = toCssColor(edgeStyle.color)
     context.lineWidth = edgeStyle.lineWidth
-    // Lines Ctrl+clicked for batch deletion are stroked green (view canvas
-    // only — never override the CONTROL canvas, whose color encodes hit ids).
+    // Lines Ctrl+clicked for batch deletion are stroked with the shared delete
+    // color as animated marching ants (view canvas only — never override the
+    // CONTROL canvas, whose color encodes hit ids). The dash offset is shared
+    // with the delete-segment overlay so both animate in lockstep.
     if (mode === DrawMode.VIEW && isMarked(this.labelId)) {
-      context.strokeStyle = MULTI_DELETE_HIGHLIGHT_COLOR
+      context.strokeStyle = DELETE_HIGHLIGHT_COLOR
       context.lineWidth =
         edgeStyle.lineWidth * MULTI_DELETE_HIGHLIGHT_WIDTH_FACTOR
+      context.setLineDash(DASH_LINE)
+      context.lineDashOffset = -getAntsOffset()
     }
     context.beginPath()
     if (curveGroups !== null) {

@@ -4,6 +4,15 @@
 **Branch:** feature-show-curves (fork of scalabel 2D annotator)
 **Status:** Approved design, pending implementation plan
 
+> **Revision (2026-07-09, post-implementation):** the shared delete color was
+> changed from green `rgba(0, 230, 0, 0.95)` to magenta `rgba(255, 0, 200, 0.95)`
+> (green clashed with the `without_curb_road_edge` category color), and the
+> multi-select highlight was upgraded from a solid stroke to the same animated
+> marching-ants treatment the delete-segment preview uses. The color now lives
+> in `DELETE_HIGHLIGHT_COLOR` (`app/src/drawable/2d/common.ts`) and the shared
+> dash offset in `app/src/drawable/2d/marching_ants.ts`. Read "green"/"solid
+> stroke" below as "magenta marching-ants".
+
 ## Summary
 
 Let the annotator mark multiple line labels (polylines and polygons) with
@@ -38,7 +47,7 @@ kept separate from the annotator's normal edit-selection.
 | Gesture vs. panning | Ctrl+click **on a line** marks it; Ctrl+click/drag on **empty space or a box** pans (unchanged). |
 | Selection model | **Separate** "marked-for-deletion" set. Green appears only for Ctrl+clicked lines, never for a plain single-select. |
 | Scope | **Polylines and polygons** (both are the `Polygon2D` drawable). Boxes excluded. |
-| Highlight color | `rgba(0, 230, 0, 0.95)` — the exact color of the segment-delete overlay ([label2d_canvas.tsx:805](../../../app/src/components/label2d_canvas.tsx#L805)). |
+| Highlight color | `rgba(255, 0, 200, 0.95)` (magenta) — shared `DELETE_HIGHLIGHT_COLOR` in `app/src/drawable/2d/common.ts`, used by both the segment-delete overlay and the marked-line highlight, both as animated marching ants. |
 | Rendering approach | **A** — `Polygon2D.draw()` reads the marked set live (`isMarked`) and paints the stroke green, reusing the real path/curve geometry. No cached drawable flag or sync step needed. |
 
 ## Architecture

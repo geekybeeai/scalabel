@@ -40,7 +40,8 @@ import {
   handleSegmentDeletePick,
   SEGMENT_DELETE_PREVIEW_MS
 } from "../drawable/2d/polyline_segment_delete"
-import { DASH_LINE } from "../drawable/2d/common"
+import { DASH_LINE, DELETE_HIGHLIGHT_COLOR } from "../drawable/2d/common"
+import { advanceAnts, getAntsOffset } from "../drawable/2d/marching_ants"
 import { ContentCutIcon, CUT_CURSOR, DeleteSegmentIcon } from "./cut_icon"
 import { Key, LabelTypeName } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
@@ -142,8 +143,6 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _segmentDeleteTimer: number | null = null
   /** rAF handle for the marching-ants animation */
   private _antsRAF: number | null = null
-  /** marching-ants dash offset (canvas px) */
-  private _antsOffset: number = 0
 
   /**
    * Constructor, handles subscription to store
@@ -198,7 +197,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     this._offSegmentDelete = onSegmentDeleteChange(() =>
       this.onSegmentDeleteStateChange()
     )
-    this._offMarkedChange = onMarkedChange(() => this.redraw())
+    this._offMarkedChange = onMarkedChange(() => {
+      // Repaint immediately, and start/stop the marching-ants animation
+      // depending on whether anything is now marked.
+      this.redraw()
+      this.syncMarchingAnts()
+    })
   }
 
   /**
@@ -750,21 +754,43 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
           this.setDefaultCursor()
         }, SEGMENT_DELETE_PREVIEW_MS)
       }
+    } else {
+      // Not previewing: cancel the pending commit timer. The marching-ants
+      // animation keeps running if lines are still marked for deletion.
+      if (this._segmentDeleteTimer !== null) {
+        window.clearTimeout(this._segmentDeleteTimer)
+        this._segmentDeleteTimer = null
+      }
+      // Repaint to add/remove the pick halo or erase the overlay.
+      this.redraw()
+    }
+    this.syncMarchingAnts()
+  }
+
+  /**
+   * Run the marching-ants animation while any delete affordance is on screen —
+   * the delete-segment preview or one or more lines marked for batch deletion —
+   * and stop it once neither is active. A single shared rAF advances the shared
+   * dash offset and repaints, so the overlay and the marked lines animate in
+   * lockstep.
+   */
+  private syncMarchingAnts(): void {
+    const active = getSegmentDeletePhase() === "preview" || markedCount() > 0
+    if (active) {
       if (this._antsRAF === null) {
         const step = (): void => {
-          this._antsOffset += 0.75
+          advanceAnts(0.75)
           this.redraw()
           this._antsRAF =
-            getSegmentDeletePhase() === "preview"
+            getSegmentDeletePhase() === "preview" || markedCount() > 0
               ? window.requestAnimationFrame(step)
               : null
         }
         this._antsRAF = window.requestAnimationFrame(step)
       }
-    } else {
-      this.clearSegmentDeleteTimers()
-      // Repaint to add/remove the pick halo or erase the overlay.
-      this.redraw()
+    } else if (this._antsRAF !== null) {
+      window.cancelAnimationFrame(this._antsRAF)
+      this._antsRAF = null
     }
   }
 
@@ -783,7 +809,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   }
 
   /**
-   * Draw one green pick halo (matches the endpoint-snap indicator styling).
+   * Draw one pick halo in the shared delete color.
    *
    * @param context the label canvas context
    * @param x halo center x (canvas px)
@@ -795,22 +821,22 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     y: number
   ): void {
     context.beginPath()
-    context.strokeStyle = "rgba(0, 255, 0, 0.8)"
-    context.fillStyle = "rgba(0, 255, 0, 0.2)"
+    context.strokeStyle = "rgba(255, 0, 200, 0.8)"
+    context.fillStyle = "rgba(255, 0, 200, 0.2)"
     context.lineWidth = 2
     context.arc(x, y, 12, 0, 2 * Math.PI)
     context.fill()
     context.stroke()
     context.beginPath()
-    context.fillStyle = "rgba(0, 255, 0, 0.9)"
+    context.fillStyle = "rgba(255, 0, 200, 0.9)"
     context.arc(x, y, 5, 0, 2 * Math.PI)
     context.fill()
   }
 
   /**
-   * Draw the delete-segment overlay: a green halo on the first pick while
-   * waiting for the second and, during the preview, the doomed piece as a
-   * green dashed marching-ants path with halos on BOTH picked points (the
+   * Draw the delete-segment overlay: a halo on the first pick while waiting for
+   * the second and, during the preview, the doomed piece as a dashed
+   * marching-ants path with halos on BOTH picked points (the
    * doomed path's ends are exactly the two pick coordinates). Drawn after
    * the labels so it always sits on top.
    *
@@ -829,10 +855,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     const preview = getPreviewData()
     if (preview !== null && preview.doomed.length >= 2) {
       context.beginPath()
-      context.strokeStyle = "rgba(0, 230, 0, 0.95)"
+      context.strokeStyle = DELETE_HIGHLIGHT_COLOR
       context.lineWidth = 4
       context.setLineDash(DASH_LINE)
-      context.lineDashOffset = -this._antsOffset
+      context.lineDashOffset = -getAntsOffset()
       context.moveTo(preview.doomed[0].x * ratio, preview.doomed[0].y * ratio)
       for (let i = 1; i < preview.doomed.length; i++) {
         context.lineTo(
