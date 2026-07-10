@@ -179,12 +179,26 @@ export class Polygon2D extends Label2D {
    * @param context
    * @param ratio
    */
-  private drawSnapIndicator(context: Context2D, ratio: number): void {
+  private drawSnapIndicator(
+    context: Context2D,
+    ratio: number,
+    styleFactor: number
+  ): void {
     if (this._snapTargetPolyline === null || this._snapTargetPointIndex === -1) {
       return
     }
-    const targetPoint = this._snapTargetPolyline._points[this._snapTargetPointIndex]
+    const targetPoint =
+      this._snapTargetPolyline._points[this._snapTargetPointIndex]
     const realCoord = targetPoint.vector().scale(ratio)
+
+    // Scale the join indicator with zoom the same way vertices/edges do (via
+    // styleFactor = 1/sqrt(zoom)), so the green dot tracks the line and point
+    // sizes instead of staying a fixed pixel size at every zoom level. The
+    // floors mirror the point-style floors in draw() so it never vanishes.
+    const haloRadius = Math.max(4, 16 * styleFactor)
+    const endpointRadius = Math.max(2, 8 * styleFactor)
+    const centerRadius = Math.max(1, 3 * styleFactor)
+    const strokeWidth = Math.max(1, 2 * styleFactor)
 
     context.save()
 
@@ -192,21 +206,21 @@ export class Polygon2D extends Label2D {
     context.beginPath()
     context.strokeStyle = "rgba(0, 255, 0, 0.8)"
     context.fillStyle = "rgba(0, 255, 0, 0.2)"
-    context.lineWidth = 2
-    context.arc(realCoord.x, realCoord.y, 16, 0, 2 * Math.PI)
+    context.lineWidth = strokeWidth
+    context.arc(realCoord.x, realCoord.y, haloRadius, 0, 2 * Math.PI)
     context.fill()
     context.stroke()
 
     // 2. Slightly enlarged green endpoint
     context.beginPath()
     context.fillStyle = "rgba(0, 255, 0, 0.9)"
-    context.arc(realCoord.x, realCoord.y, 8, 0, 2 * Math.PI)
+    context.arc(realCoord.x, realCoord.y, endpointRadius, 0, 2 * Math.PI)
     context.fill()
 
     // 3. White center dot
     context.beginPath()
     context.fillStyle = "#ffffff"
-    context.arc(realCoord.x, realCoord.y, 3, 0, 2 * Math.PI)
+    context.arc(realCoord.x, realCoord.y, centerRadius, 0, 2 * Math.PI)
     context.fill()
 
     context.restore()
@@ -582,7 +596,7 @@ export class Polygon2D extends Label2D {
       )
     }
     if (mode === DrawMode.VIEW) {
-      this.drawSnapIndicator(context, ratio)
+      this.drawSnapIndicator(context, ratio, styleFactor)
     }
   }
 
