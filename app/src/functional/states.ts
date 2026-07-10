@@ -304,7 +304,8 @@ export function makeImageViewerConfig(
     pane,
     synchronized: false,
     hideLabels: false,
-    hideTags: false,
+    // Tags default to hidden; the sidebar "Show Tags" checkbox opts in.
+    hideTags: true,
     hiddenLabelTypes: []
   }
 }
