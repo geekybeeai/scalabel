@@ -42,11 +42,12 @@ export const CUT_CURSOR = `url('data:image/svg+xml;utf8,${encodeURIComponent(
 )}') 12 12, crosshair`
 
 /**
- * Glyph for the delete-segment tool: a line with its dashed middle removed
- * (two solid end stubs, two middle dashes). Inlined like CONTENT_CUT_PATH.
+ * Glyph for the delete-segment tool: the material design "delete" trash can
+ * (24x24 viewBox). Inlined like CONTENT_CUT_PATH.
  */
 export const DELETE_SEGMENT_PATH =
-  "M2 11h5v2H2v-2zm15 0h5v2h-5v-2zm-8 0h2v2H9v-2zm4 0h2v2h-2v-2z"
+  "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 " +
+  "1H5v2h14V4z"
 
 /**
  * Delete-segment icon (toolbar button + context-menu item).
@@ -62,8 +63,8 @@ export function DeleteSegmentIcon(props: SvgIconProps): JSX.Element {
 }
 
 /**
- * Lasso icon for the freeform-select tool: a dashed open loop with a small
- * tail. Drawn with strokes (fill="none") so it reads as a marquee/lasso.
+ * Freeform-select icon: a dashed irregular closed loop (freeform marquee).
+ * Drawn with strokes (fill="none"), mirroring RectangleSelectIcon.
  *
  * @param props standard SvgIcon props (fontSize, style, ...)
  */
@@ -76,9 +77,8 @@ export function FreeformSelectIcon(props: SvgIconProps): JSX.Element {
         strokeWidth={2}
         strokeDasharray="3 2"
         strokeLinecap="round"
-        d="M12 4c4.5 0 8 2.9 8 6.5S16.5 17 12 17c-3 0-5.6-1-6.6-2.9"
+        d="M12 4.5c4.6 0 7.5 2.4 7.5 5.7 0 3.6-3.4 6.8-8 6.8-3.9 0-7-2.3-7-5.4 0-3.7 3.1-7.1 7.5-7.1z"
       />
-      <path d="M5 13.2l-1.9 4.1 4.1-1.2z" />
     </SvgIcon>
   )
 }

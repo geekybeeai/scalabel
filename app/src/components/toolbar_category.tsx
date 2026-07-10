@@ -341,22 +341,31 @@ class MultipleSelect extends Component<Props> {
                       </span>
                     </>
                   )}
-                  {this.props.onToggleImage !== undefined && (
-                    <>
-                      <Checkbox
-                        size="small"
-                        checked={this.props.showImage ?? true}
-                        onChange={() => this.props.onToggleImage?.()}
-                        title="Toggle the underlying image"
-                        style={{ padding: 2, color: "inherit", marginLeft: 8 }}
-                      />
-                      <span style={{ fontSize: 12, opacity: 0.75 }}>
-                        Show image
-                      </span>
-                    </>
-                  )}
                 </>
               )}
+            </div>
+          )}
+          {this.props.onToggleImage !== undefined && (
+            // Second display row: "Show image" does not fit beside the three
+            // line toggles, so it gets its own centered row.
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                minHeight: 24,
+                padding: "1px 4px",
+                border: "1px solid transparent"
+              }}
+            >
+              <Checkbox
+                size="small"
+                checked={this.props.showImage ?? true}
+                onChange={() => this.props.onToggleImage?.()}
+                title="Toggle the underlying image"
+                style={{ padding: 2, color: "inherit" }}
+              />
+              <span style={{ fontSize: 12, opacity: 0.75 }}>Show image</span>
             </div>
           )}
           {treeCategories !== null ? (

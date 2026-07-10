@@ -469,10 +469,10 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   }
 
   /**
-   * Build the split select button: the icon arms/disarms the currently-selected
-   * mode (freeform lasso or rectangle); the caret opens a menu to switch mode.
-   * The icon reflects the active mode; green when armed. Mutually exclusive with
-   * the cut and delete-segment tools.
+   * Build the split select button: the dashed-rectangle icon arms/disarms the
+   * currently-selected mode (freeform lasso or rectangle); the caret opens a
+   * menu (with per-mode icons) to switch mode. Green when armed. Mutually
+   * exclusive with the cut and delete-segment tools.
    *
    * @return {JSX.Element} the select split button
    */
@@ -483,8 +483,6 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
       !Session.label2dList.isDrawingInProgress() &&
       !this.state.task.config.tracking &&
       (this._viewerConfig as ImageViewerConfigType)?.showCurvesOnly !== true
-    const ModeIcon =
-      mode === "rectangle" ? RectangleSelectIcon : FreeformSelectIcon
     return (
       <React.Fragment key={`selectSplit2dButton${this.props.id}`}>
         <Tooltip
@@ -506,7 +504,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
             style={{ color: armed ? "#4caf50" : undefined }}
             edge={"start"}
           >
-            <ModeIcon />
+            <RectangleSelectIcon />
           </IconButton>
         </Tooltip>
         <IconButton
@@ -539,6 +537,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
               this.forceUpdate()
             }}
           >
+            <FreeformSelectIcon fontSize="small" style={{ marginRight: 8 }} />
             Freeform
           </MenuItem>
           <MenuItem
@@ -552,6 +551,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
               this.forceUpdate()
             }}
           >
+            <RectangleSelectIcon fontSize="small" style={{ marginRight: 8 }} />
             Rectangle
           </MenuItem>
         </Menu>
