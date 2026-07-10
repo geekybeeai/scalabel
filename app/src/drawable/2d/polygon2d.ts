@@ -1,5 +1,6 @@
 import _ from "lodash"
 
+import { isKeyHeld } from "../../common/keyboard_state"
 import { isMarked } from "../../common/multi_delete_state"
 import { Cursor, Key, LabelTypeName } from "../../const/common"
 import { makeLabel } from "../../functional/states"
@@ -625,13 +626,15 @@ export class Polygon2D extends Label2D {
         // Click point
         this._state = Polygon2DState.RESHAPE
         this.editing = true
-        // Curve conversion is deliberately NOT click-driven: it fires on the
-        // 'C' keydown via toggleCurveAtHighlighted(). Keeping the old
-        // C-held-click branch here alongside the keydown made a desktop
-        // hold-C+click fire BOTH — the keydown converted the midpoint, then
-        // the click ran lineToCurve again on the rebuilt drawable at a stale
-        // handle and un-converted/corrupted the points.
-        if (this.isKeyDown(Key.D_UP) || this.isKeyDown(Key.D_LOW)) {
+        // Held-key checks read the module-level keyboard state (fed by the
+        // canvas's document listeners), NOT this instance's _keyDownMap: the
+        // select-on-click dispatch rebuilds this drawable mid-gesture with an
+        // empty key map, which made C/D+click silently fail (reproducibly on
+        // trackpads). See common/keyboard_state.ts.
+        if (isKeyHeld(Key.C_UP) || isKeyHeld(Key.C_LOW)) {
+          // Convert line to bezier curve; the drag that follows shapes it
+          this.lineToCurve()
+        } else if (isKeyHeld(Key.D_UP) || isKeyHeld(Key.D_LOW)) {
           // Delete vertex
           // Disable deletion for now
           this.toCache()
@@ -790,38 +793,6 @@ export class Polygon2D extends Label2D {
   public onKeyUp(e: string): void {
     // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete this._keyDownMap[e]
-  }
-
-  /**
-   * Toggle a bezier curve at the currently highlighted midpoint / curve handle.
-   * Driven by the keyboard 'C' shortcut (see Label2DHandler) and it is the ONLY
-   * conversion path — no click-time key check can work here, for two reasons
-   * observed live: (1) trackpad taps release the key before the click lands
-   * (keyup precedes mouseup), and (2) selecting the line on a click rebuilds
-   * this drawable with a fresh, empty key map. Acting on the keydown, while the
-   * midpoint is highlighted on a selected line, sidesteps both.
-   * Returns true if a conversion happened so the caller can commit it.
-   */
-  public toggleCurveAtHighlighted(): boolean {
-    if (
-      !this._selected ||
-      this._state !== Polygon2DState.FINISHED ||
-      this._highlightedHandle <= 0
-    ) {
-      return false
-    }
-    const point = this._points[this._highlightedHandle - 1]
-    if (
-      point === undefined ||
-      (point.type !== PathPointType.MID && point.type !== PathPointType.CURVE)
-    ) {
-      return false
-    }
-    this.toCache()
-    this.lineToCurve()
-    this.UpdateLabelShapes()
-    this._labelList.addUpdatedLabel(this)
-    return true
   }
 
   /**
@@ -1456,15 +1427,6 @@ export class Polygon2D extends Label2D {
     if (o4 === OrientationType.COLLINEAR && this.onSegment(p2, q1, q2))
       return true
     return false
-  }
-
-  /**
-   * Whether a specific key is pressed down
-   *
-   * @param key - the key to check
-   */
-  private isKeyDown(key: Key): boolean {
-    return this._keyDownMap[key]
   }
 
   /**

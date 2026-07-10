@@ -467,17 +467,6 @@ export abstract class Label2D {
   public abstract onKeyUp(e: string): void
 
   /**
-   * Toggle a bezier curve at this label's highlighted handle, if the label type
-   * supports it (polylines/polygons override this). The base implementation is a
-   * no-op so the keyboard 'C' handler can call it on any highlighted label.
-   *
-   * @returns true if a conversion happened (the caller then commits)
-   */
-  public toggleCurveAtHighlighted(): boolean {
-    return false
-  }
-
-  /**
    * Expand the primitive shapes to drawable shapes
    *
    * @param {ShapeType[]} shapes

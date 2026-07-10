@@ -166,10 +166,13 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   the real undo/redo is `draw_history.ts`. Don't confuse them.
 - **The artifact server, not the client, is the load bottleneck** (see the expired-URL /
   slow-download investigations): `session_setup.tsx image.onerror` + signed URLs.
-- **Never gate a mousedown action on `isKeyDown(...)`.** Two observed failure modes:
-  trackpad taps release the key before the click lands (keyup precedes mouseup), and
-  select-on-click rebuilds the drawable with an empty per-instance `_keyDownMap`. Act on
-  the keydown itself while the target handle is highlighted (see
-  `Polygon2D.toggleCurveAtHighlighted`, driven from `Label2DHandler.onKeyDown`), and keep
-  exactly ONE trigger per action — a keydown path plus a leftover click path double-fires
+- **Per-instance key maps die mid-click.** The select-on-click dispatch rebuilds
+  drawables with fresh, empty `_keyDownMap`s (and the handler's pressed-key set can be
+  cleared by the same dispatch), so gating a mousedown action on `this.isKeyDown(...)`
+  silently fails — reproducibly on trackpads. Read held keys from
+  `common/keyboard_state.ts` (module-level, fed by Label2dCanvas's document listeners,
+  rebuild-proof) — see the C/D checks in `polygon2d.ts onMouseDown`. Do NOT "fix" this by
+  moving the action to bare keydown: C's gesture is convert-on-click **then drag to
+  shape**; keydown-only conversion was tried and rejected (hair-trigger, no drag). And
+  keep exactly ONE trigger per action — a keydown path plus a click path double-fires
   and undoes/corrupts the edit.

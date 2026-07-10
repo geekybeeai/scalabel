@@ -15,6 +15,7 @@ import {
   inPanWindow
 } from "../common/pointer_pan_state"
 import { isCutMode, setCutMode } from "../common/cut_state"
+import { recordKeyDown, recordKeyUp } from "../common/keyboard_state"
 import {
   armSegmentDelete,
   getPickData,
@@ -1031,6 +1032,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @param {KeyboardEvent} e - event
    */
   public onKeyDown(e: KeyboardEvent): void {
+    // Mirror the physical key state into the module-level record FIRST (before
+    // any early return): drawables read held keys from there at mouse-down
+    // time, since their per-instance key maps are wiped by select-on-click
+    // rebuilds. See common/keyboard_state.ts.
+    recordKeyDown(e.key)
     if (this.checkFreeze()) {
       return
     }
@@ -1081,6 +1087,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @param {KeyboardEvent} e - event
    */
   public onKeyUp(e: KeyboardEvent): void {
+    // Keep the module-level key record faithful to the physical keyboard even
+    // when frozen (the matching keydown was recorded before the freeze check).
+    recordKeyUp(e.key)
     if (this.checkFreeze()) {
       return
     }
