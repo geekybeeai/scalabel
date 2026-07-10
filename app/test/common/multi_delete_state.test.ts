@@ -3,6 +3,7 @@ import {
   getMarked,
   isMarked,
   markedCount,
+  markLabels,
   onMarkedChange,
   toggleMarked
 } from "../../src/common/multi_delete_state"
@@ -53,5 +54,45 @@ describe("multi_delete_state", () => {
     off()
     toggleMarked("lineC")
     expect(calls).toBe(4)
+  })
+})
+
+describe("multi_delete_state markLabels", () => {
+  beforeEach(() => {
+    clearMarked()
+  })
+
+  test("adds ids as a union", () => {
+    markLabels(["a", "b"])
+    expect(isMarked("a")).toBe(true)
+    expect(isMarked("b")).toBe(true)
+    expect(markedCount()).toBe(2)
+  })
+
+  test("never removes an already-marked id", () => {
+    toggleMarked("a")
+    markLabels(["a", "b"])
+    expect(getMarked().sort()).toEqual(["a", "b"])
+  })
+
+  test("notifies once when new ids are added", () => {
+    let calls = 0
+    const off = onMarkedChange(() => {
+      calls++
+    })
+    markLabels(["a", "b"])
+    expect(calls).toBe(1)
+    off()
+  })
+
+  test("does not notify when all ids are already marked", () => {
+    markLabels(["a"])
+    let calls = 0
+    const off = onMarkedChange(() => {
+      calls++
+    })
+    markLabels(["a"])
+    expect(calls).toBe(0)
+    off()
   })
 })

@@ -39,6 +39,25 @@ export function toggleMarked(labelId: IdType): void {
   notify()
 }
 
+/**
+ * Add every id to the marked set (union — never removes). Notifies once if any
+ * id was newly added. Used by the freeform lasso, which only ever adds.
+ *
+ * @param ids the ids to mark
+ */
+export function markLabels(ids: IdType[]): void {
+  let changed = false
+  for (const id of ids) {
+    if (!marked.has(id)) {
+      marked.add(id)
+      changed = true
+    }
+  }
+  if (changed) {
+    notify()
+  }
+}
+
 /** A snapshot array of the currently marked ids. */
 export function getMarked(): IdType[] {
   return [...marked]
