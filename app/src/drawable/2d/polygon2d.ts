@@ -178,6 +178,7 @@ export class Polygon2D extends Label2D {
    *
    * @param context
    * @param ratio
+   * @param styleFactor
    */
   private drawSnapIndicator(
     context: Context2D,
@@ -624,10 +625,13 @@ export class Polygon2D extends Label2D {
         // Click point
         this._state = Polygon2DState.RESHAPE
         this.editing = true
-        if (this.isKeyDown(Key.C_UP) || this.isKeyDown(Key.C_LOW)) {
-          // Convert line to bezier curve
-          this.lineToCurve()
-        } else if (this.isKeyDown(Key.D_UP) || this.isKeyDown(Key.D_LOW)) {
+        // Curve conversion is deliberately NOT click-driven: it fires on the
+        // 'C' keydown via toggleCurveAtHighlighted(). Keeping the old
+        // C-held-click branch here alongside the keydown made a desktop
+        // hold-C+click fire BOTH — the keydown converted the midpoint, then
+        // the click ran lineToCurve again on the rebuilt drawable at a stale
+        // handle and un-converted/corrupted the points.
+        if (this.isKeyDown(Key.D_UP) || this.isKeyDown(Key.D_LOW)) {
           // Delete vertex
           // Disable deletion for now
           this.toCache()
@@ -790,15 +794,17 @@ export class Polygon2D extends Label2D {
 
   /**
    * Toggle a bezier curve at the currently highlighted midpoint / curve handle.
-   * Driven by the keyboard 'C' shortcut (see Label2DHandler) rather than a
-   * modifier-held click: the held-key state does not survive to the click,
-   * because selecting the line on that click rebuilds this drawable with a fresh
-   * (empty) key map — which is why C+click silently failed on trackpads. Acting
-   * on the keydown, while the midpoint is highlighted, sidesteps that entirely.
+   * Driven by the keyboard 'C' shortcut (see Label2DHandler) and it is the ONLY
+   * conversion path — no click-time key check can work here, for two reasons
+   * observed live: (1) trackpad taps release the key before the click lands
+   * (keyup precedes mouseup), and (2) selecting the line on a click rebuilds
+   * this drawable with a fresh, empty key map. Acting on the keydown, while the
+   * midpoint is highlighted on a selected line, sidesteps both.
    * Returns true if a conversion happened so the caller can commit it.
    */
   public toggleCurveAtHighlighted(): boolean {
     if (
+      !this._selected ||
       this._state !== Polygon2DState.FINISHED ||
       this._highlightedHandle <= 0
     ) {

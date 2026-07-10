@@ -166,3 +166,10 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   the real undo/redo is `draw_history.ts`. Don't confuse them.
 - **The artifact server, not the client, is the load bottleneck** (see the expired-URL /
   slow-download investigations): `session_setup.tsx image.onerror` + signed URLs.
+- **Never gate a mousedown action on `isKeyDown(...)`.** Two observed failure modes:
+  trackpad taps release the key before the click lands (keyup precedes mouseup), and
+  select-on-click rebuilds the drawable with an empty per-instance `_keyDownMap`. Act on
+  the keydown itself while the target handle is highlighted (see
+  `Polygon2D.toggleCurveAtHighlighted`, driven from `Label2DHandler.onKeyDown`), and keep
+  exactly ONE trigger per action — a keydown path plus a leftover click path double-fires
+  and undoes/corrupts the edit.
