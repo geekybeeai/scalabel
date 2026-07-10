@@ -114,4 +114,42 @@ describe("freeform_select_geometry", () => {
       expect(findLassoHits(lines, SQUARE)).toEqual(["in"])
     })
   })
+
+  describe("rectangle polygon (reused by rectangle-select)", () => {
+    const RECT: Pt[] = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 }
+    ]
+    test("marks a line inside and a line crossing, not one outside", () => {
+      const lines: LassoLine[] = [
+        {
+          id: "inside",
+          pts: [
+            { x: 2, y: 2 },
+            { x: 8, y: 8 }
+          ],
+          closed: false
+        },
+        {
+          id: "crossing",
+          pts: [
+            { x: -5, y: 5 },
+            { x: 15, y: 5 }
+          ],
+          closed: false
+        },
+        {
+          id: "outside",
+          pts: [
+            { x: 20, y: 20 },
+            { x: 30, y: 30 }
+          ],
+          closed: false
+        }
+      ]
+      expect(findLassoHits(lines, RECT)).toEqual(["inside", "crossing"])
+    })
+  })
 })
