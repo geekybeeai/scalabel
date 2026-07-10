@@ -33,12 +33,17 @@ import {
 import {
   addFreeformPoint,
   beginFreeformPath,
+  completeRect,
   endFreeformPath,
-  getFreeformPath,
+  getSelectionOverlay,
+  getSelectMode,
   isFreeformActive,
   isFreeformDrawing,
+  isRectSizing,
   onFreeformChange,
-  resetFreeform
+  resetFreeform,
+  setRectFirstCorner,
+  updateRectCursor
 } from "../common/freeform_select_state"
 import { runFreeformSelect } from "../drawable/2d/freeform_select"
 import {
@@ -524,15 +529,20 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       !this._labelList.isDrawingInProgress() &&
       !this.state.task.config.tracking &&
       ffConfig?.showCurvesOnly !== true
-    if (
-      (isFreeformActive() || e.shiftKey) &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      freeformAllowed
-    ) {
-      beginFreeformPath(mousePos)
-      this.setCursor("crosshair")
-      return
+    if (!e.ctrlKey && !e.metaKey && freeformAllowed) {
+      // Shift+drag is always a freeform lasso; the armed toolbar mode follows
+      // the selected sub-mode.
+      if (e.shiftKey || (isFreeformActive() && getSelectMode() === "freeform")) {
+        beginFreeformPath(mousePos)
+        this.setCursor("crosshair")
+        return
+      }
+      if (isFreeformActive() && getSelectMode() === "rectangle") {
+        // Consume the mousedown so the empty-space pan-arming never runs; the
+        // two-click corner logic runs in onMouseUp.
+        this.setCursor("crosshair")
+        return
+      }
     }
     // Control + click for dragging
     // get mouse position in image coordinates
@@ -703,6 +713,32 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       return
     }
 
+    if (isFreeformActive() && getSelectMode() === "rectangle") {
+      const rectPos = this.getMousePos(e)
+      if (!isRectSizing()) {
+        setRectFirstCorner(rectPos)
+      } else {
+        const corners = completeRect(rectPos)
+        if (corners !== null) {
+          const config = this.state.user.viewerConfigs[this.props.id]
+          runFreeformSelect(corners, {
+            hideLabels: config.hideLabels,
+            hiddenLabelTypes:
+              config.hiddenLabelTypes !== undefined
+                ? config.hiddenLabelTypes
+                : [],
+            hiddenCategories:
+              config.hiddenCategories !== undefined
+                ? config.hiddenCategories
+                : []
+          })
+        }
+      }
+      this.setCursor("crosshair")
+      this._labelList.onDrawableUpdate()
+      return
+    }
+
     if (isArmed()) {
       const panned = didPan()
       resetPanState()
@@ -741,6 +777,16 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
 
     if (isFreeformDrawing()) {
       addFreeformPoint(this.getMousePos(e))
+      this.setCursor("crosshair")
+      return
+    }
+
+    if (
+      isFreeformActive() &&
+      getSelectMode() === "rectangle" &&
+      isRectSizing()
+    ) {
+      updateRectCursor(this.getMousePos(e))
       this.setCursor("crosshair")
       return
     }
@@ -960,7 +1006,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     context: CanvasRenderingContext2D,
     ratio: number
   ): void {
-    const path = getFreeformPath()
+    const path = getSelectionOverlay()
     if (path.length < 2) {
       return
     }
