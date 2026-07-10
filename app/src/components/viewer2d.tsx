@@ -1,4 +1,4 @@
-import { IconButton } from "@material-ui/core"
+import { IconButton, Menu, MenuItem } from "@material-ui/core"
 import Tooltip from "@mui/material/Tooltip"
 import Fade from "@mui/material/Fade"
 import AddIcon from "@material-ui/icons/Add"
@@ -9,6 +9,7 @@ import RemoveIcon from "@material-ui/icons/Remove"
 import UndoIcon from "@material-ui/icons/Undo"
 import ZoomInIcon from "@material-ui/icons/ZoomIn"
 import ZoomOutIcon from "@material-ui/icons/ZoomOut"
+import ArrowDropDownIcon from "@material-ui/icons/ArrowDropDown"
 import { withStyles } from "@material-ui/styles"
 import React from "react"
 
@@ -24,8 +25,11 @@ import {
 } from "../common/segment_delete_state"
 import {
   armFreeform,
+  getSelectMode,
   isFreeformArmed,
-  resetFreeform
+  onFreeformChange,
+  resetFreeform,
+  setSelectMode
 } from "../common/freeform_select_state"
 import { notifyGesture } from "../common/interaction_state"
 import { isFrameLoaded } from "../functional/state_util"
@@ -56,7 +60,8 @@ import {
 import {
   ContentCutIcon,
   DeleteSegmentIcon,
-  FreeformSelectIcon
+  FreeformSelectIcon,
+  RectangleSelectIcon
 } from "./cut_icon"
 import ImageCanvas from "./image_canvas"
 import Label2dCanvas from "./label2d_canvas"
@@ -91,6 +96,10 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   private _offCutModeChange: (() => void) | null = null
   /** unsubscribe from delete-segment state changes */
   private _offSegmentDeleteChange: (() => void) | null = null
+  /** anchor element for the select-mode dropdown menu (null = closed) */
+  private _selectMenuAnchor: HTMLElement | null = null
+  /** unsubscribe from select-tool (freeform/rectangle) state changes */
+  private _offFreeformChange: (() => void) | null = null
 
   /**
    * Mount: re-render the toolbar tints when the cut tools change state
@@ -103,6 +112,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     this._offSegmentDeleteChange = onSegmentDeleteChange(() =>
       this.forceUpdate()
     )
+    this._offFreeformChange = onFreeformChange(() => this.forceUpdate())
   }
 
   /**
@@ -117,6 +127,10 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     if (this._offSegmentDeleteChange !== null) {
       this._offSegmentDeleteChange()
       this._offSegmentDeleteChange = null
+    }
+    if (this._offFreeformChange !== null) {
+      this._offFreeformChange()
+      this._offFreeformChange = null
     }
   }
 
@@ -455,43 +469,93 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   }
 
   /**
-   * Build the freeform (lasso) select toolbar button. Arms a sticky mode that
-   * lassos polylines/polygons into the batch-delete set; clicking while armed
-   * disarms. Mutually exclusive with the cut and delete-segment tools.
+   * Build the split select button: the icon arms/disarms the currently-selected
+   * mode (freeform lasso or rectangle); the caret opens a menu to switch mode.
+   * The icon reflects the active mode; green when armed. Mutually exclusive with
+   * the cut and delete-segment tools.
    *
-   * @return {JSX.Element} the freeform-select button
+   * @return {JSX.Element} the select split button
    */
   protected getFreeformSelectButton(): JSX.Element {
     const armed = isFreeformArmed()
+    const mode = getSelectMode()
+    const canArm = (): boolean =>
+      !Session.label2dList.isDrawingInProgress() &&
+      !this.state.task.config.tracking &&
+      (this._viewerConfig as ImageViewerConfigType)?.showCurvesOnly !== true
+    const ModeIcon =
+      mode === "rectangle" ? RectangleSelectIcon : FreeformSelectIcon
     return (
-      <Tooltip
-        key={`freeformSelect2dButton${this.props.id}`}
-        title="Freeform select"
-        enterDelay={500}
-        TransitionComponent={Fade}
-        TransitionProps={{ timeout: 600 }}
-        arrow
-      >
+      <React.Fragment key={`selectSplit2dButton${this.props.id}`}>
+        <Tooltip
+          title={mode === "rectangle" ? "Rectangle select" : "Freeform select"}
+          enterDelay={500}
+          TransitionComponent={Fade}
+          TransitionProps={{ timeout: 600 }}
+          arrow
+        >
+          <IconButton
+            onClick={() => {
+              if (armed) {
+                resetFreeform()
+              } else if (canArm()) {
+                armFreeform()
+              }
+            }}
+            className={this.props.classes.viewer_button}
+            style={{ color: armed ? "#4caf50" : undefined }}
+            edge={"start"}
+          >
+            <ModeIcon />
+          </IconButton>
+        </Tooltip>
         <IconButton
-          onClick={() => {
-            if (armed) {
-              resetFreeform()
-            } else if (
-              !Session.label2dList.isDrawingInProgress() &&
-              !this.state.task.config.tracking &&
-              (this._viewerConfig as ImageViewerConfigType)?.showCurvesOnly !==
-                true
-            ) {
-              armFreeform()
-            }
+          size="small"
+          onClick={(e) => {
+            this._selectMenuAnchor = e.currentTarget
+            this.forceUpdate()
           }}
           className={this.props.classes.viewer_button}
-          style={{ color: armed ? "#4caf50" : undefined }}
-          edge={"start"}
+          style={{ color: armed ? "#4caf50" : undefined, padding: 0 }}
         >
-          <FreeformSelectIcon />
+          <ArrowDropDownIcon />
         </IconButton>
-      </Tooltip>
+        <Menu
+          anchorEl={this._selectMenuAnchor}
+          open={this._selectMenuAnchor !== null}
+          onClose={() => {
+            this._selectMenuAnchor = null
+            this.forceUpdate()
+          }}
+        >
+          <MenuItem
+            selected={mode === "freeform"}
+            onClick={() => {
+              setSelectMode("freeform")
+              if (!isFreeformArmed() && canArm()) {
+                armFreeform()
+              }
+              this._selectMenuAnchor = null
+              this.forceUpdate()
+            }}
+          >
+            Freeform
+          </MenuItem>
+          <MenuItem
+            selected={mode === "rectangle"}
+            onClick={() => {
+              setSelectMode("rectangle")
+              if (!isFreeformArmed() && canArm()) {
+                armFreeform()
+              }
+              this._selectMenuAnchor = null
+              this.forceUpdate()
+            }}
+          >
+            Rectangle
+          </MenuItem>
+        </Menu>
+      </React.Fragment>
     )
   }
 
