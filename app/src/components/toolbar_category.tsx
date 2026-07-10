@@ -260,6 +260,37 @@ function renderTreeCategory(
  */
 class MultipleSelect extends Component<Props> {
   /**
+   * One display-toggle cell (checkbox + label) of the 2x2 toggle grid.
+   *
+   * @param label the visible label text
+   * @param title the checkbox tooltip
+   * @param checked the current checkbox value
+   * @param onChange the toggle callback
+   * @param indeterminate optional indeterminate state for the checkbox
+   */
+  private renderToggleCell(
+    label: string,
+    title: string,
+    checked: boolean,
+    onChange: () => void,
+    indeterminate?: boolean
+  ): JSX.Element {
+    return (
+      <div style={{ display: "flex", alignItems: "center", minHeight: 24 }}>
+        <Checkbox
+          size="small"
+          checked={checked}
+          indeterminate={indeterminate}
+          onChange={onChange}
+          title={title}
+          style={{ padding: 2, color: "inherit" }}
+        />
+        <span style={{ fontSize: 12, opacity: 0.75 }}>{label}</span>
+      </div>
+    )
+  }
+
+  /**
    * Render the category in a list
    *
    * @param categories
@@ -289,83 +320,50 @@ class MultipleSelect extends Component<Props> {
             />
           </ListItem>
           {this.props.onToggleAllCategoryVisibility !== undefined && (
-            // Identical box model to a category row (border 1px + padding 4px)
-            // with the checkbox as a DIRECT child, so the "Show all" checkbox
-            // lands on the exact same column as the category checkboxes.
+            // Display toggles in a 2x2 grid (Show lines / Show Tags on the
+            // first row, Curves only / Show image on the second) so the four
+            // checkboxes are equally spaced. Same box model as a category row
+            // (border 1px + padding 4px) so the first checkbox lands on the
+            // same column as the category checkboxes.
             <div
               style={{
-                display: "flex",
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
                 alignItems: "center",
-                minHeight: 24,
                 padding: "1px 4px",
                 border: "1px solid transparent"
               }}
             >
-              <Checkbox
-                size="small"
-                checked={(this.props.hiddenCategories ?? []).length === 0}
-                indeterminate={
-                  (this.props.hiddenCategories ?? []).length > 0 &&
-                  (this.props.hiddenCategories ?? []).length < categories.length
-                }
-                onChange={() => this.props.onToggleAllCategoryVisibility?.()}
-                title="Toggle visibility of all lines"
-                style={{ padding: 2, color: "inherit" }}
-              />
-              <span
-                style={{ fontSize: 12, opacity: 0.75, marginRight: 16 }}
-              >
-                Show lines
-              </span>
-              {this.props.onToggleTags !== undefined && (
-                <>
-                  <Checkbox
-                    size="small"
-                    checked={this.props.showTags ?? true}
-                    onChange={() => this.props.onToggleTags?.()}
-                    title="Toggle category tags on the canvas"
-                    style={{ padding: 2, color: "inherit" }}
-                  />
-                  <span style={{ fontSize: 12, opacity: 0.75 }}>Show Tags</span>
-                  {this.props.onToggleCurvesOnly !== undefined && (
-                    <>
-                      <Checkbox
-                        size="small"
-                        checked={this.props.showCurvesOnly ?? false}
-                        onChange={() => this.props.onToggleCurvesOnly?.()}
-                        title="Show only the curved parts of lines"
-                        style={{ padding: 2, color: "inherit", marginLeft: 8 }}
-                      />
-                      <span style={{ fontSize: 12, opacity: 0.75 }}>
-                        Curves only
-                      </span>
-                    </>
-                  )}
-                </>
+              {this.renderToggleCell(
+                "Show lines",
+                "Toggle visibility of all lines",
+                (this.props.hiddenCategories ?? []).length === 0,
+                () => this.props.onToggleAllCategoryVisibility?.(),
+                (this.props.hiddenCategories ?? []).length > 0 &&
+                  (this.props.hiddenCategories ?? []).length <
+                    categories.length
               )}
-            </div>
-          )}
-          {this.props.onToggleImage !== undefined && (
-            // Second display row: "Show image" does not fit beside the three
-            // line toggles, so it gets its own centered row.
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                minHeight: 24,
-                padding: "1px 4px",
-                border: "1px solid transparent"
-              }}
-            >
-              <Checkbox
-                size="small"
-                checked={this.props.showImage ?? true}
-                onChange={() => this.props.onToggleImage?.()}
-                title="Toggle the underlying image"
-                style={{ padding: 2, color: "inherit" }}
-              />
-              <span style={{ fontSize: 12, opacity: 0.75 }}>Show image</span>
+              {this.props.onToggleTags !== undefined &&
+                this.renderToggleCell(
+                  "Show Tags",
+                  "Toggle category tags on the canvas",
+                  this.props.showTags ?? true,
+                  () => this.props.onToggleTags?.()
+                )}
+              {this.props.onToggleCurvesOnly !== undefined &&
+                this.renderToggleCell(
+                  "Curves only",
+                  "Show only the curved parts of lines",
+                  this.props.showCurvesOnly ?? false,
+                  () => this.props.onToggleCurvesOnly?.()
+                )}
+              {this.props.onToggleImage !== undefined &&
+                this.renderToggleCell(
+                  "Show image",
+                  "Toggle the underlying image",
+                  this.props.showImage ?? true,
+                  () => this.props.onToggleImage?.()
+                )}
             </div>
           )}
           {treeCategories !== null ? (

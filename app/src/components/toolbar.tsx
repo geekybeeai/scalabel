@@ -418,6 +418,8 @@ export class ToolBar extends Component<Props> {
               { keys: ["Ctrl", "Z"], label: "undo" },
               { keys: ["Ctrl", "Y"], label: "redo" },
               { keys: ["C"], label: "control curve" },
+              { keys: ["Ctrl", "Click"], label: "select line for delete" },
+              { keys: ["Shift", "Drag"], label: "select region for delete" },
               { keys: ["Scroll"], label: "zoom (mouse)" },
               { keys: ["Pinch"], label: "zoom (trackpad)" },
               { keys: ["Drag"], label: "pan (mouse / trackpad)" }
