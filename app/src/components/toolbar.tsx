@@ -306,6 +306,14 @@ export class ToolBar extends Component<Props> {
                 changeViewerConfig(this.safeActiveViewerId, config)
               )
             }}
+            showImage={!(activeConfig.hideImage ?? false)}
+            onToggleImage={() => {
+              const config = { ...activeConfig }
+              config.hideImage = !(config.hideImage ?? false)
+              Session.dispatch(
+                changeViewerConfig(this.safeActiveViewerId, config)
+              )
+            }}
             onToggleCategoryVisibility={(index: number) =>
               this.toggleCategoryVisibility(index)
             }

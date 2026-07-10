@@ -157,6 +157,10 @@ interface Props {
   showCurvesOnly?: boolean
   /** toggle curves-only display */
   onToggleCurvesOnly?: () => void
+  /** whether the underlying image is shown on the canvas */
+  showImage?: boolean
+  /** toggle the underlying image */
+  onToggleImage?: () => void
 }
 
 /**
@@ -334,6 +338,20 @@ class MultipleSelect extends Component<Props> {
                       />
                       <span style={{ fontSize: 12, opacity: 0.75 }}>
                         Curves only
+                      </span>
+                    </>
+                  )}
+                  {this.props.onToggleImage !== undefined && (
+                    <>
+                      <Checkbox
+                        size="small"
+                        checked={this.props.showImage ?? true}
+                        onChange={() => this.props.onToggleImage?.()}
+                        title="Toggle the underlying image"
+                        style={{ padding: 2, color: "inherit", marginLeft: 8 }}
+                      />
+                      <span style={{ fontSize: 12, opacity: 0.75 }}>
+                        Show image
                       </span>
                     </>
                   )}
