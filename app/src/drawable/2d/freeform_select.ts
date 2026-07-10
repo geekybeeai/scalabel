@@ -16,8 +16,9 @@ export interface FreeformVisibilityFilter {
 }
 
 /**
- * Mark every visible polyline/polygon in the current item that is inside or
- * crosses the lasso, unioning them into the batch-delete set. Returns the
+ * Mark every visible polyline/polygon in the current item that is completely
+ * enclosed by the lasso, unioning them into the batch-delete set. Lines that
+ * merely cross the lasso boundary are NOT marked. Returns the
  * number of lines marked. A lasso of fewer than 3 points, a tracking task, or
  * an all-hidden view is a no-op.
  *

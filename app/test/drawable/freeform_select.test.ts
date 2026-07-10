@@ -34,11 +34,15 @@ describe("freeform select orchestrator", () => {
     clearMarked()
   })
 
-  test("marks lines inside or crossing, ignores those outside", () => {
+  test("marks only fully-enclosed lines, ignores crossing and outside", () => {
     initializeTestingObjects()
     seedLine("inside", [
       [10, 10],
       [20, 20]
+    ])
+    seedLine("crossing", [
+      [30, 30],
+      [200, 200]
     ])
     seedLine("outside", [
       [500, 500],

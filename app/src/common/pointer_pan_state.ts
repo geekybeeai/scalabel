@@ -62,3 +62,35 @@ export function openPanWindow(nowMs: number): void {
 export function inPanWindow(nowMs: number): boolean {
   return nowMs < panWindowUntilMs
 }
+
+/**
+ * Whether a mouse-down should be deferred into the pan/empty-drag gesture
+ * instead of reaching the label handler.
+ *
+ * Empty canvas always defers. Inside the post-double-click pan window a hit
+ * on a label BODY still defers (drag pans anywhere — the trackpad pan
+ * gesture), but a hit on a label POINT (handleIndex > 0) never does: trackpads
+ * initiate drags with a double-tap, which used to open the pan window and
+ * swallow the C+drag curve gesture on a vertex/midpoint. A body hit also
+ * skips deferral when the hovered label still has a point handle highlighted
+ * (highlightedHandle > 0): C+tap moves the converted control points to the
+ * 1/3 / 2/3 marks, so the follow-up trackpad press lands on the body even
+ * though the user is mid point-gesture.
+ *
+ * @param labelIndex hit-test label index (< 0 = empty canvas)
+ * @param handleIndex hit-test handle index (0 = body/edge, > 0 = a point)
+ * @param nowMs the current time — pass Date.now()
+ * @param highlightedHandle the hovered label's still-highlighted handle
+ *   (> 0 = a point gesture is in flight), -1 if none
+ */
+export function shouldDeferPointerDown(
+  labelIndex: number,
+  handleIndex: number,
+  nowMs: number,
+  highlightedHandle: number = -1
+): boolean {
+  if (labelIndex < 0) {
+    return true
+  }
+  return inPanWindow(nowMs) && handleIndex <= 0 && highlightedHandle <= 0
+}

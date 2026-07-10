@@ -2,6 +2,11 @@
 
 - **Date:** 2026-07-10
 - **Status:** Approved (design); ready for implementation planning
+- **Amendment (2026-07-10):** Selection semantics changed after implementation
+  from *crossing* (enclosed or touching) to **fully enclosed only** — a line is
+  selected only when every vertex is inside the region and no segment crosses
+  the region boundary. Applies to both freeform and rectangle select (both use
+  `lineHitsLasso`).
 - **Area:** 2D annotator — polyline/polygon editing tools
 - **Related map:** `docs/polyline-feature-map.md`
 

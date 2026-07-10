@@ -18,8 +18,8 @@ export interface LassoLine {
 
 /**
  * Point-in-polygon test by ray casting (even-odd rule). A point exactly on an
- * edge is ambiguous, which is harmless here: a boundary-crossing line is also
- * caught by the edge test in lineHitsLasso.
+ * edge is ambiguous, which is harmless here: a line touching the lasso
+ * boundary is rejected by the edge test in lineHitsLasso anyway.
  *
  * @param pt the query point
  * @param polygon the polygon vertices (implicitly closed)
@@ -104,19 +104,21 @@ export function segmentsIntersect(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
 }
 
 /**
- * Crossing test: true if ANY line vertex is inside the lasso OR any line
- * segment crosses any lasso edge. Covers both "fully enclosed" and "crossing".
+ * Enclosure test: true only if the line lies COMPLETELY inside the lasso —
+ * every vertex is inside AND no line segment crosses (or touches) any lasso
+ * edge. The edge check matters for concave lassos, where a segment can leave
+ * and re-enter the region even though both of its endpoints are inside.
  *
  * @param line the candidate line
  * @param lasso the lasso polygon vertices (implicitly closed)
  */
 export function lineHitsLasso(line: LassoLine, lasso: Pt[]): boolean {
-  if (lasso.length < 3) {
+  if (lasso.length < 3 || line.pts.length === 0) {
     return false
   }
   for (const p of line.pts) {
-    if (pointInPolygon(p, lasso)) {
-      return true
+    if (!pointInPolygon(p, lasso)) {
+      return false
     }
   }
   const segCount = line.closed ? line.pts.length : line.pts.length - 1
@@ -127,15 +129,15 @@ export function lineHitsLasso(line: LassoLine, lasso: Pt[]): boolean {
       const c = lasso[j]
       const d = lasso[(j + 1) % lasso.length]
       if (segmentsIntersect(a, b, c, d)) {
-        return true
+        return false
       }
     }
   }
-  return false
+  return true
 }
 
 /**
- * The ids of every line inside or crossing the lasso.
+ * The ids of every line completely enclosed by the lasso.
  *
  * @param lines the candidate lines
  * @param lasso the lasso polygon vertices

@@ -1,6 +1,10 @@
 import _ from "lodash"
 
 import {
+  isRecentCurveConversion,
+  markCurveConversion
+} from "../../common/curve_burst_state"
+import {
   consumeArmedKey,
   isKeyArmed,
   isKeyHeld
@@ -650,10 +654,26 @@ export class Polygon2D extends Label2D {
             isKeyArmed(Key.D_UP, nowMs) ||
             isKeyArmed(Key.D_LOW, nowMs))
         if (curveKey) {
-          // Convert line to bezier curve; the drag that follows shapes it
           consumeArmedKey(Key.C_UP)
           consumeArmedKey(Key.C_LOW)
-          this.lineToCurve()
+          const preType = this._points[this._highlightedHandle - 1].type
+          if (
+            preType === PathPointType.CURVE &&
+            isRecentCurveConversion(this.labelId, nowMs)
+          ) {
+            // Same click burst (the 2nd/3rd press of a double-click-drag
+            // with C held): the point was JUST converted — don't toggle it
+            // back to straight, drag the control point instead. This is what
+            // lets hold-C + double-click + drag work on trackpads, where the
+            // gesture arrives as separate presses.
+            this.toCache()
+          } else {
+            // Convert line to bezier curve; the drag that follows shapes it
+            this.lineToCurve()
+            if (preType === PathPointType.MID) {
+              markCurveConversion(this.labelId, nowMs)
+            }
+          }
         } else if (deleteKey) {
           // Delete vertex
           // Disable deletion for now
@@ -764,7 +784,10 @@ export class Polygon2D extends Label2D {
       this._state = Polygon2DState.FINISHED
       this.editing = false
       this.clearSnapState()
-      this._highlightedHandle = -1
+      // Keep the handle highlighted. Trackpad drags arrive as tap, then
+      // press-and-slide, with NO mousemove in between to re-highlight; a C+tap
+      // converts the point and the follow-up press must still land on it. Any
+      // real cursor move re-highlights (or clears) via onMouseMove anyway.
     } else if (this.editing && this._state === Polygon2DState.MOVE) {
       // Finish dragging edges
       this._state = Polygon2DState.FINISHED

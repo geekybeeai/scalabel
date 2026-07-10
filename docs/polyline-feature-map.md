@@ -182,3 +182,23 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   recent plain press via the 3 s **arm window** (`armKey`/`isKeyArmed`/`consumeArmedKey`
   in `keyboard_state.ts`, one-shot, Ctrl/Meta chords excluded so Ctrl+C never arms):
   press C, release, click-drag within 3 s.
+- **Trackpad drags are split gestures and collide with the double-click pan window.**
+  A dblclick opens a 400 ms window during which any drag pans
+  (`openPanWindow`/`inPanWindow` in `pointer_pan_state.ts`); trackpad users start
+  drags with a double-tap, which used to feed the C+drag curve gesture into the pan
+  path. `shouldDeferPointerDown` (same file) is the single gate: clicks on a label
+  POINT — or on the body while that label still has a point handle highlighted —
+  bypass the pan window. Related: C+tap's `lineToCurve` puts the control points at
+  the 1/3 / 2/3 marks (out from under the cursor), and `Polygon2D.onMouseUp`
+  deliberately KEEPS `_highlightedHandle` after a reshape so the follow-up
+  press-and-slide (no mousemove between trackpad taps) still targets the point.
+- **Held-C double-clicks must not re-toggle the conversion.** `lineToCurve` is a
+  toggle (MID→curve, CURVE→mid), and every mousedown with C held/armed invokes
+  it — so the 2nd/3rd press of a hold-C double-click-drag used to straighten
+  the segment right back. `common/curve_burst_state.ts` records the last
+  MID→curve conversion per label; a C+press on a CURVE point within
+  `CURVE_BURST_WINDOW_MS` (600 ms) continues the gesture (drags the control
+  point) instead of toggling. Outside the window C+click on a control point
+  still straightens. The unified gesture on BOTH devices: hover the point,
+  hold C (or press+release within the 3 s arm window), click or double-click,
+  drag.

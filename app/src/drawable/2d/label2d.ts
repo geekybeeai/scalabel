@@ -108,6 +108,11 @@ export abstract class Label2D {
     return this._index
   }
 
+  /** get highlighted handle (-1 = none, 0 = body/edge, > 0 = a point) */
+  public get highlightedHandle(): number {
+    return this._highlightedHandle
+  }
+
   /** get category */
   public get category(): number[] {
     if (this._label?.category !== undefined) {

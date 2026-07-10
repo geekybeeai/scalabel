@@ -12,7 +12,7 @@ import {
   isArmed,
   didPan,
   reset as resetPanState,
-  inPanWindow
+  shouldDeferPointerDown
 } from "../common/pointer_pan_state"
 import { isCutMode, setCutMode } from "../common/cut_state"
 import { armKey, recordKeyDown, recordKeyUp } from "../common/keyboard_state"
@@ -668,8 +668,18 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // Empty canvas, OR within the post-double-click pan window: defer the
     // action. A drag pans (Viewer2D, via the armed flag); a click replays the
     // draw/select in onMouseUp. Arming (rather than returning early) inside the
-    // pan window ensures a click there is not silently dropped.
-    if (labelIndex < 0 || inPanWindow(Date.now())) {
+    // pan window ensures a click there is not silently dropped. A hit on a
+    // label POINT is never deferred — and neither is a body hit while the
+    // hovered label still has a point handle highlighted: trackpad users
+    // double-tap to start the C+drag curve gesture, and the pan window used
+    // to swallow that drag (the C+tap conversion also moves the control
+    // points to the 1/3 / 2/3 marks, out from under the cursor).
+    const hoveredLabel = this._labelHandler.highlightedLabel
+    const liveHandle =
+      hoveredLabel !== null && hoveredLabel.index === labelIndex
+        ? hoveredLabel.highlightedHandle
+        : -1
+    if (shouldDeferPointerDown(labelIndex, handleIndex, Date.now(), liveHandle)) {
       const rect = (this.display as HTMLDivElement).getBoundingClientRect()
       armEmptyDrag(e.clientX - rect.left, e.clientY - rect.top)
       this.setCursor("grab")
