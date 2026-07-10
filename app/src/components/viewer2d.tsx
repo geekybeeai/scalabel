@@ -22,6 +22,11 @@ import {
   onSegmentDeleteChange,
   resetSegmentDelete
 } from "../common/segment_delete_state"
+import {
+  armFreeform,
+  isFreeformArmed,
+  resetFreeform
+} from "../common/freeform_select_state"
 import { notifyGesture } from "../common/interaction_state"
 import { isFrameLoaded } from "../functional/state_util"
 import {
@@ -48,7 +53,11 @@ import {
   ViewerClassTypes,
   ViewerProps
 } from "./drawable_viewer"
-import { ContentCutIcon, DeleteSegmentIcon } from "./cut_icon"
+import {
+  ContentCutIcon,
+  DeleteSegmentIcon,
+  FreeformSelectIcon
+} from "./cut_icon"
 import ImageCanvas from "./image_canvas"
 import Label2dCanvas from "./label2d_canvas"
 
@@ -307,7 +316,8 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         widthResetButton,
         ...this.getHistoryButtons(),
         this.getCutButton(),
-        this.getDeleteSegmentButton()
+        this.getDeleteSegmentButton(),
+        this.getFreeformSelectButton()
       ]
     }
     return []
@@ -439,6 +449,47 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           edge={"start"}
         >
           <DeleteSegmentIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the freeform (lasso) select toolbar button. Arms a sticky mode that
+   * lassos polylines/polygons into the batch-delete set; clicking while armed
+   * disarms. Mutually exclusive with the cut and delete-segment tools.
+   *
+   * @return {JSX.Element} the freeform-select button
+   */
+  protected getFreeformSelectButton(): JSX.Element {
+    const armed = isFreeformArmed()
+    return (
+      <Tooltip
+        key={`freeformSelect2dButton${this.props.id}`}
+        title="Freeform select"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              resetFreeform()
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking &&
+              (this._viewerConfig as ImageViewerConfigType)?.showCurvesOnly !==
+                true
+            ) {
+              armFreeform()
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <FreeformSelectIcon />
         </IconButton>
       </Tooltip>
     )

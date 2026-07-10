@@ -60,3 +60,25 @@ export function DeleteSegmentIcon(props: SvgIconProps): JSX.Element {
     </SvgIcon>
   )
 }
+
+/**
+ * Lasso icon for the freeform-select tool: a dashed open loop with a small
+ * tail. Drawn with strokes (fill="none") so it reads as a marquee/lasso.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function FreeformSelectIcon(props: SvgIconProps): JSX.Element {
+  return (
+    <SvgIcon {...props}>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeDasharray="3 2"
+        strokeLinecap="round"
+        d="M12 4c4.5 0 8 2.9 8 6.5S16.5 17 12 17c-3 0-5.6-1-6.6-2.9"
+      />
+      <path d="M5 13.2l-1.9 4.1 4.1-1.2z" />
+    </SvgIcon>
+  )
+}
