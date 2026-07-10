@@ -789,6 +789,36 @@ export class Polygon2D extends Label2D {
   }
 
   /**
+   * Toggle a bezier curve at the currently highlighted midpoint / curve handle.
+   * Driven by the keyboard 'C' shortcut (see Label2DHandler) rather than a
+   * modifier-held click: the held-key state does not survive to the click,
+   * because selecting the line on that click rebuilds this drawable with a fresh
+   * (empty) key map — which is why C+click silently failed on trackpads. Acting
+   * on the keydown, while the midpoint is highlighted, sidesteps that entirely.
+   * Returns true if a conversion happened so the caller can commit it.
+   */
+  public toggleCurveAtHighlighted(): boolean {
+    if (
+      this._state !== Polygon2DState.FINISHED ||
+      this._highlightedHandle <= 0
+    ) {
+      return false
+    }
+    const point = this._points[this._highlightedHandle - 1]
+    if (
+      point === undefined ||
+      (point.type !== PathPointType.MID && point.type !== PathPointType.CURVE)
+    ) {
+      return false
+    }
+    this.toCache()
+    this.lineToCurve()
+    this.UpdateLabelShapes()
+    this._labelList.addUpdatedLabel(this)
+    return true
+  }
+
+  /**
    * to check whether the label is valid
    */
   public isValid(): boolean {

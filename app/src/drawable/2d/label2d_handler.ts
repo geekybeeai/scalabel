@@ -258,6 +258,9 @@ export class Label2DHandler {
       return
     }
 
+    // Remember whether this key was already held so OS key-repeat does not
+    // re-trigger one-shot keydown actions (e.g. the 'C' curve toggle below).
+    const wasAlreadyDown = this._pressedKey.has(e.key)
     this._pressedKey.add(e.key)
 
     // Propagate the key-down event only when exactly one key is pressed.
@@ -300,10 +303,29 @@ export class Label2DHandler {
 
     switch (e.key) {
       case Key.C_LOW:
-        if (this.isKeyDown(Key.CONTROL) || this.isKeyDown(Key.META)) {
+      case Key.C_UP:
+        if (
+          e.key === Key.C_LOW &&
+          (this.isKeyDown(Key.CONTROL) || this.isKeyDown(Key.META))
+        ) {
           e.preventDefault()
           this.copySelectedLabel()
           return
+        }
+        // Plain 'C' over a highlighted polyline midpoint toggles a bezier curve
+        // there. Handled on keydown rather than a modifier-held click: the
+        // held-key state is wiped when selecting the line rebuilds its drawable,
+        // so C+click silently failed on trackpads. The repeat guard stops OS
+        // auto-repeat from toggling the curve on and off many times per press.
+        if (
+          !wasAlreadyDown &&
+          !this.isKeyDown(Key.CONTROL) &&
+          !this.isKeyDown(Key.META) &&
+          this._highlightedLabel !== null &&
+          this._highlightedLabel.toggleCurveAtHighlighted()
+        ) {
+          commit2DLabels([...this._labelList.popUpdatedLabels()])
+          this._labelList.clearUpdatedLabels()
         }
         break
       case Key.V_LOW:
