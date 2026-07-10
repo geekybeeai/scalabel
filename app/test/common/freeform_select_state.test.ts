@@ -3,12 +3,20 @@ import {
   addFreeformPoint,
   armFreeform,
   beginFreeformPath,
+  completeRect,
   endFreeformPath,
   getFreeformPath,
+  getRectPreview,
+  getSelectionOverlay,
+  getSelectMode,
   isFreeformActive,
   isFreeformArmed,
   isFreeformDrawing,
-  resetFreeform
+  isRectSizing,
+  resetFreeform,
+  setRectFirstCorner,
+  setSelectMode,
+  updateRectCursor
 } from "../../src/common/freeform_select_state"
 import {
   armSegmentDelete,
@@ -81,5 +89,63 @@ describe("freeform_select_state", () => {
     armSegmentDelete()
     armFreeform()
     expect(isSegmentDeleteActive()).toBe(false)
+  })
+})
+
+describe("freeform_select_state rectangle mode", () => {
+  beforeEach(() => {
+    resetFreeform()
+    setSelectMode("freeform")
+  })
+
+  test("mode defaults to freeform and can switch", () => {
+    expect(getSelectMode()).toBe("freeform")
+    setSelectMode("rectangle")
+    expect(getSelectMode()).toBe("rectangle")
+  })
+
+  test("two-click lifecycle builds four ordered corners", () => {
+    setSelectMode("rectangle")
+    expect(isRectSizing()).toBe(false)
+    setRectFirstCorner({ x: 10, y: 20 })
+    expect(isRectSizing()).toBe(true)
+    updateRectCursor({ x: 40, y: 60 })
+    expect(getRectPreview()).toEqual([
+      { x: 10, y: 20 },
+      { x: 40, y: 20 },
+      { x: 40, y: 60 },
+      { x: 10, y: 60 }
+    ])
+    const corners = completeRect({ x: 40, y: 60 })
+    expect(corners).toEqual([
+      { x: 10, y: 20 },
+      { x: 40, y: 20 },
+      { x: 40, y: 60 },
+      { x: 10, y: 60 }
+    ])
+    expect(isRectSizing()).toBe(false)
+    expect(getRectPreview()).toBeNull()
+  })
+
+  test("too-small rectangle completes to null and clears sizing", () => {
+    setSelectMode("rectangle")
+    setRectFirstCorner({ x: 10, y: 10 })
+    expect(completeRect({ x: 11, y: 11 })).toBeNull()
+    expect(isRectSizing()).toBe(false)
+  })
+
+  test("getSelectionOverlay returns the rectangle preview in rectangle mode", () => {
+    setSelectMode("rectangle")
+    setRectFirstCorner({ x: 0, y: 0 })
+    updateRectCursor({ x: 30, y: 30 })
+    expect(getSelectionOverlay()).toHaveLength(4)
+  })
+
+  test("resetFreeform clears rectangle state but keeps the mode", () => {
+    setSelectMode("rectangle")
+    setRectFirstCorner({ x: 0, y: 0 })
+    resetFreeform()
+    expect(isRectSizing()).toBe(false)
+    expect(getSelectMode()).toBe("rectangle")
   })
 })

@@ -23,6 +23,16 @@ let armed = false
 let drawing = false
 let path: Pt[] = []
 
+/** The selection sub-mode; a sticky user preference. */
+export type SelectMode = "freeform" | "rectangle"
+
+/** Minimum |dx| and |dy| (image px) for a rectangle to count as sized. */
+const MIN_RECT_PX = 3
+
+let mode: SelectMode = "freeform"
+let rectFirst: Pt | null = null
+let rectCursor: Pt | null = null
+
 const listeners = new Set<() => void>()
 
 /** Notify all listeners of a change. */
@@ -58,12 +68,20 @@ export function armFreeform(): void {
 
 /** Disarm and clear any in-progress lasso. Safe to call when already off. */
 export function resetFreeform(): void {
-  if (!armed && !drawing && path.length === 0) {
+  if (
+    !armed &&
+    !drawing &&
+    path.length === 0 &&
+    rectFirst === null &&
+    rectCursor === null
+  ) {
     return
   }
   armed = false
   drawing = false
   path = []
+  rectFirst = null
+  rectCursor = null
   notify()
 }
 
@@ -128,6 +146,112 @@ export function onFreeformChange(listener: () => void): () => void {
   return () => {
     listeners.delete(listener)
   }
+}
+
+/** The current selection sub-mode (freeform lasso or rectangle). */
+export function getSelectMode(): SelectMode {
+  return mode
+}
+
+/**
+ * Set the selection sub-mode. Clears any in-progress rectangle but leaves the
+ * armed state untouched (switching modes should not disarm the tool).
+ *
+ * @param m the new mode
+ */
+export function setSelectMode(m: SelectMode): void {
+  if (mode === m) {
+    return
+  }
+  mode = m
+  rectFirst = null
+  rectCursor = null
+  notify()
+}
+
+/** Whether a rectangle's first corner is placed and awaiting the second. */
+export function isRectSizing(): boolean {
+  return rectFirst !== null
+}
+
+/**
+ * Record the rectangle's first corner (first click). Enters the sizing phase.
+ *
+ * @param pt the first corner (image frame)
+ */
+export function setRectFirstCorner(pt: Pt): void {
+  rectFirst = { x: pt.x, y: pt.y }
+  rectCursor = { x: pt.x, y: pt.y }
+  notify()
+}
+
+/**
+ * Update the live opposite corner while sizing (mouse move). No-op if the
+ * first corner has not been placed yet.
+ *
+ * @param pt the current cursor position (image frame)
+ */
+export function updateRectCursor(pt: Pt): void {
+  if (rectFirst === null) {
+    return
+  }
+  rectCursor = { x: pt.x, y: pt.y }
+  notify()
+}
+
+/**
+ * The four rectangle corners for the current first corner + cursor, in a
+ * consistent traversal order, or null when not sizing.
+ */
+export function getRectPreview(): Pt[] | null {
+  if (rectFirst === null || rectCursor === null) {
+    return null
+  }
+  return [
+    { x: rectFirst.x, y: rectFirst.y },
+    { x: rectCursor.x, y: rectFirst.y },
+    { x: rectCursor.x, y: rectCursor.y },
+    { x: rectFirst.x, y: rectCursor.y }
+  ]
+}
+
+/**
+ * Finish the rectangle (second click): returns its four corners, or null if it
+ * is too small (a click without sizing). Clears the rectangle state either way.
+ *
+ * @param pt the opposite corner (image frame)
+ */
+export function completeRect(pt: Pt): Pt[] | null {
+  if (rectFirst === null) {
+    return null
+  }
+  const first = rectFirst
+  const dx = Math.abs(pt.x - first.x)
+  const dy = Math.abs(pt.y - first.y)
+  rectFirst = null
+  rectCursor = null
+  notify()
+  if (dx < MIN_RECT_PX || dy < MIN_RECT_PX) {
+    return null
+  }
+  return [
+    { x: first.x, y: first.y },
+    { x: pt.x, y: first.y },
+    { x: pt.x, y: pt.y },
+    { x: first.x, y: pt.y }
+  ]
+}
+
+/**
+ * The vertices the overlay should paint: the in-progress lasso path in
+ * freeform mode, or the rectangle preview in rectangle mode (empty when
+ * nothing is in progress).
+ */
+export function getSelectionOverlay(): Pt[] {
+  if (mode === "rectangle") {
+    return getRectPreview() ?? []
+  }
+  return path
 }
 
 // Mutual exclusion: arming the cut or delete-segment tool cancels freeform.
