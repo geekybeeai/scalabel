@@ -31,6 +31,17 @@ import {
   toggleMarked
 } from "../common/multi_delete_state"
 import {
+  addFreeformPoint,
+  beginFreeformPath,
+  endFreeformPath,
+  getFreeformPath,
+  isFreeformActive,
+  isFreeformDrawing,
+  onFreeformChange,
+  resetFreeform
+} from "../common/freeform_select_state"
+import { runFreeformSelect } from "../drawable/2d/freeform_select"
+import {
   CUT_CLICK_RADIUS_PX,
   CUT_SNAP_RADIUS_PX,
   performCut
@@ -139,6 +150,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _offSegmentDelete: (() => void) | null = null
   /** unsubscribe from marked-for-deletion set changes */
   private _offMarkedChange: (() => void) | null = null
+  /** unsubscribe from freeform-select tool changes */
+  private _offFreeformChange: (() => void) | null = null
   /** pending commit timer for the delete-segment preview */
   private _segmentDeleteTimer: number | null = null
   /** rAF handle for the marching-ants animation */
@@ -203,6 +216,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.redraw()
       this.syncMarchingAnts()
     })
+    this._offFreeformChange = onFreeformChange(() => {
+      this.redraw()
+    })
   }
 
   /**
@@ -224,6 +240,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (this._offMarkedChange !== null) {
       this._offMarkedChange()
       this._offMarkedChange = null
+    }
+    if (this._offFreeformChange !== null) {
+      this._offFreeformChange()
+      this._offFreeformChange = null
     }
     this.clearSegmentDeleteTimers()
   }
@@ -445,6 +465,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         this.labelContext,
         this.displayToImageRatio * this._upResRatio
       )
+      this.drawFreeformOverlay(
+        this.labelContext,
+        this.displayToImageRatio * this._upResRatio
+      )
     }
     return true
   }
@@ -489,15 +513,27 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // get mouse position in image coordinates
     const mousePos = this.getMousePos(e)
     const [labelIndex, handleIndex] = this.fetchHandleId(mousePos)
-    console.log("[DEBUG] Canvas.onMouseDown hit testing:", {
-      mousePos,
-      labelIndex,
-      handleIndex,
-      inPanWindow: inPanWindow(Date.now()),
-      hasSelectedLabels: this._labelHandler["hasSelectedLabels"](),
-      isEditingSelectedLabels: this._labelHandler["isEditingSelectedLabels"]()
-    })
     resetPanState()
+    // Freeform (lasso) select: armed via the toolbar, or ad-hoc via Shift+drag.
+    // Begins the lasso here so the empty-space pan-arming below never runs.
+    // Ctrl/Meta are excluded so Ctrl+click-mark and Ctrl-pan keep working.
+    const ffConfig = this.state.user.viewerConfigs[
+      this.props.id
+    ] as ImageViewerConfigType
+    const freeformAllowed =
+      !this._labelList.isDrawingInProgress() &&
+      !this.state.task.config.tracking &&
+      ffConfig?.showCurvesOnly !== true
+    if (
+      (isFreeformActive() || e.shiftKey) &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      freeformAllowed
+    ) {
+      beginFreeformPath(mousePos)
+      this.setCursor("crosshair")
+      return
+    }
     // Control + click for dragging
     // get mouse position in image coordinates
     // Ctrl/Cmd drag pans anywhere via Viewer2D; never draw/edit on it.
@@ -623,7 +659,6 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // draw/select in onMouseUp. Arming (rather than returning early) inside the
     // pan window ensures a click there is not silently dropped.
     if (labelIndex < 0 || inPanWindow(Date.now())) {
-      console.log("[DEBUG] Canvas.onMouseDown REJECTED: labelIndex < 0 or inPanWindow", { labelIndex })
       const rect = (this.display as HTMLDivElement).getBoundingClientRect()
       armEmptyDrag(e.clientX - rect.left, e.clientY - rect.top)
       this.setCursor("grab")
@@ -644,6 +679,27 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   public onMouseUp(e: React.MouseEvent<HTMLCanvasElement>): void {
     if (e.button !== 0 || this.checkFreeze()) {
+      return
+    }
+
+    if (isFreeformDrawing()) {
+      const path = endFreeformPath()
+      if (path.length >= 3) {
+        const config = this.state.user.viewerConfigs[this.props.id]
+        runFreeformSelect(path, {
+          hideLabels: config.hideLabels,
+          hiddenLabelTypes:
+            config.hiddenLabelTypes !== undefined
+              ? config.hiddenLabelTypes
+              : [],
+          hiddenCategories:
+            config.hiddenCategories !== undefined
+              ? config.hiddenCategories
+              : []
+        })
+      }
+      this.setDefaultCursor()
+      this._labelList.onDrawableUpdate()
       return
     }
 
@@ -683,6 +739,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.crosshair.current.onMouseMove(e)
     }
 
+    if (isFreeformDrawing()) {
+      addFreeformPoint(this.getMousePos(e))
+      this.setCursor("crosshair")
+      return
+    }
+
     if (isArmed()) {
       // While a deferred empty-space gesture is in progress, do not draw/edit.
       // Viewer2D decides pan-vs-nothing from the movement threshold.
@@ -715,6 +777,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (isCutMode() || isSegmentDeleteActive()) {
       // The scissors cursor overrides hover cursors while a tool is armed.
       this.setCursor(CUT_CURSOR)
+    }
+    if (isFreeformActive()) {
+      this.setCursor("crosshair")
     }
   }
 
@@ -884,6 +949,37 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   }
 
   /**
+   * Draw the in-progress freeform lasso: the accumulated path as a dashed
+   * magenta polyline, closed back to its start. Drawn on top of the labels
+   * like the delete-segment overlay.
+   *
+   * @param context the label canvas context
+   * @param ratio image-to-canvas scale (displayToImageRatio * upResRatio)
+   */
+  private drawFreeformOverlay(
+    context: CanvasRenderingContext2D,
+    ratio: number
+  ): void {
+    const path = getFreeformPath()
+    if (path.length < 2) {
+      return
+    }
+    context.save()
+    context.beginPath()
+    context.strokeStyle = DELETE_HIGHLIGHT_COLOR
+    context.lineWidth = 2
+    context.setLineDash(DASH_LINE)
+    context.lineDashOffset = -getAntsOffset()
+    context.moveTo(path[0].x * ratio, path[0].y * ratio)
+    for (let i = 1; i < path.length; i++) {
+      context.lineTo(path[i].x * ratio, path[i].y * ratio)
+    }
+    context.closePath()
+    context.stroke()
+    context.restore()
+  }
+
+  /**
    * Callback function when key is down
    *
    * @param {KeyboardEvent} e - event
@@ -910,6 +1006,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (e.key === Key.ESCAPE && markedCount() > 0) {
       // Escape clears the batch-delete selection (redraw via the subscription).
       clearMarked()
+      return
+    }
+
+    if (e.key === Key.ESCAPE && isFreeformActive()) {
+      // Escape disarms the freeform tool and drops any in-progress lasso.
+      resetFreeform()
+      this.setDefaultCursor()
       return
     }
 
@@ -963,6 +1066,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         setCutMode(false)
         resetSegmentDelete()
         clearMarked()
+        resetFreeform()
       }
       this._cutItemIndex = state.user.select.item
     }
