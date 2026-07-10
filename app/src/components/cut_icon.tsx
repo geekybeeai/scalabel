@@ -82,3 +82,26 @@ export function FreeformSelectIcon(props: SvgIconProps): JSX.Element {
     </SvgIcon>
   )
 }
+
+/**
+ * Rectangle-marquee icon for the rectangle select mode: a dashed axis-aligned
+ * rectangle. Mirrors FreeformSelectIcon (strokes, fill="none").
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function RectangleSelectIcon(props: SvgIconProps): JSX.Element {
+  return (
+    <SvgIcon {...props}>
+      <rect
+        x={4}
+        y={6}
+        width={16}
+        height={12}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeDasharray="3 2"
+      />
+    </SvgIcon>
+  )
+}
