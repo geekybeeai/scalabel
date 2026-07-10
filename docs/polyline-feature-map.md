@@ -169,10 +169,16 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
 - **Per-instance key maps die mid-click.** The select-on-click dispatch rebuilds
   drawables with fresh, empty `_keyDownMap`s (and the handler's pressed-key set can be
   cleared by the same dispatch), so gating a mousedown action on `this.isKeyDown(...)`
-  silently fails — reproducibly on trackpads. Read held keys from
-  `common/keyboard_state.ts` (module-level, fed by Label2dCanvas's document listeners,
-  rebuild-proof) — see the C/D checks in `polygon2d.ts onMouseDown`. Do NOT "fix" this by
-  moving the action to bare keydown: C's gesture is convert-on-click **then drag to
-  shape**; keydown-only conversion was tried and rejected (hair-trigger, no drag). And
-  keep exactly ONE trigger per action — a keydown path plus a click path double-fires
-  and undoes/corrupts the edit.
+  silently fails. Read held keys from `common/keyboard_state.ts` (module-level, fed by
+  Label2dCanvas's document listeners, rebuild-proof) — see the C/D checks in
+  `polygon2d.ts onMouseDown`. Do NOT "fix" this by moving the action to bare keydown:
+  C's gesture is convert-on-click **then drag to shape**; keydown-only conversion was
+  tried and rejected (hair-trigger, no drag). And keep exactly ONE trigger per action —
+  a keydown path plus a click path double-fires and undoes/corrupts the edit.
+- **Trackpads physically cannot hold-key + click.** Laptop palm rejection ("disable
+  touchpad while typing") suppresses taps while any key is held; auto-repeat keeps
+  resetting the suppression timer, so C-held clicks never land and the click that
+  finally does arrives after keyup. Hold-key+click gestures therefore also accept a
+  recent plain press via the 3 s **arm window** (`armKey`/`isKeyArmed`/`consumeArmedKey`
+  in `keyboard_state.ts`, one-shot, Ctrl/Meta chords excluded so Ctrl+C never arms):
+  press C, release, click-drag within 3 s.

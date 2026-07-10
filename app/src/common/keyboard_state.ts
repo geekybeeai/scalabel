@@ -12,12 +12,58 @@
 const held = new Set<string>()
 
 /**
+ * Laptop palm-rejection ("disable touchpad while typing") suppresses trackpad
+ * taps while a key is held — key auto-repeat keeps resetting the suppression
+ * timer, so users physically cannot hold C/D and click on a trackpad; the
+ * click only lands after the key is released. The "arm window" makes those
+ * gestures sequential: a plain (unmodified) key press arms the key for
+ * KEY_ARM_WINDOW_MS, and click-time checks accept an armed key as if it were
+ * still held. Arms are one-shot: consumed on use.
+ */
+export const KEY_ARM_WINDOW_MS = 3000
+
+/** Per-key timestamp (ms) of the last plain press, for the arm window. */
+const armedAtMs = new Map<string, number>()
+
+/**
  * Record a key press. Call from the document keydown listener.
  *
  * @param key the KeyboardEvent.key value
  */
 export function recordKeyDown(key: string): void {
   held.add(key)
+}
+
+/**
+ * Arm a key for the sequential press-then-click window. Call from the
+ * document keydown listener for plain presses only (no Ctrl/Meta chord, so
+ * Ctrl+C copy does not arm a curve conversion). Key repeats refresh the arm.
+ *
+ * @param key the KeyboardEvent.key value
+ * @param nowMs the current time — pass Date.now()
+ */
+export function armKey(key: string, nowMs: number): void {
+  armedAtMs.set(key, nowMs)
+}
+
+/**
+ * Whether the key was plainly pressed within the arm window.
+ *
+ * @param key the KeyboardEvent.key value
+ * @param nowMs the current time — pass Date.now()
+ */
+export function isKeyArmed(key: string, nowMs: number): boolean {
+  const at = armedAtMs.get(key)
+  return at !== undefined && nowMs - at <= KEY_ARM_WINDOW_MS
+}
+
+/**
+ * Consume a key's arm (one-shot semantics — using an armed gesture spends it).
+ *
+ * @param key the KeyboardEvent.key value
+ */
+export function consumeArmedKey(key: string): void {
+  armedAtMs.delete(key)
 }
 
 /**
@@ -38,9 +84,10 @@ export function isKeyHeld(key: string): boolean {
   return held.has(key)
 }
 
-/** Drop all held keys (focus loss can eat the matching keyup events). */
+/** Drop all held keys and arms (focus loss can eat the matching keyups). */
 export function resetHeldKeys(): void {
   held.clear()
+  armedAtMs.clear()
 }
 
 // A key stuck "held" after focus loss would fire phantom C/D click actions

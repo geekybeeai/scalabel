@@ -1,6 +1,10 @@
 import _ from "lodash"
 
-import { isKeyHeld } from "../../common/keyboard_state"
+import {
+  consumeArmedKey,
+  isKeyArmed,
+  isKeyHeld
+} from "../../common/keyboard_state"
 import { isMarked } from "../../common/multi_delete_state"
 import { Cursor, Key, LabelTypeName } from "../../const/common"
 import { makeLabel } from "../../functional/states"
@@ -629,14 +633,32 @@ export class Polygon2D extends Label2D {
         // Held-key checks read the module-level keyboard state (fed by the
         // canvas's document listeners), NOT this instance's _keyDownMap: the
         // select-on-click dispatch rebuilds this drawable mid-gesture with an
-        // empty key map, which made C/D+click silently fail (reproducibly on
-        // trackpads). See common/keyboard_state.ts.
-        if (isKeyHeld(Key.C_UP) || isKeyHeld(Key.C_LOW)) {
+        // empty key map, which made C/D+click silently fail. A recent plain
+        // press also counts (arm window): laptop palm rejection blocks
+        // trackpad taps while a key is held, so on trackpads the gesture is
+        // press C/D, release, then click. See common/keyboard_state.ts.
+        const nowMs = Date.now()
+        const curveKey =
+          isKeyHeld(Key.C_UP) ||
+          isKeyHeld(Key.C_LOW) ||
+          isKeyArmed(Key.C_UP, nowMs) ||
+          isKeyArmed(Key.C_LOW, nowMs)
+        const deleteKey =
+          !curveKey &&
+          (isKeyHeld(Key.D_UP) ||
+            isKeyHeld(Key.D_LOW) ||
+            isKeyArmed(Key.D_UP, nowMs) ||
+            isKeyArmed(Key.D_LOW, nowMs))
+        if (curveKey) {
           // Convert line to bezier curve; the drag that follows shapes it
+          consumeArmedKey(Key.C_UP)
+          consumeArmedKey(Key.C_LOW)
           this.lineToCurve()
-        } else if (isKeyHeld(Key.D_UP) || isKeyHeld(Key.D_LOW)) {
+        } else if (deleteKey) {
           // Delete vertex
           // Disable deletion for now
+          consumeArmedKey(Key.D_UP)
+          consumeArmedKey(Key.D_LOW)
           this.toCache()
           this.deleteVertex()
         } else {
