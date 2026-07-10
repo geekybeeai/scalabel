@@ -144,7 +144,9 @@ export class ImageCanvas extends DrawableCanvas<Props> {
     if (this.imageCanvas !== null && this.imageContext !== null) {
       const item = this.state.user.select.item
       const sensor = this.state.user.viewerConfigs[this.props.id].sensor
+      const config = this.state.user.viewerConfigs[this.props.id]
       if (
+        config.hideImage !== true &&
         isFrameLoaded(this.state, item, sensor) &&
         item < Session.images.length &&
         sensor in Session.images[item]
@@ -155,6 +157,8 @@ export class ImageCanvas extends DrawableCanvas<Props> {
         const image = Session.images[item][sensor]
         drawImageOnCanvas(this.imageCanvas, this.imageContext, image, item, sensor)
       } else {
+        // Frame not loaded OR the image is toggled off: leave the image layer
+        // blank. Labels live on separate canvases and are unaffected.
         clearCanvas(this.imageCanvas, this.imageContext)
       }
     }

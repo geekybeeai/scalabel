@@ -211,6 +211,8 @@ export interface ViewerConfigType {
   hiddenCategories?: number[]
   /** display only the curved parts of polylines (view-only filter) */
   showCurvesOnly?: boolean
+  /** whether to hide the underlying image (labels stay visible) */
+  hideImage?: boolean
 }
 
 export interface ImageViewerConfigType extends ViewerConfigType {
