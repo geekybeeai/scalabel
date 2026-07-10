@@ -305,13 +305,13 @@ class MultipleSelect extends Component<Props> {
                   (this.props.hiddenCategories ?? []).length < categories.length
                 }
                 onChange={() => this.props.onToggleAllCategoryVisibility?.()}
-                title="Toggle visibility of all categories"
+                title="Toggle visibility of all lines"
                 style={{ padding: 2, color: "inherit" }}
               />
               <span
                 style={{ fontSize: 12, opacity: 0.75, marginRight: 16 }}
               >
-                Show all
+                Show lines
               </span>
               {this.props.onToggleTags !== undefined && (
                 <>
