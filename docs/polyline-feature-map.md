@@ -17,8 +17,10 @@ Open when: changing how a line is drawn, edited, its vertices/curves, merge, val
 
 - `app/src/drawable/2d/polygon2d.ts` — **`Polygon2D`** (the line/polygon). Key symbols:
   `_points` (PathPoint2D[]), `Polygon2DState` (FREE/DRAW/FINISHED/RESHAPE/MOVE),
-  `isDrawing`, `onMouseDown/Move/Up`, `onKeyDown` (**D**=delete vertex, **Enter**=finish,
-  **C**=curve), `addVertex`, `deleteVertex`, `shapes()` (**skips MID points**),
+  `isDrawing`, `onMouseDown/Move/Up` (**C** held/armed + click a MID handle =
+  convert segment to curve; one-way — clicking a CURVE point always drags),
+  `onKeyDown` (**D**=delete vertex, **Enter**=finish),
+  `addVertex`, `deleteVertex`, `shapes()` (**skips MID points**),
   `updateShapes` (rebuilds `_points` from state, **reconstructs MID midpoints**),
   `initTempLabel`, `mergeWith` (endpoint snap/merge), `isValid`. `_closed` = polygon vs
   polyline.
@@ -192,13 +194,18 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   the 1/3 / 2/3 marks (out from under the cursor), and `Polygon2D.onMouseUp`
   deliberately KEEPS `_highlightedHandle` after a reshape so the follow-up
   press-and-slide (no mousemove between trackpad taps) still targets the point.
-- **Held-C double-clicks must not re-toggle the conversion.** `lineToCurve` is a
-  toggle (MID→curve, CURVE→mid), and every mousedown with C held/armed invokes
-  it — so the 2nd/3rd press of a hold-C double-click-drag used to straighten
-  the segment right back. `common/curve_burst_state.ts` records the last
-  MID→curve conversion per label; a C+press on a CURVE point within
-  `CURVE_BURST_WINDOW_MS` (600 ms) continues the gesture (drags the control
-  point) instead of toggling. Outside the window C+click on a control point
-  still straightens. The unified gesture on BOTH devices: hover the point,
-  hold C (or press+release within the 3 s arm window), click or double-click,
-  drag.
+- **C never straightens a curve.** `lineToCurve` is one-way (MID→curve only);
+  clicking a cyan CURVE control point ALWAYS drags it, whatever C's held/armed
+  state. The old CURVE→straight toggle fired on stale C signals (held C past
+  the 600 ms burst window, or the 3 s arm re-armed by auto-repeat until keyup)
+  and destroyed curves during normal adjust clicks — see
+  `docs/superpowers/specs/2026-07-16-c-curve-adjust-reset-fix-design.md`.
+  Held-C double-click still "continues the gesture" structurally: press 1
+  converts (control point 1 takes the former MID's array slot; spatially it
+  sits at the 1/3 mark), and the kept `_highlightedHandle` + no hit-test on
+  mousedown means press 2 targets that CURVE point and drags it. Unwanted
+  curves are removed via undo, deleting an adjacent LINE vertex (its control
+  points are swept up), or deleting the line — on a 2-vertex line after
+  history is gone, delete-and-redraw is the only recovery. The unified
+  gesture on BOTH devices: hover the MID, hold C (or press+release within
+  the 3 s arm window), click or double-click, drag.
