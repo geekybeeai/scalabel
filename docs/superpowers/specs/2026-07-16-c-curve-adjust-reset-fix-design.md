@@ -70,8 +70,19 @@ vertex, Enter finishes) are untouched.
 - Within 3 s of a plain C press, clicking a MID handle converts it even if
   the user only meant to drag it (pre-existing, required for trackpads). Now
   non-destructive by construction: immediately visible, one Ctrl+Z away.
+- **Arm-pending widening (introduced by this fix):** with consumption moved
+  to conversion-time, a C-armed click on a CURVE or LINE point no longer
+  spends the arm — so "press C, adjust a cyan point, then click a MID 2 s
+  later" now converts that MID where today it would promote-and-drag it.
+  Same non-destructive residual class as above; accepted.
 - Once curved, a segment cannot be surgically straightened later without
   undo/vertex-delete/line-delete. Explicitly accepted by the product owner.
+  Stated outright for the modal lane case: on a **2-vertex polyline**,
+  D-recovery is unavailable (`deleteVertex` requires ≥ 3 LINE vertices on
+  open lines, ≥ 4 closed), and draw history is cleared on item change
+  (`label2d_handler.ts updateState` → `drawHistory.reset()`), so once
+  Ctrl+Z is gone the only recovery for an unwanted curve on a minimal line
+  is deleting and redrawing that line.
 
 ### Supersedes
 
@@ -88,7 +99,18 @@ everywhere else (undo, vertex delete, line delete).
 - In the `curveKey` branch: perform the conversion **only when the clicked
   point's type is MID** (then consume the arm and let the drag shape the
   curve). For any other point type, fall through to the plain-drag path
-  (`toCache()` + drag) without consuming the arm.
+  (`toCache()` + drag) without consuming the arm. The clicked point's type
+  (today's `preType`) survives as the gate — it just no longer feeds a burst
+  check. **Constraint:** the delete branch must remain unreachable while
+  `curveKey` is true (today via the `!curveKey &&` gate) — a C+D+click on a
+  LINE vertex must drag, never delete. Do not restructure the branch in a
+  way that lets a curveKey-true non-MID click reach the delete path.
+- The conversion path deliberately does not call `toCache()` (it never has;
+  `_startingPoints` stays stale during a conversion-drag). Harmless — the
+  invalid-revert in `onMouseUp` cannot fire for curve edits, since validity
+  is computed from LINE vertices which conversion and control-point drags
+  never move — but add a one-line comment there so the asymmetry with the
+  fall-through path doesn't read as a bug.
 - Remove the `isRecentCurveConversion` check and `markCurveConversion` call;
   drop the `curve_burst_state` import.
 - Remove `lineToCurve`'s now-unreachable `PathPointType.CURVE` case. The
@@ -124,9 +146,14 @@ the designated recovery path.
 ## Edge cases
 
 - **Held-C double-click on a MID** (the mouse "continue gesture"): press 1
-  converts — the point under the cursor becomes control point 1; press 2 now
-  lands on a CURVE point → drags it. Same behavior as the old burst window
-  provided, but structural and permanent instead of 600 ms.
+  converts — `lineToCurve` writes control point 1 into the former MID's
+  **array slot**, though spatially it sits at the segment's 1/3 mark, out
+  from under the cursor. The gesture still works because `_highlightedHandle`
+  is unchanged, `onMouseUp` preserves it, and nothing on the mousedown path
+  re-runs the hit test (only `Label2DHandler.onMouseMove` reassigns the
+  highlight) — so press 2 targets a CURVE-typed point at the kept handle and
+  drags it. Same behavior as the old burst window provided, but structural
+  and permanent instead of 600 ms.
 - **C+click on a LINE vertex:** plain drag (the MID gate makes today's
   implicit no-case explicit).
 - **C and D both active:** C wins (existing precedence, unchanged).
@@ -146,9 +173,20 @@ the designated recovery path.
   2. Convert → keep C held > 600 ms → click-drag a cyan point → must adjust.
   3. Convert → wait > 3 s → click-drag a cyan point → must adjust.
   4. Held-C double-click-drag on a MID → curve created and shaped (continue
-     gesture intact).
+     gesture intact). **Constraint: do not synthesize a mousemove between
+     the two mousedowns** — a move re-runs the hit test at the former
+     midpoint location, lands on the edge (handle 0), and press 2 enters the
+     MOVE branch instead of the point gesture.
   5. Regression: D+click deletes a LINE vertex; plain drag of LINE/MID
      unchanged; Ctrl+Z after a conversion restores the straight segment.
+  6. C+click on a LINE vertex → plain drag (the new MID gate's genuinely new
+     conditional; today this click reaches `lineToCurve`'s empty fall-through
+     without caching, so behavior visibly changes to a proper cached drag).
+  7. Closed polygon: convert a MID and adjust its control points (confirms
+     the shared-path claim).
+  8. Curves-only mode ON: drag a cyan point of a visible curve group
+     (confirms adjustment works under the display filter now that this spec
+     retires that feature's C-revert cleanup workflow).
 - Drawable jest suites (`app/test/drawable/`) cannot load in this
   environment (native canvas + redis) — do not add suites there; geometry
   logic is unchanged and `curve_groups`/cut tests keep covering CURVE-typed
