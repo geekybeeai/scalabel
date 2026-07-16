@@ -209,3 +209,13 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   history is gone, delete-and-redraw is the only recovery. The unified
   gesture on BOTH devices: hover the MID, hold C (or press+release within
   the 3 s arm window), click or double-click, drag.
+- **Closed rings must START with a LINE anchor.** `draw()`'s path builder
+  (`moveTo(points[0])`), `updateShapes`' closing-MID insertion, and
+  `curveGroupIndices` all assume `_points[0]` is a vertex. `getVertices()`
+  returns anchors AND curve control points (it only filters MIDs), so any
+  code that removes an anchor from a ring can strand control points at the
+  head. Both `deleteVertex` and `mergeWith`'s self-close branch restore the
+  invariant by rotating (`while points[0] !== LINE: shift→push`) — do the
+  same in any new ring-editing code. Symptom if violated: the outline passes
+  through cyan control points and a stray pale MID handle appears inside the
+  curve group.
