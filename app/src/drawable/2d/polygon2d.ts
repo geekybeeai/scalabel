@@ -259,6 +259,23 @@ export class Polygon2D extends Label2D {
         vertices.pop() // Remove end vertex
       }
 
+      // The ring must start with a LINE anchor: draw()'s path builder,
+      // updateShapes' closing-MID insertion, and curveGroupIndices all
+      // assume points[0] is a vertex. getVertices() also returns CURVE
+      // control points, so removing the dragged duplicate endpoint above
+      // can strand its curve's control points at the array head (outline
+      // anchored at a control point, bogus MID inside the group). Rotate
+      // until an anchor leads — same normalization as deleteVertex; the
+      // stranded pair becomes a legal wrap-around curve group.
+      if (vertices.some((v) => v.type === PathPointType.LINE)) {
+        while (vertices[0].type !== PathPointType.LINE) {
+          const point = vertices.shift()
+          if (point !== undefined) {
+            vertices.push(point)
+          }
+        }
+      }
+
       this._closed = true
       if (this._label !== null) {
         this._label.closed = true
