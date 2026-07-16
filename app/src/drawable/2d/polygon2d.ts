@@ -795,13 +795,6 @@ export class Polygon2D extends Label2D {
       }
     }
     this.UpdateLabelShapes()
-    console.log("[DEBUG] Polygon2D.onMouseUp completed:", {
-      editing: this.editing,
-      state: this._state,
-      highlightedHandle: this._highlightedHandle,
-      snapTargetPolyline: this._snapTargetPolyline ? { index: this._snapTargetPolyline.index } : null,
-      snapTargetPointIndex: this._snapTargetPointIndex
-    })
     return true
   }
 
