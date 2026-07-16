@@ -1,10 +1,6 @@
 import _ from "lodash"
 
 import {
-  isRecentCurveConversion,
-  markCurveConversion
-} from "../../common/curve_burst_state"
-import {
   consumeArmedKey,
   isKeyArmed,
   isKeyHeld
@@ -647,46 +643,43 @@ export class Polygon2D extends Label2D {
           isKeyHeld(Key.C_LOW) ||
           isKeyArmed(Key.C_UP, nowMs) ||
           isKeyArmed(Key.C_LOW, nowMs)
+        // deleteKey's !curveKey gate is load-bearing: the delete branch must
+        // stay unreachable while C is held/armed (C wins over D), so a
+        // C+D+click on a LINE vertex drags — it must never delete.
         const deleteKey =
           !curveKey &&
           (isKeyHeld(Key.D_UP) ||
             isKeyHeld(Key.D_LOW) ||
             isKeyArmed(Key.D_UP, nowMs) ||
             isKeyArmed(Key.D_LOW, nowMs))
-        if (curveKey) {
+        const pointType = this._points[this._highlightedHandle - 1].type
+        if (curveKey && pointType === PathPointType.MID) {
+          // Convert the segment to a bezier curve; the drag that follows
+          // shapes it. Conversion is the ONLY thing C does: clicking a cyan
+          // CURVE control point falls through to the plain drag below, so an
+          // adjust click can never straighten the curve (the old toggle
+          // fired on stale held/armed C and destroyed curves mid-adjustment).
+          // Unwanted curves are removed via undo, deleting an adjacent
+          // vertex, or deleting the line. The arm is spent only when a
+          // conversion actually happens.
           consumeArmedKey(Key.C_UP)
           consumeArmedKey(Key.C_LOW)
-          const preType = this._points[this._highlightedHandle - 1].type
-          if (
-            preType === PathPointType.CURVE &&
-            isRecentCurveConversion(this.labelId, nowMs)
-          ) {
-            // Same click burst (the 2nd/3rd press of a double-click-drag
-            // with C held): the point was JUST converted — don't toggle it
-            // back to straight, drag the control point instead. This is what
-            // lets hold-C + double-click + drag work on trackpads, where the
-            // gesture arrives as separate presses.
-            this.toCache()
-          } else {
-            // Convert line to bezier curve; the drag that follows shapes it
-            this.lineToCurve()
-            if (preType === PathPointType.MID) {
-              markCurveConversion(this.labelId, nowMs)
-            }
-          }
+          // No toCache() here (never was): harmless, because onMouseUp's
+          // invalid-revert can't fire for curve edits — validity is computed
+          // from LINE vertices, which conversion and control-point drags
+          // never move.
+          this.lineToCurve()
         } else if (deleteKey) {
-          // Delete vertex
-          // Disable deletion for now
+          // Delete the clicked LINE vertex (deleteVertex is a no-op on MID
+          // and CURVE points — it gates on LINE type).
           consumeArmedKey(Key.D_UP)
           consumeArmedKey(Key.D_LOW)
           this.toCache()
           this.deleteVertex()
         } else {
-          // Drag vertex or midpoint
+          // Drag vertex, midpoint, or curve control point
           this.toCache()
-          if (
-            this._points[this._highlightedHandle - 1].type === PathPointType.MID
-          ) {
+          if (pointType === PathPointType.MID) {
             // Drag midpoint: convert midpoint to vertex first
             this.midToVertex()
           }
@@ -1345,40 +1338,25 @@ export class Polygon2D extends Label2D {
   }
 
   /**
-   * convert a line to a curve and vice-versa
+   * convert a straight segment's midpoint to a bezier curve (one-way; curves
+   * are removed via undo, vertex delete, or line delete — there is no
+   * straighten gesture)
    */
   private lineToCurve(): void {
-    const selectedLabelIndex = this._highlightedHandle - 1
-    const point = this._points[selectedLabelIndex]
     const highlightedHandleIndex = this._highlightedHandle - 1
-    switch (point.type) {
-      case PathPointType.MID: {
-        // From midpoint to curve
-        const prevPoint =
-          this._points[this.getPreviousIndex(highlightedHandleIndex)]
-        const nextPoint =
-          this._points[this.getNextIndex(highlightedHandleIndex)]
-        const controlPoints = this.getCurvePoints(
-          prevPoint.vector(),
-          nextPoint.vector()
-        )
-        this._points[highlightedHandleIndex] = controlPoints[0]
-        this._points.splice(highlightedHandleIndex + 1, 0, controlPoints[1])
-        break
-      }
-      case PathPointType.CURVE: {
-        // From curve to midpoint
-        const newMidPointIndex =
-          this._points[highlightedHandleIndex - 1].type === PathPointType.CURVE
-            ? this.getPreviousIndex(highlightedHandleIndex)
-            : highlightedHandleIndex
-        this._points.splice(highlightedHandleIndex, 1)
-        this._points[newMidPointIndex] = this.getMidpoint(
-          this._points[this.getNextIndex(newMidPointIndex)],
-          this._points[this.getPreviousIndex(newMidPointIndex)]
-        )
-      }
+    const point = this._points[highlightedHandleIndex]
+    if (point.type !== PathPointType.MID) {
+      throw new Error(`not a midpoint`)
     }
+    const prevPoint =
+      this._points[this.getPreviousIndex(highlightedHandleIndex)]
+    const nextPoint = this._points[this.getNextIndex(highlightedHandleIndex)]
+    const controlPoints = this.getCurvePoints(
+      prevPoint.vector(),
+      nextPoint.vector()
+    )
+    this._points[highlightedHandleIndex] = controlPoints[0]
+    this._points.splice(highlightedHandleIndex + 1, 0, controlPoints[1])
   }
 
   /**
