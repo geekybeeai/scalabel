@@ -12,8 +12,13 @@ description: Runtime-verify 2D annotator changes by driving the label page in he
   tests stale code.**
 - Server: `node app/dist/main.js --config ./local-data/scalabel/config.yml`
   (port 8686). The dev server is often ALREADY RUNNING (EADDRINUSE) — just
-  use it; it picks up a rebuilt dist without restart. Redis is not installed;
-  the server runs without it.
+  use it; it picks up a rebuilt dist without restart.
+- **Redis is REQUIRED for the label page.** Without it the server starts and
+  serves HTML/JS fine, but socket registration hangs forever (node_redis
+  offline queue) and the page stays a blank `labeling-interface` div — no
+  console errors anywhere. The Memurai service is installed but Disabled:
+  run `& "C:\Program Files\Memurai\memurai.exe" --port 6379` as a plain
+  background process, then (re)start the dev server.
 
 ## Ready-made data
 
