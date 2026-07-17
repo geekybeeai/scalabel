@@ -421,6 +421,8 @@ class MultipleSelect extends Component<Props> {
                 display: "grid",
                 gridTemplateColumns: "1fr 1fr",
                 alignItems: "center",
+                // Breathing room between the category list and the toggles.
+                marginTop: 10,
                 padding: "1px 4px",
                 border: "1px solid transparent"
               }}
