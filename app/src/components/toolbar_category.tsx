@@ -323,81 +323,6 @@ class MultipleSelect extends Component<Props> {
               primary={headerText}
             />
           </ListItem>
-          {this.props.onToggleAllCategoryVisibility !== undefined && (
-            // Display toggles in a 2x2 grid (Show lines / Show Tags on the
-            // first row, Curves only / Show image on the second) so the four
-            // checkboxes are equally spaced. Same box model as a category row
-            // (border 1px + padding 4px) so the first checkbox lands on the
-            // same column as the category checkboxes.
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                alignItems: "center",
-                padding: "1px 4px",
-                border: "1px solid transparent"
-              }}
-            >
-              {this.renderToggleCell(
-                "Show lines",
-                "Toggle visibility of all lines",
-                (this.props.hiddenCategories ?? []).length === 0,
-                () => this.props.onToggleAllCategoryVisibility?.(),
-                (this.props.hiddenCategories ?? []).length > 0 &&
-                  (this.props.hiddenCategories ?? []).length <
-                    categories.length
-              )}
-              {this.props.onToggleTags !== undefined &&
-                this.renderToggleCell(
-                  "Show Tags",
-                  "Toggle category tags on the canvas",
-                  this.props.showTags ?? true,
-                  () => this.props.onToggleTags?.()
-                )}
-              {this.props.onToggleCurvesOnly !== undefined &&
-                this.renderToggleCell(
-                  "Curves only",
-                  "Show only the curved parts of lines",
-                  this.props.showCurvesOnly ?? false,
-                  () => this.props.onToggleCurvesOnly?.()
-                )}
-              {this.props.onToggleImage !== undefined &&
-                this.renderToggleCell(
-                  "Show image",
-                  "Toggle the underlying image",
-                  this.props.showImage ?? true,
-                  () => this.props.onToggleImage?.()
-                )}
-            </div>
-          )}
-          {this.props.onImageOpacityChange !== undefined && (
-            // Same box model as the toggle grid so the row lines up with it.
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "1px 8px 1px 4px",
-                border: "1px solid transparent"
-              }}
-            >
-              <span
-                style={{ fontSize: 12, opacity: 0.75, whiteSpace: "nowrap" }}
-              >
-                Image opacity
-              </span>
-              <Slider
-                value={Math.round((this.props.imageOpacity ?? 1) * 100)}
-                min={0}
-                max={100}
-                disabled={!(this.props.showImage ?? true)}
-                onChange={(_event, value) =>
-                  this.props.onImageOpacityChange?.((value as number) / 100)
-                }
-                title="Adjust the opacity of the underlying image"
-              />
-            </div>
-          )}
           {treeCategories !== null ? (
             <TreeView
               onNodeSelect={handleTreeSelect}
@@ -483,6 +408,81 @@ class MultipleSelect extends Component<Props> {
                   </div>
                 )
               })}
+            </div>
+          )}
+          {this.props.onToggleAllCategoryVisibility !== undefined && (
+            // Display toggles in a 2x2 grid (Show lines / Show Tags on the
+            // first row, Curves only / Show image on the second) below the
+            // category list. Same box model as a category row (border 1px +
+            // padding 4px) so the first checkbox lands on the same column as
+            // the category checkboxes.
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                alignItems: "center",
+                padding: "1px 4px",
+                border: "1px solid transparent"
+              }}
+            >
+              {this.renderToggleCell(
+                "Show lines",
+                "Toggle visibility of all lines",
+                (this.props.hiddenCategories ?? []).length === 0,
+                () => this.props.onToggleAllCategoryVisibility?.(),
+                (this.props.hiddenCategories ?? []).length > 0 &&
+                  (this.props.hiddenCategories ?? []).length <
+                    categories.length
+              )}
+              {this.props.onToggleTags !== undefined &&
+                this.renderToggleCell(
+                  "Show Tags",
+                  "Toggle category tags on the canvas",
+                  this.props.showTags ?? true,
+                  () => this.props.onToggleTags?.()
+                )}
+              {this.props.onToggleCurvesOnly !== undefined &&
+                this.renderToggleCell(
+                  "Curves only",
+                  "Show only the curved parts of lines",
+                  this.props.showCurvesOnly ?? false,
+                  () => this.props.onToggleCurvesOnly?.()
+                )}
+              {this.props.onToggleImage !== undefined &&
+                this.renderToggleCell(
+                  "Show image",
+                  "Toggle the underlying image (Space)",
+                  this.props.showImage ?? true,
+                  () => this.props.onToggleImage?.()
+                )}
+            </div>
+          )}
+          {this.props.onImageOpacityChange !== undefined && (
+            // Same box model as the toggle grid so the row lines up with it.
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "1px 8px 1px 4px",
+                border: "1px solid transparent"
+              }}
+            >
+              <span
+                style={{ fontSize: 12, opacity: 0.75, whiteSpace: "nowrap" }}
+              >
+                Image opacity
+              </span>
+              <Slider
+                value={Math.round((this.props.imageOpacity ?? 1) * 100)}
+                min={0}
+                max={100}
+                disabled={!(this.props.showImage ?? true)}
+                onChange={(_event, value) =>
+                  this.props.onImageOpacityChange?.((value as number) / 100)
+                }
+                title="Adjust the opacity of the underlying image"
+              />
             </div>
           )}
         </FormControl>

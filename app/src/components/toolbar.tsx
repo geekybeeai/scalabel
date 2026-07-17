@@ -425,6 +425,7 @@ export class ToolBar extends Component<Props> {
               { keys: ["Ctrl", "Z"], label: "undo" },
               { keys: ["Ctrl", "Y"], label: "redo" },
               { keys: ["C"], label: "control curve" },
+              { keys: ["Space"], label: "show / hide image" },
               { keys: ["Ctrl", "Click"], label: "select line for delete" },
               { keys: ["Shift", "Drag"], label: "select region for delete" },
               { keys: ["Scroll"], label: "zoom (mouse)" },

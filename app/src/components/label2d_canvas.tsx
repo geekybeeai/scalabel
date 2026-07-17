@@ -4,6 +4,7 @@ import { withStyles } from "@material-ui/core/styles"
 import * as React from "react"
 import { connect } from "react-redux"
 
+import { changeViewerConfig } from "../action/common"
 import { drawHistory } from "../common/draw_history"
 import Session from "../common/session"
 import { isInteracting, onIdle } from "../common/interaction_state"
@@ -1082,6 +1083,26 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       resetFreeform()
       this.setDefaultCursor()
       return
+    }
+
+    if (e.key === Key.SPACE) {
+      // Space toggles the image layer (same as the sidebar "Show image"
+      // checkbox). Skip when typing in a text field, where Space is input.
+      const target = e.target as HTMLElement | null
+      const typing =
+        target !== null &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+      if (!typing) {
+        e.preventDefault()
+        const config = this.state.user.viewerConfigs[this.props.id]
+        Session.dispatch(
+          changeViewerConfig(this.props.id, {
+            ...config,
+            hideImage: !(config.hideImage ?? false)
+          })
+        )
+        return
+      }
     }
 
     // Polyline-level undo/redo (Ctrl/Cmd+Z / Ctrl/Cmd+Y / Ctrl/Cmd+Shift+Z).

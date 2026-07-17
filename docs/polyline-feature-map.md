@@ -127,7 +127,10 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
 - "Show image" checkbox + "Image opacity" slider — `hideImage` / `imageOpacity`
   viewer-config flags (`toolbar.tsx` → `image_canvas.tsx`: `redraw` blanks the
   layer on `hideImage`; CSS opacity on the image canvas dims it. Labels are on
-  separate canvases, unaffected). Slider disabled while image hidden.
+  separate canvases, unaffected). Slider disabled while image hidden. Space
+  also toggles `hideImage` (`label2d_canvas.tsx onKeyDown`, skipped while
+  typing in inputs) — this REPLACES upstream's Space = toggle-checked-label
+  binding. Both toggle rows render below the category list.
 - `app/src/styles/label.ts` — `categoryStyle`, `alerts` toast style.
 - `app/src/components/alert.tsx` + `app/src/components/label_layout.tsx` — alert toasts
   (`getAlerts`).

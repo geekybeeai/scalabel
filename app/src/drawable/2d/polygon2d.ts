@@ -32,7 +32,7 @@ import {
   PathPoint2D
 } from "./path_point2d"
 
-const DEFAULT_VIEW_EDGE_STYLE = makeEdge2DStyle({ lineWidth: 8 })
+const DEFAULT_VIEW_EDGE_STYLE = makeEdge2DStyle({ lineWidth: 6 })
 const DEFAULT_VIEW_POINT_STYLE = makePathPoint2DStyle({ radius: 8 })
 const DEFAULT_VIEW_HIGH_POINT_STYLE = makePathPoint2DStyle({ radius: 12 })
 const DEFAULT_CONTROL_EDGE_STYLE = makeEdge2DStyle({ lineWidth: 10 })
