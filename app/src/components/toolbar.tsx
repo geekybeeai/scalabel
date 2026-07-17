@@ -314,6 +314,13 @@ export class ToolBar extends Component<Props> {
                 changeViewerConfig(this.safeActiveViewerId, config)
               )
             }}
+            imageOpacity={activeConfig.imageOpacity ?? 1}
+            onImageOpacityChange={(opacity: number) => {
+              const config = { ...activeConfig, imageOpacity: opacity }
+              Session.dispatch(
+                changeViewerConfig(this.safeActiveViewerId, config)
+              )
+            }}
             onToggleCategoryVisibility={(index: number) =>
               this.toggleCategoryVisibility(index)
             }

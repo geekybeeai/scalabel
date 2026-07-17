@@ -92,10 +92,16 @@ export class ImageCanvas extends DrawableCanvas<Props> {
    */
   public render(): JSX.Element {
     const { classes } = this.props
+    const config = this.state.user.viewerConfigs[this.props.id] as
+      | ImageViewerConfigType
+      | undefined
     let imageCanvas = (
       <canvas
         key="image-canvas"
         className={classes.image_canvas}
+        // Labels live on separate canvases, so CSS opacity dims only the
+        // image layer without touching the blit path.
+        style={{ opacity: config?.imageOpacity ?? 1 }}
         ref={(canvas) => {
           if (canvas !== null && this.display !== null) {
             this.imageCanvas = canvas

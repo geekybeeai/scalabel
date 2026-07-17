@@ -1,4 +1,4 @@
-import { Checkbox, ListItemText, ListItem } from "@material-ui/core"
+import { Checkbox, ListItemText, ListItem, Slider } from "@material-ui/core"
 import FormControl from "@material-ui/core/FormControl"
 import { withStyles } from "@material-ui/core/styles"
 import TreeView from "@material-ui/lab/TreeView"
@@ -161,6 +161,10 @@ interface Props {
   showImage?: boolean
   /** toggle the underlying image */
   onToggleImage?: () => void
+  /** opacity of the underlying image, 0-1 */
+  imageOpacity?: number
+  /** change the opacity of the underlying image */
+  onImageOpacityChange?: (opacity: number) => void
 }
 
 /**
@@ -364,6 +368,34 @@ class MultipleSelect extends Component<Props> {
                   this.props.showImage ?? true,
                   () => this.props.onToggleImage?.()
                 )}
+            </div>
+          )}
+          {this.props.onImageOpacityChange !== undefined && (
+            // Same box model as the toggle grid so the row lines up with it.
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "1px 8px 1px 4px",
+                border: "1px solid transparent"
+              }}
+            >
+              <span
+                style={{ fontSize: 12, opacity: 0.75, whiteSpace: "nowrap" }}
+              >
+                Image opacity
+              </span>
+              <Slider
+                value={Math.round((this.props.imageOpacity ?? 1) * 100)}
+                min={0}
+                max={100}
+                disabled={!(this.props.showImage ?? true)}
+                onChange={(_event, value) =>
+                  this.props.onImageOpacityChange?.((value as number) / 100)
+                }
+                title="Adjust the opacity of the underlying image"
+              />
             </div>
           )}
           {treeCategories !== null ? (

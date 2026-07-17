@@ -124,6 +124,10 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   both canvases). Pure group finder: `app/src/drawable/2d/curve_groups.ts`
   (`curveGroupIndices`). Cut/delete-segment arming is guarded while on.
 - `app/src/components/toolbar_category.tsx` — category rows, Show all / Show Tags.
+- "Show image" checkbox + "Image opacity" slider — `hideImage` / `imageOpacity`
+  viewer-config flags (`toolbar.tsx` → `image_canvas.tsx`: `redraw` blanks the
+  layer on `hideImage`; CSS opacity on the image canvas dims it. Labels are on
+  separate canvases, unaffected). Slider disabled while image hidden.
 - `app/src/styles/label.ts` — `categoryStyle`, `alerts` toast style.
 - `app/src/components/alert.tsx` + `app/src/components/label_layout.tsx` — alert toasts
   (`getAlerts`).

@@ -213,6 +213,8 @@ export interface ViewerConfigType {
   showCurvesOnly?: boolean
   /** whether to hide the underlying image (labels stay visible) */
   hideImage?: boolean
+  /** image layer opacity, 0-1 (view-only; default 1) */
+  imageOpacity?: number
 }
 
 export interface ImageViewerConfigType extends ViewerConfigType {
