@@ -53,4 +53,10 @@ description: Runtime-verify 2D annotator changes by driving the label page in he
   draw persist) — use a scratch project or tell the user what you left
   behind.
 - Toolbar buttons: cut = SVG path starting `M9.64`; delete-segment = path
-  starting `M2 11h5`.
+  starting `M6 19c0` (trash-can glyph — see DELETE_SEGMENT_PATH in
+  `cut_icon.tsx`; verify prefixes there when a button is not found).
+- View rotation: press `r` (CW) / Shift+R (CCW) instead of hunting the
+  toolbar icons; assert the canvas rect's aspect ratio swaps. A working
+  full-feature driver (draw/drag/cut/delete-segment/lasso while rotated,
+  export coordinate assertions) is the `cdp_rotate_verify.js` pattern from
+  the 2026-07-21 rotation verification.
