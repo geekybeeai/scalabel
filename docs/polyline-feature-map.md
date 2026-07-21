@@ -67,7 +67,9 @@ Open when: how lines paint, hit-testing, zoom/pan/rotation, screen↔image mappi
 - `app/src/components/viewer2d.tsx` — the 2D viewer + **toolbar buttons**:
   `getMenuComponents` (zoom/width buttons), `getHistoryButtons` (undo/redo),
   `getRotationButtons`, `onWheel`/`zoom` (cursor-focal), pan, `changeLineWidth`,
-  `rotateView`.
+  `rotateView` (±90°, display-only; inert while drawing or during a
+  delete-segment preview; **R** = CW / **Shift+R** = CCW in
+  `label2d_canvas.tsx onKeyDown`, skipped while typing in inputs).
 - `app/src/view_config/image.ts` — **coordinate + canvas math**: `toImageCoords`/
   `toCanvasCoords` (scale-only), `normalizeMouseCoordinates`, `updateCanvasScale`
   (canvas sizing, `displayToImageRatio`, rotation dim-swap), `drawImageOnCanvas`,
@@ -226,3 +228,10 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   same in any new ring-editing code. Symptom if violated: the outline passes
   through cyan control points and a stray pale MID handle appears inside the
   curve group.
+- **View rotation is display-only and lives in three places.** The canvas is
+  SIZED to swapped dims (`updateCanvasScale`), CONTENT is turned by a context
+  transform (`applyRotation` wraps labels AND the delete/lasso overlays), and
+  POINTER input is un-rotated once in `getMousePos`. `fetchHandleId` must
+  probe at `rotatePoint(mousePos)` because `getImageData` ignores context
+  transforms. Viewport culling is bypassed while rotated. Never store or
+  export rotated coordinates.
