@@ -75,7 +75,9 @@ import {
   MAX_SCALE,
   MIN_SCALE,
   normalizeMouseCoordinates,
+  rotatePoint,
   toCanvasCoords,
+  unrotatePoint,
   updateCanvasScale
 } from "../view_config/image"
 import { Crosshair, Crosshair2D } from "./crosshair"
@@ -273,6 +275,41 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     this.setCursor("crosshair")
   }
 
+  /** Current display-only view rotation (0/90/180/270) for this viewer. */
+  private get viewRotation(): number {
+    const config = this.state.user.viewerConfigs[
+      this.props.id
+    ] as ImageViewerConfigType
+    return config.rotation ?? 0
+  }
+
+  /**
+   * Apply the view rotation to a drawing context so content paints turned.
+   * The canvas is sized to the rotated dimensions, so for 90°/270° we
+   * translate by the swapped axis before rotating. Caller must
+   * context.restore() afterwards.
+   *
+   * @param ctx the 2d context to transform
+   * @param canvas the canvas owning the context (for its backing dimensions)
+   * @param rotation 0 | 90 | 180 | 270
+   */
+  private applyRotation(
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    rotation: number
+  ): void {
+    if (rotation === 90) {
+      ctx.translate(canvas.width, 0)
+      ctx.rotate(Math.PI / 2)
+    } else if (rotation === 180) {
+      ctx.translate(canvas.width, canvas.height)
+      ctx.rotate(Math.PI)
+    } else if (rotation === 270) {
+      ctx.translate(0, canvas.height)
+      ctx.rotate(-Math.PI / 2)
+    }
+  }
+
   /**
    * Render function
    *
@@ -433,6 +470,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       let viewportBounds: [number, number, number, number] | undefined
       if (
         viewScale > 2 &&
+        this.viewRotation === 0 &&
         this.display !== null &&
         "displayLeft" in config &&
         "displayTop" in config
@@ -453,6 +491,14 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         viewportBounds = [viewportX, viewportY, viewportW, viewportH]
       }
 
+      // Rotate the label AND control contexts identically so labels, the
+      // delete/lasso overlays, and color-coded hit-testing all turn with the
+      // view. Their image-frame coordinates need no changes.
+      const rotation = this.viewRotation
+      this.labelContext.save()
+      this.controlContext.save()
+      this.applyRotation(this.labelContext, this.labelCanvas, rotation)
+      this.applyRotation(this.controlContext, this.controlCanvas, rotation)
       this._labelList.redraw(
         this.labelContext,
         this.controlContext,
@@ -476,6 +522,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         this.labelContext,
         this.displayToImageRatio * this._upResRatio
       )
+      this.labelContext.restore()
+      this.controlContext.restore()
     }
     return true
   }
@@ -1175,7 +1223,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   private getMousePos(e: React.MouseEvent<HTMLCanvasElement>): Vector2D {
     if (this.display !== null && this.labelCanvas !== null) {
-      return normalizeMouseCoordinates(
+      const displayCoord = normalizeMouseCoordinates(
         this.labelCanvas,
         this.canvasWidth,
         this.canvasHeight,
@@ -1183,6 +1231,15 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         e.clientX,
         e.clientY
       )
+      // With a rotated view, normalizeMouseCoordinates returns the point in
+      // the rotated/display frame; map it back to the original image frame so
+      // every stored coordinate stays in the original (unrotated) frame.
+      const rotation = this.viewRotation
+      if (rotation === 0) {
+        return displayCoord
+      }
+      const size = getCurrentImageSize(this.state, this.props.id)
+      return unrotatePoint(displayCoord, rotation, size.width, size.height)
     }
     return new Vector2D(0, 0)
   }
@@ -1196,8 +1253,17 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   private fetchHandleId(mousePos: Vector2D): number[] {
     if (this.controlContext !== null) {
+      // The control canvas is drawn through the rotation, but getImageData
+      // reads raw backing pixels (ignoring the context transform), so probe
+      // at the rotated position of the (original-frame) mouse coordinate.
+      const rotation = this.viewRotation
+      let probe = mousePos
+      if (rotation !== 0) {
+        const size = getCurrentImageSize(this.state, this.props.id)
+        probe = rotatePoint(mousePos, rotation, size.width, size.height)
+      }
       const [x, y] = toCanvasCoords(
-        mousePos,
+        probe,
         true,
         this.displayToImageRatio,
         this._upResRatio
