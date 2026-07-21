@@ -6,6 +6,8 @@ import FindReplaceIcon from "@material-ui/icons/FindReplace"
 import LineWeightIcon from "@material-ui/icons/LineWeight"
 import RedoIcon from "@material-ui/icons/Redo"
 import RemoveIcon from "@material-ui/icons/Remove"
+import RotateLeftIcon from "@material-ui/icons/RotateLeft"
+import RotateRightIcon from "@material-ui/icons/RotateRight"
 import UndoIcon from "@material-ui/icons/Undo"
 import ZoomInIcon from "@material-ui/icons/ZoomIn"
 import ZoomOutIcon from "@material-ui/icons/ZoomOut"
@@ -19,6 +21,7 @@ import Session from "../common/session"
 import { isCutMode, onCutModeChange, setCutMode } from "../common/cut_state"
 import {
   armSegmentDelete,
+  getSegmentDeletePhase,
   isSegmentDeleteActive,
   onSegmentDeleteChange,
   resetSegmentDelete
@@ -328,6 +331,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         widthUpButton,
         widthDownButton,
         widthResetButton,
+        ...this.getRotationButtons(),
         ...this.getHistoryButtons(),
         this.getCutButton(),
         this.getDeleteSegmentButton(),
@@ -386,6 +390,72 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
       </Tooltip>
     )
     return [undoButton, redoButton]
+  }
+
+  /**
+   * Rotate the image view by ±90° (display only; never affects the JSON).
+   * Inert while a line is being drawn or a delete-segment preview is pending,
+   * so the view cannot change frames mid-gesture.
+   *
+   * @param delta +90 (clockwise / right) or -90 (counter-clockwise / left)
+   */
+  private rotateView(delta: number): void {
+    if (
+      Session.label2dList.isDrawingInProgress() ||
+      getSegmentDeletePhase() === "preview"
+    ) {
+      return
+    }
+    const config = this._viewerConfig as ImageViewerConfigType
+    const current = config.rotation ?? 0
+    const rotation = (((current + delta) % 360) + 360) % 360
+    const newConfig: ImageViewerConfigType = { ...config, rotation }
+    Session.dispatch(changeViewerConfig(this._viewerId, newConfig))
+  }
+
+  /**
+   * Build the rotate-left / rotate-right toolbar buttons.
+   *
+   * @return {JSX.Element[]} rotate-left and rotate-right buttons
+   */
+  protected getRotationButtons(): JSX.Element[] {
+    const rotateLeftButton = (
+      <Tooltip
+        key={`rotateLeft2dButton${this.props.id}`}
+        title="Rotate left 90°"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => this.rotateView(-90)}
+          className={this.props.classes.viewer_button}
+          edge={"start"}
+        >
+          <RotateLeftIcon />
+        </IconButton>
+      </Tooltip>
+    )
+    const rotateRightButton = (
+      <Tooltip
+        key={`rotateRight2dButton${this.props.id}`}
+        title="Rotate right 90°"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => this.rotateView(90)}
+          className={this.props.classes.viewer_button}
+          edge={"start"}
+        >
+          <RotateRightIcon />
+        </IconButton>
+      </Tooltip>
+    )
+    return [rotateLeftButton, rotateRightButton]
   }
 
   /**

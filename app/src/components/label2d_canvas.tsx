@@ -1153,6 +1153,36 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       }
     }
 
+    if (
+      (e.key === "r" || e.key === "R") &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey
+    ) {
+      // R rotates the view 90° clockwise; Shift+R counter-clockwise.
+      // Display-only (stored coords stay in the original frame). Skipped
+      // while typing, while drawing, and during a delete-segment preview.
+      const target = e.target as HTMLElement | null
+      const typing =
+        target !== null &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+      const blocked =
+        Session.label2dList.isDrawingInProgress() ||
+        getSegmentDeletePhase() === "preview"
+      if (!typing && !blocked) {
+        e.preventDefault()
+        const config = this.state.user.viewerConfigs[
+          this.props.id
+        ] as ImageViewerConfigType
+        const current = config.rotation ?? 0
+        const delta = e.shiftKey ? -90 : 90
+        const rotation = (((current + delta) % 360) + 360) % 360
+        const newConfig: ImageViewerConfigType = { ...config, rotation }
+        Session.dispatch(changeViewerConfig(this.props.id, newConfig))
+        return
+      }
+    }
+
     // Polyline-level undo/redo (Ctrl/Cmd+Z / Ctrl/Cmd+Y / Ctrl/Cmd+Shift+Z).
     // Only swallow the shortcut when it actually did something.
     if (drawHistory.handleKeyboard(e)) {
