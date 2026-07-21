@@ -230,6 +230,8 @@ export interface ImageViewerConfigType extends ViewerConfigType {
   displayLeft: number
   /** Display-only multiplier for polyline stroke thickness (1 = default) */
   lineWidthMultiplier?: number
+  /** Display-only view rotation in degrees: 0 | 90 | 180 | 270. Never exported. */
+  rotation?: number
 }
 
 export interface PointCloudViewerConfigType extends ViewerConfigType {

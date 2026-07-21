@@ -100,6 +100,61 @@ export function toImageCoords(
 }
 
 /**
+ * Rotate a point from the original image frame into the displayed (rotated)
+ * frame. Exact, lossless 90° math. `rotation` is 0 | 90 | 180 | 270
+ * (clockwise); `w`/`h` are the ORIGINAL image width/height.
+ *
+ * @param p the point in original-image coordinates
+ * @param rotation clockwise rotation in degrees (0/90/180/270)
+ * @param w original image width
+ * @param h original image height
+ */
+export function rotatePoint(
+  p: Vector2D,
+  rotation: number,
+  w: number,
+  h: number
+): Vector2D {
+  switch (rotation) {
+    case 90:
+      return new Vector2D(h - p.y, p.x)
+    case 180:
+      return new Vector2D(w - p.x, h - p.y)
+    case 270:
+      return new Vector2D(p.y, w - p.x)
+    default:
+      return new Vector2D(p.x, p.y)
+  }
+}
+
+/**
+ * Inverse of rotatePoint: map a point in the displayed (rotated) frame back
+ * to the original image frame. `w`/`h` are the ORIGINAL image width/height.
+ *
+ * @param p the point in displayed (rotated) coordinates
+ * @param rotation clockwise rotation in degrees (0/90/180/270)
+ * @param w original image width
+ * @param h original image height
+ */
+export function unrotatePoint(
+  p: Vector2D,
+  rotation: number,
+  w: number,
+  h: number
+): Vector2D {
+  switch (rotation) {
+    case 90:
+      return new Vector2D(p.y, h - p.x)
+    case 180:
+      return new Vector2D(w - p.x, h - p.y)
+    case 270:
+      return new Vector2D(w - p.y, p.x)
+    default:
+      return new Vector2D(p.x, p.y)
+  }
+}
+
+/**
  * Cache for ImageBitmap objects (faster GPU compositing than HTMLImageElement).
  * Key format: "itemIndex-sensorId"
  */
