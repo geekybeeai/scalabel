@@ -199,13 +199,15 @@ export function clearImageBitmapCache(): void {
  * @param image
  * @param itemIndex optional item index for caching
  * @param sensorId optional sensor id for caching
+ * @param rotation view rotation in degrees (0/90/180/270)
  */
 export function drawImageOnCanvas(
   canvas: HTMLCanvasElement,
   context: CanvasRenderingContext2D,
   image: HTMLImageElement,
   itemIndex?: number,
-  sensorId?: number
+  sensorId?: number,
+  rotation: number = 0
 ): void {
   clearCanvas(canvas, context)
 
@@ -214,6 +216,24 @@ export function drawImageOnCanvas(
   const isDownscaled = canvas.width < image.width || canvas.height < image.height
   context.imageSmoothingEnabled = isDownscaled
   context.imageSmoothingQuality = isDownscaled ? "high" : "low"
+
+  // Rotate the drawing context so the bitmap paints turned. The canvas is
+  // already sized to the rotated dimensions (updateCanvasScale), so for
+  // 90°/270° the un-rotated content box uses the swapped width/height.
+  const swap = rotation === 90 || rotation === 270
+  const drawW = swap ? canvas.height : canvas.width
+  const drawH = swap ? canvas.width : canvas.height
+  context.save()
+  if (rotation === 90) {
+    context.translate(canvas.width, 0)
+    context.rotate(Math.PI / 2)
+  } else if (rotation === 180) {
+    context.translate(canvas.width, canvas.height)
+    context.rotate(Math.PI)
+  } else if (rotation === 270) {
+    context.translate(0, canvas.height)
+    context.rotate(-Math.PI / 2)
+  }
 
   // Try to use cached ImageBitmap for faster drawing
   if (itemIndex !== undefined && sensorId !== undefined) {
@@ -228,9 +248,10 @@ export function drawImageOnCanvas(
         image.height,
         0,
         0,
-        canvas.width,
-        canvas.height
+        drawW,
+        drawH
       )
+      context.restore()
       return
     }
     // Async create bitmap for future draws (don't block current frame)
@@ -240,17 +261,8 @@ export function drawImageOnCanvas(
   }
 
   // Fallback to standard HTMLImageElement draw
-  context.drawImage(
-    image,
-    0,
-    0,
-    image.width,
-    image.height,
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  )
+  context.drawImage(image, 0, 0, image.width, image.height, 0, 0, drawW, drawH)
+  context.restore()
 }
 
 /**
@@ -373,18 +385,24 @@ export function updateCanvasScale(
   // Resize canvas
   const item = getCurrentItem(state)
   const image = Session.images[item.index][config.sensor]
-  const ratio = image.width / image.height
+  // For a 90°/270° view rotation the displayed image is the original turned
+  // on its side, so the canvas is sized to the swapped dimensions. The canvas
+  // DOM element stays axis-aligned (content is rotated via the draw context).
+  const rotated = config.rotation === 90 || config.rotation === 270
+  const imgW = rotated ? image.height : image.width
+  const imgH = rotated ? image.width : image.height
+  const ratio = imgW / imgH
   let canvasHeight
   let canvasWidth
   let displayToImageRatio
   if (displayRect.width / displayRect.height > ratio) {
     canvasHeight = displayRect.height * config.viewScale
     canvasWidth = canvasHeight * ratio
-    displayToImageRatio = canvasHeight / image.height
+    displayToImageRatio = canvasHeight / imgH
   } else {
     canvasWidth = displayRect.width * config.viewScale
     canvasHeight = canvasWidth / ratio
-    displayToImageRatio = canvasWidth / image.width
+    displayToImageRatio = canvasWidth / imgW
   }
 
   // Adaptive up-res ratio based on current zoom level. Only the image canvas

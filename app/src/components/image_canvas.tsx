@@ -161,7 +161,14 @@ export class ImageCanvas extends DrawableCanvas<Props> {
         // (HTML canvas is cleared whenever canvas.width is assigned, even with the
         // same value). ImageBitmap cache keeps this fast.
         const image = Session.images[item][sensor]
-        drawImageOnCanvas(this.imageCanvas, this.imageContext, image, item, sensor)
+        drawImageOnCanvas(
+          this.imageCanvas,
+          this.imageContext,
+          image,
+          item,
+          sensor,
+          (config as ImageViewerConfigType).rotation ?? 0
+        )
       } else {
         // Frame not loaded OR the image is toggled off: leave the image layer
         // blank. Labels live on separate canvases and are unaffected.
