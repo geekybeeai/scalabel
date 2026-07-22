@@ -45,6 +45,32 @@ function interior(segmentIndex: number, x: number, y: number): DeleteSitePick {
   }
 }
 
+/**
+ * Shorthand: a mid-curve interior pick (carries curveSplit).
+ *
+ * @param groupStart the bezier group's start anchor index
+ * @param t the split parameter
+ * @param x pick x
+ * @param y pick y
+ */
+function curveInterior(
+  groupStart: number,
+  t: number,
+  x: number,
+  y: number
+): DeleteSitePick {
+  return {
+    kind: "interior",
+    site: {
+      segmentIndex: groupStart,
+      point: { x, y },
+      snappedVertexIndex: null,
+      distance: 0,
+      curveSplit: { groupStart, t }
+    }
+  }
+}
+
 describe("findCutSite", () => {
   const RADIUS = 10
   const SNAP = 8
@@ -625,5 +651,47 @@ describe("buildCutHalves on a curve split", () => {
       expect(h.x).toBeCloseTo(orig.x, 4)
       expect(h.y).toBeCloseTo(orig.y, 4)
     }
+  })
+})
+
+describe("sitePositionKey for curve picks", () => {
+  // Group [1..4]: 0:(0,0) 1:(100,0) 2:C 3:C 4:(200,0) 5:(300,0)
+  const points = [
+    pt(0, 0),
+    pt(100, 0),
+    pt(130, 60, PathPointType.CURVE),
+    pt(170, 60, PathPointType.CURVE),
+    pt(200, 0),
+    pt(300, 0)
+  ]
+
+  test("a curve pick sits between its group's anchors", () => {
+    const key = sitePositionKey(points, curveInterior(1, 0.5, 150, 45))
+    expect(key).toBeGreaterThan(1)
+    expect(key).toBeLessThan(4)
+  })
+
+  test("two same-group picks order by t", () => {
+    const early = sitePositionKey(points, curveInterior(1, 0.3, 140, 40))
+    const late = sitePositionKey(points, curveInterior(1, 0.7, 160, 40))
+    expect(early).toBeLessThan(late)
+  })
+
+  test("curve picks order against straight and end picks", () => {
+    const beforeGroup = sitePositionKey(points, interior(0, 50, 0))
+    const inGroup = sitePositionKey(points, curveInterior(1, 0.5, 150, 45))
+    const afterGroup = sitePositionKey(points, interior(4, 250, 0))
+    const startEnd = sitePositionKey(points, {
+      kind: "end",
+      endpointIndex: 0
+    })
+    const lastEnd = sitePositionKey(points, {
+      kind: "end",
+      endpointIndex: points.length - 1
+    })
+    expect(startEnd).toBeLessThan(beforeGroup)
+    expect(beforeGroup).toBeLessThan(inGroup)
+    expect(inGroup).toBeLessThan(afterGroup)
+    expect(afterGroup).toBeLessThan(lastEnd)
   })
 })

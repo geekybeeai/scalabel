@@ -551,6 +551,11 @@ export function sitePositionKey(
   if (pick.site.snappedVertexIndex !== null) {
     return pick.site.snappedVertexIndex
   }
+  if (pick.site.curveSplit !== undefined) {
+    // A mid-curve pick sits between its group's anchors, which occupy
+    // indices groupStart and groupStart + 3.
+    return pick.site.curveSplit.groupStart + 3 * pick.site.curveSplit.t
+  }
   const i = pick.site.segmentIndex
   const a = points[i]
   const b = points[i + 1]
