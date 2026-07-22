@@ -6,7 +6,6 @@ import FindReplaceIcon from "@material-ui/icons/FindReplace"
 import LineWeightIcon from "@material-ui/icons/LineWeight"
 import RedoIcon from "@material-ui/icons/Redo"
 import RemoveIcon from "@material-ui/icons/Remove"
-import ReplayIcon from "@material-ui/icons/Replay"
 import RotateLeftIcon from "@material-ui/icons/RotateLeft"
 import RotateRightIcon from "@material-ui/icons/RotateRight"
 import UndoIcon from "@material-ui/icons/Undo"
@@ -65,7 +64,8 @@ import {
   ContentCutIcon,
   DeleteSegmentIcon,
   FreeformSelectIcon,
-  RectangleSelectIcon
+  RectangleSelectIcon,
+  RefreshCcwIcon
 } from "./cut_icon"
 import ImageCanvas from "./image_canvas"
 import Label2dCanvas from "./label2d_canvas"
@@ -489,7 +489,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           className={this.props.classes.viewer_button}
           edge={"start"}
         >
-          <ReplayIcon />
+          <RefreshCcwIcon />
         </IconButton>
       </Tooltip>
     )

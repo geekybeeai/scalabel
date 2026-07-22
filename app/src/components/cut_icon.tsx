@@ -84,6 +84,31 @@ export function FreeformSelectIcon(props: SvgIconProps): JSX.Element {
 }
 
 /**
+ * Reset-rotation icon: the lucide "refresh-ccw" glyph (two counter-clockwise
+ * arrows), inlined as strokes because lucide-react is not a dependency.
+ * Mirrors FreeformSelectIcon (strokes, fill="none").
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function RefreshCcwIcon(props: SvgIconProps): JSX.Element {
+  const strokeProps = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const
+  }
+  return (
+    <SvgIcon {...props}>
+      <path {...strokeProps} d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path {...strokeProps} d="M3 3v5h5" />
+      <path {...strokeProps} d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+      <path {...strokeProps} d="M16 16h5v5" />
+    </SvgIcon>
+  )
+}
+
+/**
  * Rectangle-marquee icon for the rectangle select mode: a dashed axis-aligned
  * rectangle. Mirrors FreeformSelectIcon (strokes, fill="none").
  *
