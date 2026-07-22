@@ -466,3 +466,100 @@ describe("nearestTOnCubic", () => {
     expect(nearEnd.t).toBeGreaterThan(0.95)
   })
 })
+
+describe("findCutSite on curved spans (splitCurves)", () => {
+  const RADIUS = 10
+  const SNAP = 8
+  // Straight lead-in, one bezier group [1..4], straight tail. The group's
+  // symmetric apex is at (150, 45).
+  const points = [
+    pt(0, 0),
+    pt(100, 0),
+    pt(130, 60, PathPointType.CURVE),
+    pt(170, 60, PathPointType.CURVE),
+    pt(200, 0),
+    pt(300, 0)
+  ]
+
+  test("without the flag a curve click still rejects as curve", () => {
+    // (150, 52): 8 px from the control-polygon span, within RADIUS.
+    const result = findCutSite(points, { x: 150, y: 52 }, RADIUS, SNAP)
+    expect(result.kind).toBe("curve")
+  })
+
+  test("mid-curve click yields a site carrying curveSplit", () => {
+    const result = findCutSite(points, { x: 150, y: 52 }, RADIUS, SNAP, {
+      splitCurves: true
+    })
+    expect(result.kind).toBe("site")
+    if (result.kind === "site") {
+      expect(result.site.curveSplit).toBeDefined()
+      expect(result.site.curveSplit?.groupStart).toBe(1)
+      expect(result.site.curveSplit?.t).toBeCloseTo(0.5, 1)
+      expect(result.site.segmentIndex).toBe(1)
+      expect(result.site.snappedVertexIndex).toBeNull()
+      expect(result.site.point.x).toBeCloseTo(150, 0)
+      expect(result.site.point.y).toBeCloseTo(45, 0)
+      expect(result.site.distance).toBeCloseTo(7, 0)
+    }
+  })
+
+  test("radius is measured against the true curve, not the polygon", () => {
+    // (150, 58): only 2 px from the polygon span but 13 px from the curve.
+    const result = findCutSite(points, { x: 150, y: 58 }, RADIUS, SNAP, {
+      splitCurves: true
+    })
+    expect(result.kind).toBe("miss")
+  })
+
+  test("a click near a group anchor snaps to it (no curveSplit)", () => {
+    const result = findCutSite(points, { x: 198, y: 6 }, RADIUS, SNAP, {
+      splitCurves: true
+    })
+    expect(result.kind).toBe("site")
+    if (result.kind === "site") {
+      expect(result.site.snappedVertexIndex).toBe(4)
+      expect(result.site.curveSplit).toBeUndefined()
+      expect(result.site.point).toEqual({ x: 200, y: 0 })
+    }
+  })
+
+  test("snap onto the line's end anchor rejects as near-endpoint", () => {
+    // A fully-curved 2-anchor line; click near its start anchor.
+    const curveOnly = [
+      pt(0, 0),
+      pt(30, 60, PathPointType.CURVE),
+      pt(70, 60, PathPointType.CURVE),
+      pt(100, 0)
+    ]
+    const result = findCutSite(curveOnly, { x: 2, y: 4 }, RADIUS, SNAP, {
+      splitCurves: true
+    })
+    expect(result.kind).toBe("near-endpoint")
+  })
+
+  test("mid-curve cut on a fully-curved 2-anchor line works", () => {
+    const curveOnly = [
+      pt(0, 0),
+      pt(30, 60, PathPointType.CURVE),
+      pt(70, 60, PathPointType.CURVE),
+      pt(100, 0)
+    ]
+    const result = findCutSite(curveOnly, { x: 50, y: 48 }, RADIUS, SNAP, {
+      splitCurves: true
+    })
+    expect(result.kind).toBe("site")
+    if (result.kind === "site") {
+      expect(result.site.curveSplit?.groupStart).toBe(0)
+    }
+  })
+
+  test("malformed curve data falls back to the curve rejection", () => {
+    // A stray single CURVE point: no well-formed group.
+    const malformed = [pt(0, 0), pt(50, 10, PathPointType.CURVE), pt(100, 0)]
+    const result = findCutSite(malformed, { x: 25, y: 8 }, RADIUS, SNAP, {
+      splitCurves: true
+    })
+    expect(result.kind).toBe("curve")
+  })
+})

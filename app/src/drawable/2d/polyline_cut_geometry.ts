@@ -1,5 +1,7 @@
 import { PathPointType, SimplePathPoint2DType } from "../../types/state"
 
+import { curveGroupIndices } from "./curve_groups"
+
 /** A validated location to cut a polyline. */
 export interface CutSite {
   /** Segment start index: the cut lies on points[i] -> points[i + 1] */
@@ -10,6 +12,9 @@ export interface CutSite {
   snappedVertexIndex: number | null
   /** Click-to-polyline distance (image px), comparable across polylines */
   distance: number
+  /** Present for a mid-curve cut: the bezier group start (its a0 index)
+   * and the split parameter for splitCubicBezier. */
+  curveSplit?: { groupStart: number; t: number }
 }
 
 /** Result of searching one polyline for a cut site. */
@@ -239,11 +244,19 @@ export function nearestTOnCubic(
  * @param radius max click-to-line distance for a cut (image px)
  * @param snapRadius vertex snap / endpoint-guard distance (image px)
  */
+/** Options for findCutSite. */
+export interface FindCutSiteOptions {
+  /** Resolve clicks on curved spans to bezier split sites (the cut tool).
+   * Default false: curved spans reject as "curve" (delete-segment). */
+  splitCurves?: boolean
+}
+
 export function findCutSite(
   points: readonly SimplePathPoint2DType[],
   click: { x: number; y: number },
   radius: number,
-  snapRadius: number
+  snapRadius: number,
+  options?: FindCutSiteOptions
 ): CutSiteResult {
   if (points.length < 2) {
     return { kind: "miss" }
@@ -264,15 +277,30 @@ export function findCutSite(
       bestIndex = i
     }
   }
-  if (best === null || best.dist > radius) {
+  if (best === null) {
     return { kind: "miss" }
   }
-  // A span is only cuttable when both ends are plain LINE vertices; CURVE
-  // (or any other) point types mark bezier control spans.
-  if (
+  // A span is only directly cuttable when both ends are plain LINE
+  // vertices; CURVE (or any other) point types mark bezier control spans.
+  const curveSpan =
     points[bestIndex].pointType !== PathPointType.LINE ||
     points[bestIndex + 1].pointType !== PathPointType.LINE
-  ) {
+  if (curveSpan && options?.splitCurves === true) {
+    // The bezier itself, not its control polygon, is the click target —
+    // findCurveSite re-checks radius/snap against true curve distance.
+    return findCurveSite(
+      points,
+      click,
+      radius,
+      snapRadius,
+      bestIndex,
+      best.dist
+    )
+  }
+  if (best.dist > radius) {
+    return { kind: "miss" }
+  }
+  if (curveSpan) {
     return { kind: "curve", distance: best.dist }
   }
   // Snap to a nearby vertex so cuts never create hair-thin sliver segments.
@@ -308,6 +336,92 @@ export function findCutSite(
       point,
       snappedVertexIndex: snapped,
       distance: best.dist
+    }
+  }
+}
+
+/**
+ * Resolve a click on a bezier control span to a cut site on the actual
+ * curve. Guards mirror the straight-span rules but measure true distance
+ * to the cubic: farther than `radius` → miss; nearest curve point within
+ * `snapRadius` of a group anchor → snap to that anchor (or the
+ * near-endpoint rejection at the line's first/last vertex); otherwise a
+ * mid-curve site carrying `curveSplit` for buildCutHalves.
+ *
+ * @param points the polyline's stored vertices
+ * @param click the click position
+ * @param radius max click-to-curve distance (image px)
+ * @param snapRadius anchor snap / endpoint-guard distance (image px)
+ * @param spanIndex the nearest control-polygon span's start index
+ * @param spanDist the click's distance to that span (for the fallback)
+ */
+function findCurveSite(
+  points: readonly SimplePathPoint2DType[],
+  click: { x: number; y: number },
+  radius: number,
+  snapRadius: number,
+  spanIndex: number,
+  spanDist: number
+): CutSiteResult {
+  const types = points.map((p) => p.pointType)
+  const group = curveGroupIndices(types).find(
+    (g) => spanIndex >= g[0] && spanIndex < g[3]
+  )
+  if (group === undefined) {
+    // Malformed curve data (stray control points): keep the old rejection.
+    return { kind: "curve", distance: spanDist }
+  }
+  const [a0, i1, i2, a1] = group
+  const near = nearestTOnCubic(
+    points[a0],
+    points[i1],
+    points[i2],
+    points[a1],
+    click
+  )
+  if (near.distance > radius) {
+    return { kind: "miss" }
+  }
+  const dA0 = Math.hypot(
+    near.point.x - points[a0].x,
+    near.point.y - points[a0].y
+  )
+  const dA1 = Math.hypot(
+    near.point.x - points[a1].x,
+    near.point.y - points[a1].y
+  )
+  let snapped: number | null = null
+  if (dA0 <= snapRadius && dA0 <= dA1) {
+    snapped = a0
+  } else if (dA1 <= snapRadius) {
+    snapped = a1
+  }
+  if (snapped !== null && (snapped === 0 || snapped === points.length - 1)) {
+    return {
+      kind: "near-endpoint",
+      distance: near.distance,
+      endpointIndex: snapped
+    }
+  }
+  if (snapped !== null) {
+    return {
+      kind: "site",
+      site: {
+        segmentIndex: a0,
+        point: { x: points[snapped].x, y: points[snapped].y },
+        snappedVertexIndex: snapped,
+        distance: near.distance
+      }
+    }
+  }
+  return {
+    kind: "site",
+    site: {
+      segmentIndex: a0,
+      point: near.point,
+      snappedVertexIndex: null,
+      distance: near.distance,
+      curveSplit: { groupStart: a0, t: near.t }
     }
   }
 }
