@@ -140,7 +140,10 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   binding. Both toggle rows render below the category list.
 - `app/src/styles/label.ts` — `categoryStyle`, `alerts` toast style.
 - `app/src/components/alert.tsx` + `app/src/components/label_layout.tsx` — alert toasts
-  (`getAlerts`).
+  (`getAlerts`). Duplicate messages never stack: `common/alert.ts alert()`
+  finds a visible toast with the same severity+message and fires
+  `onAlertRepeat` instead, which shakes the existing toast and restarts its
+  dismiss timer.
 - `app/src/common/session_setup.tsx` — image loading (`loadImages`, `image.onerror`,
   retry + friendly error).
 
