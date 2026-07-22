@@ -563,3 +563,67 @@ describe("findCutSite on curved spans (splitCurves)", () => {
     expect(result.kind).toBe("curve")
   })
 })
+
+describe("buildCutHalves on a curve split", () => {
+  const points = [
+    pt(0, 0),
+    pt(100, 0),
+    pt(130, 60, PathPointType.CURVE),
+    pt(170, 60, PathPointType.CURVE),
+    pt(200, 0),
+    pt(300, 0)
+  ]
+
+  test("assembles bezier halves that jointly trace the original", () => {
+    const result = findCutSite(points, { x: 150, y: 52 }, 10, 8, {
+      splitCurves: true
+    })
+    expect(result.kind).toBe("site")
+    if (result.kind !== "site") {
+      return
+    }
+    const halves = buildCutHalves(points, result.site)
+    expect(halves.first.map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE
+    ])
+    expect(halves.second.map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE,
+      PathPointType.LINE
+    ])
+    const pA = halves.first[halves.first.length - 1]
+    const pB = halves.second[0]
+    expect(pA.x).toBeCloseTo(result.site.point.x)
+    expect(pA.y).toBeCloseTo(result.site.point.y)
+    expect(pB.x).toBeCloseTo(pA.x)
+    expect(pB.y).toBeCloseTo(pA.y)
+    const t0 = result.site.curveSplit?.t ?? 0
+    for (const u of [0.1, 0.25, 0.45, 0.7, 0.9]) {
+      const orig = evalAt(points[1], points[2], points[3], points[4], u)
+      const h =
+        u <= t0
+          ? evalAt(
+              halves.first[1],
+              halves.first[2],
+              halves.first[3],
+              halves.first[4],
+              u / t0
+            )
+          : evalAt(
+              halves.second[0],
+              halves.second[1],
+              halves.second[2],
+              halves.second[3],
+              (u - t0) / (1 - t0)
+            )
+      expect(h.x).toBeCloseTo(orig.x, 4)
+      expect(h.y).toBeCloseTo(orig.y, 4)
+    }
+  })
+})

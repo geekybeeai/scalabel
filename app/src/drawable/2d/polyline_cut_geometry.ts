@@ -454,6 +454,40 @@ export function buildCutHalves(
       second: points.slice(j).map(copy)
     }
   }
+  if (site.curveSplit !== undefined) {
+    const { groupStart, t } = site.curveSplit
+    const split = splitCubicBezier(
+      points[groupStart],
+      points[groupStart + 1],
+      points[groupStart + 2],
+      points[groupStart + 3],
+      t
+    )
+    const curvePoint = (p: Point2D): SimplePathPoint2DType => ({
+      x: p.x,
+      y: p.y,
+      pointType: PathPointType.CURVE
+    })
+    const splitPoint: SimplePathPoint2DType = {
+      x: split.point.x,
+      y: split.point.y,
+      pointType: PathPointType.LINE
+    }
+    return {
+      first: [
+        ...points.slice(0, groupStart + 1).map(copy),
+        curvePoint(split.left.c1),
+        curvePoint(split.left.c2),
+        { ...splitPoint }
+      ],
+      second: [
+        { ...splitPoint },
+        curvePoint(split.right.c1),
+        curvePoint(split.right.c2),
+        ...points.slice(groupStart + 3).map(copy)
+      ]
+    }
+  }
   const i = site.segmentIndex
   const cutPoint: SimplePathPoint2DType = {
     x: site.point.x,
