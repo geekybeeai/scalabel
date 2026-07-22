@@ -33,17 +33,21 @@ Open when: changing how a line is drawn, edited, its vertices/curves, merge, val
 - `app/src/drawable/2d/polyline_cut_geometry.ts` — pure cut-site math:
   `findCutSite` (nearest-span projection, endpoint guards, vertex snap; the
   opt-in `splitCurves` option resolves curve clicks to bezier split sites
-  via `nearestTOnCubic` + `curveGroupIndices` — without it curve spans
-  reject, which is what delete-segment relies on), `buildCutHalves`
-  (assembles `splitCubicBezier` de Casteljau halves for curve sites). Also
-  the delete-segment geometry: `DeleteSitePick`, `normalizeDeletePicks`,
-  `buildSegmentDeletePieces` (survivors + doomed path).
+  via `nearestTOnCubic` + `curveGroupIndices`; malformed groups still
+  reject as "curve"), `buildCutHalves` (assembles `splitCubicBezier`
+  de Casteljau halves for curve sites). Also the delete-segment geometry:
+  `DeleteSitePick`, `normalizeDeletePicks`, `buildSegmentDeletePieces`
+  (survivors + doomed path; mid-curve picks are pre-split into vertex
+  snaps on a bezier-split copy — later pick first, same-group t1/t2
+  remap — so the slicing stays curve-agnostic).
   No Session/DOM imports — testable with the node-env recipe.
 - `app/src/drawable/2d/polyline_cut.ts` — `performCut` (scan open polylines →
   split → delete+add original id, add new label → `drawHistory.recordCut`;
   passes `splitCurves: true`, so curved spans are cut by bezier split).
 - `app/src/drawable/2d/polyline_segment_delete.ts` — delete-segment tool:
-  `handleSegmentDeletePick` (two picks; end picks = trims),
+  `handleSegmentDeletePick` (two picks; end picks = trims; picks resolve
+  on curved spans via `splitCurves: true` — mid-curve picks split beziers,
+  both-in-one-sweep supported),
   `commitPendingSegmentDelete` (atomic; records cut/edited/deleted per
   outcome — no new history kinds).
 
