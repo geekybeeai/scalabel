@@ -12,6 +12,7 @@ import * as actionConsts from "../const/action"
 import { LabelTypeName, ViewerConfigTypeName } from "../const/common"
 import * as actionTypes from "../types/action"
 import {
+  ImageViewerConfigType,
   INVALID_ID,
   ItemType,
   LabelType,
@@ -1039,7 +1040,26 @@ export function changeSelect(
     if (newSelect.item < 0 || newSelect.item >= state.task.items.length) {
       newSelect.item = state.user.select.item
     }
-    return updateObject(state, { user: updateUserSelect(state.user, newSelect) })
+    let user = updateUserSelect(state.user, newSelect)
+    // View rotation is a per-image display aid: navigating to a different
+    // item snaps the view back to its original orientation.
+    if (newSelect.item !== state.user.select.item) {
+      const viewerConfigs = { ...user.viewerConfigs }
+      let rotationCleared = false
+      for (const key of Object.keys(viewerConfigs)) {
+        const id = Number(key)
+        const config = viewerConfigs[id] as ImageViewerConfigType
+        if (config.rotation !== undefined && config.rotation !== 0) {
+          const cleared: ImageViewerConfigType = { ...config, rotation: 0 }
+          viewerConfigs[id] = cleared
+          rotationCleared = true
+        }
+      }
+      if (rotationCleared) {
+        user = updateObject(user, { viewerConfigs })
+      }
+    }
+    return updateObject(state, { user })
   } catch (err: any) {
     console.error("[DEBUG] Caught error in changeSelect:", err, err.stack)
     throw err

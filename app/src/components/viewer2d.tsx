@@ -6,6 +6,7 @@ import FindReplaceIcon from "@material-ui/icons/FindReplace"
 import LineWeightIcon from "@material-ui/icons/LineWeight"
 import RedoIcon from "@material-ui/icons/Redo"
 import RemoveIcon from "@material-ui/icons/Remove"
+import ReplayIcon from "@material-ui/icons/Replay"
 import RotateLeftIcon from "@material-ui/icons/RotateLeft"
 import RotateRightIcon from "@material-ui/icons/RotateRight"
 import UndoIcon from "@material-ui/icons/Undo"
@@ -414,9 +415,28 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   }
 
   /**
-   * Build the rotate-left / rotate-right toolbar buttons.
+   * Reset the view rotation to the original (0°) orientation. Same
+   * mid-gesture guards as rotateView; a no-op when already at 0°.
+   */
+  private resetRotation(): void {
+    if (
+      Session.label2dList.isDrawingInProgress() ||
+      getSegmentDeletePhase() === "preview"
+    ) {
+      return
+    }
+    const config = this._viewerConfig as ImageViewerConfigType
+    if ((config.rotation ?? 0) === 0) {
+      return
+    }
+    const newConfig: ImageViewerConfigType = { ...config, rotation: 0 }
+    Session.dispatch(changeViewerConfig(this._viewerId, newConfig))
+  }
+
+  /**
+   * Build the rotate-left / rotate-right / reset-rotation toolbar buttons.
    *
-   * @return {JSX.Element[]} rotate-left and rotate-right buttons
+   * @return {JSX.Element[]} rotate-left, rotate-right and reset buttons
    */
   protected getRotationButtons(): JSX.Element[] {
     const rotateLeftButton = (
@@ -455,7 +475,25 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         </IconButton>
       </Tooltip>
     )
-    return [rotateLeftButton, rotateRightButton]
+    const resetRotationButton = (
+      <Tooltip
+        key={`resetRotation2dButton${this.props.id}`}
+        title="Reset rotation"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => this.resetRotation()}
+          className={this.props.classes.viewer_button}
+          edge={"start"}
+        >
+          <ReplayIcon />
+        </IconButton>
+      </Tooltip>
+    )
+    return [rotateLeftButton, rotateRightButton, resetRotationButton]
   }
 
   /**
