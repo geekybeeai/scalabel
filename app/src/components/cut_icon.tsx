@@ -14,13 +14,21 @@ export const CONTENT_CUT_PATH =
   "0-.5-.22-.5-.5s.22-.5.5-.5.5.22.5.5-.22.5-.5.5zM19 3l-6 6 2 2 7-7V3z"
 
 /**
+ * Expanded viewBox shared by the custom toolbar icons. Their glyphs are drawn
+ * to the edges of the 24x24 box, while stock material icons are inset a
+ * couple of pixels — the 2px margin here shrinks the custom glyphs (~14%) so
+ * they optically match the rest of the toolbar.
+ */
+const INSET_VIEW_BOX = "-2 -2 28 28"
+
+/**
  * Scissors icon for the cut tool (toolbar button + context-menu item).
  *
  * @param props standard SvgIcon props (fontSize, style, ...)
  */
 export function ContentCutIcon(props: SvgIconProps): JSX.Element {
   return (
-    <SvgIcon {...props}>
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
       <path d={CONTENT_CUT_PATH} />
     </SvgIcon>
   )
@@ -56,7 +64,7 @@ export const DELETE_SEGMENT_PATH =
  */
 export function DeleteSegmentIcon(props: SvgIconProps): JSX.Element {
   return (
-    <SvgIcon {...props}>
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
       <path d={DELETE_SEGMENT_PATH} />
     </SvgIcon>
   )
@@ -70,7 +78,7 @@ export function DeleteSegmentIcon(props: SvgIconProps): JSX.Element {
  */
 export function FreeformSelectIcon(props: SvgIconProps): JSX.Element {
   return (
-    <SvgIcon {...props}>
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
       <path
         fill="none"
         stroke="currentColor"
@@ -99,7 +107,7 @@ export function RefreshCcwIcon(props: SvgIconProps): JSX.Element {
     strokeLinejoin: "round" as const
   }
   return (
-    <SvgIcon {...props}>
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
       <path {...strokeProps} d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
       <path {...strokeProps} d="M3 3v5h5" />
       <path {...strokeProps} d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
@@ -116,7 +124,7 @@ export function RefreshCcwIcon(props: SvgIconProps): JSX.Element {
  */
 export function RectangleSelectIcon(props: SvgIconProps): JSX.Element {
   return (
-    <SvgIcon {...props}>
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
       <rect
         x={4}
         y={6}
