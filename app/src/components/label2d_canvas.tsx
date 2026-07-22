@@ -641,7 +641,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         case "curve":
           alert(
             Severity.WARNING,
-            "Cannot cut a curved segment — straighten it first."
+            "Cannot cut a curved segment."
           )
           break
         case "closed":
@@ -700,7 +700,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         case "curve":
           alert(
             Severity.WARNING,
-            "Cannot cut a curved segment — straighten it first."
+            "Cannot cut a curved segment."
           )
           break
         case "closed":
