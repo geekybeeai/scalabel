@@ -65,6 +65,8 @@ Open when: how lines paint, hit-testing, zoom/pan/rotation, screen↔image mappi
 - `app/src/components/image_canvas.tsx` — the **image** canvas (`redraw` → `drawImageOnCanvas`,
   `updateScale`).
 - `app/src/components/viewer2d.tsx` — the 2D viewer + **toolbar buttons**:
+  (rendered into the NAVBAR via a portal — `drawable_viewer.tsx render` →
+  `title_bar.tsx` `NAVBAR_TOOLS_SLOT_ID` slot; the buttons' logic stays here)
   `getMenuComponents` (zoom/width buttons), `getHistoryButtons` (undo/redo),
   `getRotationButtons`, `onWheel`/`zoom` (cursor-focal), pan, `changeLineWidth`,
   `rotateView`/`resetRotation` (±90° + reset-to-0 buttons, display-only;

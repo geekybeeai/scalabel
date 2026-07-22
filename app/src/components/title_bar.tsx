@@ -27,6 +27,12 @@ import { StatusMessageBox } from "./message_box"
 // How long to wait until saving times out
 export const saveTimeout = 20000
 
+/**
+ * Id of the empty slot in the title bar that the drawable viewer portals its
+ * toolbar buttons (zoom, rotate, cut, ...) into. See DrawableViewer.render.
+ */
+export const NAVBAR_TOOLS_SLOT_ID = "navbar-tools-slot"
+
 interface ClassType {
   /** App bar class */
   appBar: string
@@ -192,6 +198,16 @@ class TitleBar extends Component<Props> {
           <Fade in={!statusTextHide} timeout={300}>
             <StatusMessageBox>{statusText}</StatusMessageBox>
           </Fade>
+          {/* Slot the drawable viewer portals its toolbar buttons into */}
+          <div
+            id={NAVBAR_TOOLS_SLOT_ID}
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+              marginLeft: 16
+            }}
+          />
           <div className={classes.grow} />
           {buttons}
         </Toolbar>
