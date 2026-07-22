@@ -37,6 +37,31 @@ export class Window extends React.Component<Props> {
     window.addEventListener(
       "wheel",
       (e) => {
+        // Ctrl/Meta wheel (and trackpad pinch, which arrives the same way)
+        // is browser page-zoom — always block it; the canvas has its own
+        // zoom handler.
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault()
+          return
+        }
+        // Let the wheel scroll any genuinely scrollable element under the
+        // cursor (e.g. the category sidebar). Only block when nothing
+        // scrolls there, which prevents page rubber-banding while wheel-
+        // zooming over the canvas.
+        let el = e.target as HTMLElement | null
+        while (el !== null && el !== document.body) {
+          const style = window.getComputedStyle(el)
+          const scrollableY =
+            (style.overflowY === "auto" || style.overflowY === "scroll") &&
+            el.scrollHeight > el.clientHeight
+          const scrollableX =
+            (style.overflowX === "auto" || style.overflowX === "scroll") &&
+            el.scrollWidth > el.clientWidth
+          if (scrollableY || scrollableX) {
+            return
+          }
+          el = el.parentElement
+        }
         e.preventDefault()
       },
       { passive: false }
