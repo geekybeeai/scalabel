@@ -1041,21 +1041,37 @@ export function changeSelect(
       newSelect.item = state.user.select.item
     }
     let user = updateUserSelect(state.user, newSelect)
-    // View rotation is a per-image display aid: navigating to a different
-    // item snaps the view back to its original orientation.
+    // View rotation is a per-image display aid: each item remembers its own
+    // rotation. On navigation, save the outgoing item's rotation into the
+    // itemRotations memory and restore the incoming item's (default 0), so
+    // rotating or resetting one image never affects another.
     if (newSelect.item !== state.user.select.item) {
+      const oldItem = state.user.select.item
       const viewerConfigs = { ...user.viewerConfigs }
-      let rotationCleared = false
+      let rotationSwapped = false
       for (const key of Object.keys(viewerConfigs)) {
         const id = Number(key)
         const config = viewerConfigs[id] as ImageViewerConfigType
-        if (config.rotation !== undefined && config.rotation !== 0) {
-          const cleared: ImageViewerConfigType = { ...config, rotation: 0 }
-          viewerConfigs[id] = cleared
-          rotationCleared = true
+        const current = config.rotation ?? 0
+        const memory = { ...(config.itemRotations ?? {}) }
+        if (current !== 0) {
+          memory[oldItem] = current
+        } else {
+          // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+          delete memory[oldItem]
+        }
+        const restored = memory[newSelect.item] ?? 0
+        if (current !== restored || memory[oldItem] !== undefined) {
+          const swapped: ImageViewerConfigType = {
+            ...config,
+            rotation: restored,
+            itemRotations: memory
+          }
+          viewerConfigs[id] = swapped
+          rotationSwapped = true
         }
       }
-      if (rotationCleared) {
+      if (rotationSwapped) {
         user = updateObject(user, { viewerConfigs })
       }
     }

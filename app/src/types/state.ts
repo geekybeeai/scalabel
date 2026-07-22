@@ -232,6 +232,12 @@ export interface ImageViewerConfigType extends ViewerConfigType {
   lineWidthMultiplier?: number
   /** Display-only view rotation in degrees: 0 | 90 | 180 | 270. Never exported. */
   rotation?: number
+  /**
+   * Per-item memory for the display-only rotation: itemIndex -> degrees.
+   * changeSelect saves the outgoing item's rotation here and restores the
+   * incoming item's, so every image keeps its own orientation. Never exported.
+   */
+  itemRotations?: { [itemIndex: number]: number }
 }
 
 export interface PointCloudViewerConfigType extends ViewerConfigType {

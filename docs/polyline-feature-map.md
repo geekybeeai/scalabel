@@ -71,7 +71,8 @@ Open when: how lines paint, hit-testing, zoom/pan/rotation, screen↔image mappi
   inert while drawing or during a delete-segment preview; **R** = CW /
   **Shift+R** = CCW in `label2d_canvas.tsx onKeyDown`, skipped while typing
   in inputs). Rotation is per-image: the `changeSelect` reducer
-  (`functional/common.ts`) zeroes it whenever the selected item changes.
+  (`functional/common.ts`) swaps `rotation` through the `itemRotations`
+  memory map on item change, so each image keeps its own orientation.
 - `app/src/view_config/image.ts` — **coordinate + canvas math**: `toImageCoords`/
   `toCanvasCoords` (scale-only), `normalizeMouseCoordinates`, `updateCanvasScale`
   (canvas sizing, `displayToImageRatio`, rotation dim-swap), `drawImageOnCanvas`,

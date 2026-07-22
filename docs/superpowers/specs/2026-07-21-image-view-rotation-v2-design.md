@@ -150,12 +150,15 @@ delete-segment / select tool logic, export/import, or the backend.
   drawables rebuild and repaint rotated. No special handling.
 - **Predictions from the host** — original-frame coords; rotate with the view
   automatically.
-- **Item navigation while rotated** — rotation is scoped to the CURRENT
-  image: the `changeSelect` reducer zeroes `rotation` on every image viewer
-  config whenever the selected item changes (all navigation paths emit
-  `CHANGE_SELECT`), so each image opens in its original orientation. Also
-  resets on reload. (Revised 2026-07-21: the original design let rotation
-  survive item switches; user feedback changed this.)
+- **Item navigation while rotated** — every image remembers its OWN
+  rotation: the `changeSelect` reducer (all navigation paths emit
+  `CHANGE_SELECT`) saves the outgoing item's rotation into the
+  `itemRotations` memory map on the viewer config and restores the incoming
+  item's (default 0). Rotating or resetting one image never affects
+  another; a first visit always opens in the original orientation. All of
+  it resets on reload. (Revised twice on 2026-07-21: the original design
+  had one global rotation; then reset-on-navigation; user feedback settled
+  on per-image memory.)
 
 ## Verification
 
