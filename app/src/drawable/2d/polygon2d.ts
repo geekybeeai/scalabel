@@ -20,7 +20,7 @@ import {
   State
 } from "../../types/state"
 import { blendColor, Context2D, encodeControlColor, getColorByCategory, toCssColor } from "../util"
-import { DASH_LINE, DELETE_HIGHLIGHT_COLOR, MIN_SIZE, OPACITY } from "./common"
+import { DASH_LINE, DELETE_HIGHLIGHT_COLOR, MIN_SIZE } from "./common"
 import { curveGroupIndices } from "./curve_groups"
 import { getAntsOffset } from "./marching_ants"
 import { DrawMode, Label2D } from "./label2d"
@@ -505,11 +505,10 @@ export class Polygon2D extends Label2D {
       if (this._closed) {
         context.lineTo(begin.x, begin.y)
         context.closePath()
-        if (mode === DrawMode.VIEW) {
-          const fillStyle = this._color.concat(OPACITY)
-          context.fillStyle = toCssColor(fillStyle)
-          context.fill()
-        } else if (sessionMode === ModeStatus.SELECTING) {
+        // Closed shapes render as OUTLINE ONLY on the visible canvas — no
+        // solid fill (it hid the image). The CONTROL canvas still fills in
+        // selecting mode so a click anywhere inside the ring hit-tests it.
+        if (mode === DrawMode.CONTROL && sessionMode === ModeStatus.SELECTING) {
           context.fillStyle = toCssColor(edgeStyle.color)
           context.fill()
         }
