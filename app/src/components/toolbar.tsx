@@ -418,6 +418,10 @@ export class ToolBar extends Component<Props> {
               Keyboard Shortcuts
             </div>
             {[
+              { keys: ["Space"], label: "show / hide image" },
+              { keys: ["R"], label: "rotate view 90°" },
+              { keys: ["Ctrl", "Click"], label: "select line for delete" },
+              { keys: ["Shift", "Drag"], label: "select region for delete" },
               { keys: ["Enter"], label: "confirm line" },
               { keys: ["Delete"], label: "delete line" },
               { keys: ["Ctrl", "C"], label: "copy line" },
@@ -425,10 +429,6 @@ export class ToolBar extends Component<Props> {
               { keys: ["Ctrl", "Z"], label: "undo" },
               { keys: ["Ctrl", "Y"], label: "redo" },
               { keys: ["C"], label: "control curve" },
-              { keys: ["Space"], label: "show / hide image" },
-              { keys: ["R"], label: "rotate view 90°" },
-              { keys: ["Ctrl", "Click"], label: "select line for delete" },
-              { keys: ["Shift", "Drag"], label: "select region for delete" },
               { keys: ["Scroll"], label: "zoom (mouse)" },
               { keys: ["Pinch"], label: "zoom (trackpad)" },
               { keys: ["Drag"], label: "pan (mouse / trackpad)" }
