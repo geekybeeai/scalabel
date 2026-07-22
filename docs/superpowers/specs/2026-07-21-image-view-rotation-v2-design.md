@@ -40,8 +40,9 @@ changes).
 
 - **Semantics:** user annotates in the rotated view; saved/exported JSON is
   always in the original image frame.
-- **Controls:** Rotate left (90° CCW) and Rotate right (90° CW) toolbar
-  buttons, plus **R** = clockwise and **Shift+R** = counter-clockwise.
+- **Controls:** Rotate left (90° CCW), Rotate right (90° CW) and Reset
+  rotation (back to 0°) toolbar buttons, plus **R** = clockwise and
+  **Shift+R** = counter-clockwise.
 - **Granularity:** 0/90/180/270 only. Exact and lossless — no resampling.
 - **Persistence:** none. Resets to 0 on reload.
 - **All tools work at any rotation** — drawing, vertex editing, curves,
@@ -149,8 +150,12 @@ delete-segment / select tool logic, export/import, or the backend.
   drawables rebuild and repaint rotated. No special handling.
 - **Predictions from the host** — original-frame coords; rotate with the view
   automatically.
-- **Item navigation while rotated** — rotation is per-viewer config and
-  survives item switches within a session (like zoom); resets on reload.
+- **Item navigation while rotated** — rotation is scoped to the CURRENT
+  image: the `changeSelect` reducer zeroes `rotation` on every image viewer
+  config whenever the selected item changes (all navigation paths emit
+  `CHANGE_SELECT`), so each image opens in its original orientation. Also
+  resets on reload. (Revised 2026-07-21: the original design let rotation
+  survive item switches; user feedback changed this.)
 
 ## Verification
 

@@ -67,9 +67,11 @@ Open when: how lines paint, hit-testing, zoom/pan/rotation, screen↔image mappi
 - `app/src/components/viewer2d.tsx` — the 2D viewer + **toolbar buttons**:
   `getMenuComponents` (zoom/width buttons), `getHistoryButtons` (undo/redo),
   `getRotationButtons`, `onWheel`/`zoom` (cursor-focal), pan, `changeLineWidth`,
-  `rotateView` (±90°, display-only; inert while drawing or during a
-  delete-segment preview; **R** = CW / **Shift+R** = CCW in
-  `label2d_canvas.tsx onKeyDown`, skipped while typing in inputs).
+  `rotateView`/`resetRotation` (±90° + reset-to-0 buttons, display-only;
+  inert while drawing or during a delete-segment preview; **R** = CW /
+  **Shift+R** = CCW in `label2d_canvas.tsx onKeyDown`, skipped while typing
+  in inputs). Rotation is per-image: the `changeSelect` reducer
+  (`functional/common.ts`) zeroes it whenever the selected item changes.
 - `app/src/view_config/image.ts` — **coordinate + canvas math**: `toImageCoords`/
   `toCanvasCoords` (scale-only), `normalizeMouseCoordinates`, `updateCanvasScale`
   (canvas sizing, `displayToImageRatio`, rotation dim-swap), `drawImageOnCanvas`,
