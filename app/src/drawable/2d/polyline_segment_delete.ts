@@ -165,7 +165,9 @@ function scanForPick(
       continue
     }
     const scanPoints = isOpen ? points : [...points, points[0]]
-    const result = findCutSite(scanPoints, click, radius, snapRadius)
+    const result = findCutSite(scanPoints, click, radius, snapRadius, {
+      splitCurves: true
+    })
     if (result.kind === "miss") {
       continue
     }
