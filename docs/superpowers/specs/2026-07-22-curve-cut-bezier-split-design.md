@@ -21,7 +21,7 @@ together render pixel-identical to the original.
 | Cut semantics on a curve | **True bezier split** (de Casteljau) at the point on the actual curve nearest the click — halves preserve the exact shape. Snap-to-anchor and straighten-at-cut alternatives rejected |
 | Shared-geometry divergence | `findCutSite` gains an opt-in `options: { splitCurves?: boolean }` (default `false`); only `performCut` passes `true`, so delete-segment call sites are untouched without signature churn |
 | Malformed curve data | Stray CURVE points not forming a well-formed group (per `curveGroupIndices`'s rules) keep the old `"curve"` rejection — defensive fallback, never guess |
-| UI | **No changes**: same button, cursor, arming guards, one-shot lifetime, toasts (minus one now-unreachable case) |
+| UI | **No changes**: same button, cursor, arming guards, one-shot lifetime, toasts unchanged |
 
 ## Behavior contract
 
@@ -44,9 +44,9 @@ With the scissors armed, a click whose nearest span belongs to a bezier group
    curve spans — an accuracy improvement over the control-polygon distance.
 5. **Delete-segment picks unchanged**: its `findCutSite` calls omit
    `splitCurves`, so curve picks still return `"curve"` and its toast still
-   fires. The cut tool's own `"curve"` toast case becomes unreachable and is
-   removed from the cut switch in `label2d_canvas.tsx` (the delete-segment
-   switch keeps its case).
+   fires. The cut tool's own `"curve"` case **stays** in the cut switch in
+   `label2d_canvas.tsx`: it remains reachable as the malformed-group
+   fallback (case 6) and keeps the existing neutral toast.
 6. **Malformed groups** → `"curve"` rejection (fallback), even with
    `splitCurves` on.
 
