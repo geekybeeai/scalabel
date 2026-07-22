@@ -1,9 +1,11 @@
 import { Grid } from "@material-ui/core"
 import React from "react"
+import ReactDOM from "react-dom"
 
 import Session from "../common/session"
 import { ViewerConfigType } from "../types/state"
 import { Component } from "./component"
+import { NAVBAR_TOOLS_SLOT_ID } from "./title_bar"
 
 /**
  * Generate string to use for react component key
@@ -100,6 +102,10 @@ export abstract class DrawableViewer<
     if (Session.activeViewerId === -1) {
       Session.activeViewerId = this.props.id
     }
+    // The title-bar tools slot did not exist yet during the initial render
+    // (sibling tree, committed in the same pass); re-render so the toolbar
+    // portal finds it.
+    this.forceUpdate()
   }
 
   /**
@@ -120,13 +126,24 @@ export abstract class DrawableViewer<
     this._item = this.state.user.select.item
 
     const bannerMessage = this.bannerMessage()
+    // Render the toolbar buttons into the title-bar slot (the navbar) via a
+    // portal, so the canvas gets the full pane height. Only the active viewer
+    // portals (guards against duplicate button sets with split panes); until
+    // the slot exists (first render) the buttons stay inline as a fallback.
+    const menuComponents = this.getMenuComponents()
+    const toolsSlot = document.getElementById(NAVBAR_TOOLS_SLOT_ID)
+    const portalTools =
+      toolsSlot !== null && Session.activeViewerId === this.props.id
     return (
       <div
         className={this.props.classes.viewer_container}
         style={{ display: "flex", flexDirection: "column" }}
       >
+        {portalTools && toolsSlot !== null
+          ? ReactDOM.createPortal(<>{menuComponents}</>, toolsSlot)
+          : null}
         <Grid justifyContent={"flex-start"} container direction="row">
-          {...this.getMenuComponents()}
+          {...(portalTools ? [] : menuComponents)}
           {bannerMessage !== undefined && (
             <div style={{ flexGrow: 1, height: "48px" }}>
               <div
