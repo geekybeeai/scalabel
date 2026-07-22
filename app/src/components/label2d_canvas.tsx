@@ -67,7 +67,7 @@ import { Label2DList } from "../drawable/2d/label2d_list"
 import { getCurrentViewerConfig, isFrameLoaded } from "../functional/state_util"
 import { Vector2D } from "../math/vector2d"
 import { label2dViewStyle } from "../styles/label"
-import { ImageViewerConfigType, State } from "../types/state"
+import { ImageViewerConfigType, PathPointType, State } from "../types/state"
 import {
   clearCanvas,
   getCurrentImageSize,
@@ -1032,10 +1032,30 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       context.lineDashOffset = -getAntsOffset()
       context.moveTo(preview.doomed[0].x * ratio, preview.doomed[0].y * ratio)
       for (let i = 1; i < preview.doomed.length; i++) {
-        context.lineTo(
-          preview.doomed[i].x * ratio,
-          preview.doomed[i].y * ratio
-        )
+        const p = preview.doomed[i]
+        // A control-control-anchor run renders as its bezier arc so a
+        // doomed curve chunk previews as the true curve, not its control
+        // polygon.
+        if (
+          p.pointType === PathPointType.CURVE &&
+          i + 2 < preview.doomed.length &&
+          preview.doomed[i + 1].pointType === PathPointType.CURVE &&
+          preview.doomed[i + 2].pointType !== PathPointType.CURVE
+        ) {
+          const c2 = preview.doomed[i + 1]
+          const a = preview.doomed[i + 2]
+          context.bezierCurveTo(
+            p.x * ratio,
+            p.y * ratio,
+            c2.x * ratio,
+            c2.y * ratio,
+            a.x * ratio,
+            a.y * ratio
+          )
+          i += 2
+        } else {
+          context.lineTo(p.x * ratio, p.y * ratio)
+        }
       }
       context.stroke()
       // Halos on both picked points, on top of the dashed path.
