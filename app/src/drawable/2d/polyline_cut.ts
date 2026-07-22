@@ -120,7 +120,9 @@ export function performCut(
     // Closed shapes participate only for the "closed" rejection message;
     // include their closing edge so clicks on it are attributed to them.
     const scanPoints = isOpen ? points : [...points, points[0]]
-    const result = findCutSite(scanPoints, click, radius, snapRadius)
+    const result = findCutSite(scanPoints, click, radius, snapRadius, {
+      splitCurves: true
+    })
     if (result.kind === "miss") {
       continue
     }

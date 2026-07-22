@@ -224,6 +224,13 @@ export function nearestTOnCubic(
   }
 }
 
+/** Options for findCutSite. */
+export interface FindCutSiteOptions {
+  /** Resolve clicks on curved spans to bezier split sites (the cut tool).
+   * Default false: curved spans reject as "curve" (delete-segment). */
+  splitCurves?: boolean
+}
+
 /**
  * Find where a click would cut a polyline.
  *
@@ -243,14 +250,9 @@ export function nearestTOnCubic(
  * @param click.y click y (image px)
  * @param radius max click-to-line distance for a cut (image px)
  * @param snapRadius vertex snap / endpoint-guard distance (image px)
+ * @param options optional flags; splitCurves resolves curve clicks to
+ * bezier split sites instead of rejecting them
  */
-/** Options for findCutSite. */
-export interface FindCutSiteOptions {
-  /** Resolve clicks on curved spans to bezier split sites (the cut tool).
-   * Default false: curved spans reject as "curve" (delete-segment). */
-  splitCurves?: boolean
-}
-
 export function findCutSite(
   points: readonly SimplePathPoint2DType[],
   click: { x: number; y: number },
@@ -350,6 +352,8 @@ export function findCutSite(
  *
  * @param points the polyline's stored vertices
  * @param click the click position
+ * @param click.x click x (image px)
+ * @param click.y click y (image px)
  * @param radius max click-to-curve distance (image px)
  * @param snapRadius anchor snap / endpoint-guard distance (image px)
  * @param spanIndex the nearest control-polygon span's start index
