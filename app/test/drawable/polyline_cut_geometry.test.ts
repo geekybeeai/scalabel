@@ -3,9 +3,11 @@ import {
   buildSegmentDeletePieces,
   DeleteSitePick,
   findCutSite,
+  nearestTOnCubic,
   normalizeDeletePicks,
   resolvePickPoint,
-  sitePositionKey
+  sitePositionKey,
+  splitCubicBezier
 } from "../../src/drawable/2d/polyline_cut_geometry"
 import { PathPointType, SimplePathPoint2DType } from "../../src/types/state"
 
@@ -368,5 +370,99 @@ describe("buildSegmentDeletePieces", () => {
     ])
     expect(right).toEqual([pt(250, 0), pt(300, 0)])
     expect(doomed).toEqual([pt(150, 0), pt(200, 0), pt(250, 0)])
+  })
+})
+
+/**
+ * Evaluate a cubic bezier at t (Bernstein form) — test-side oracle.
+ *
+ * @param a0 start anchor
+ * @param c1 first control point
+ * @param c2 second control point
+ * @param a1 end anchor
+ * @param t curve parameter in [0, 1]
+ */
+function evalAt(
+  a0: { x: number; y: number },
+  c1: { x: number; y: number },
+  c2: { x: number; y: number },
+  a1: { x: number; y: number },
+  t: number
+): { x: number; y: number } {
+  const s = 1 - t
+  const w0 = s * s * s
+  const w1 = 3 * s * s * t
+  const w2 = 3 * s * t * t
+  const w3 = t * t * t
+  return {
+    x: w0 * a0.x + w1 * c1.x + w2 * c2.x + w3 * a1.x,
+    y: w0 * a0.y + w1 * c1.y + w2 * c2.y + w3 * a1.y
+  }
+}
+
+describe("splitCubicBezier", () => {
+  const a0 = pt(0, 0)
+  const c1 = pt(30, 60, PathPointType.CURVE)
+  const c2 = pt(70, 60, PathPointType.CURVE)
+  const a1 = pt(100, 0)
+
+  test("t=0.5 splits a symmetric curve symmetrically", () => {
+    const split = splitCubicBezier(a0, c1, c2, a1, 0.5)
+    expect(split.point.x).toBeCloseTo(50)
+    expect(split.point.y).toBeCloseTo(45)
+    expect(split.left.c1).toEqual({ x: 15, y: 30 })
+    expect(split.right.c2).toEqual({ x: 85, y: 30 })
+  })
+
+  test("halves jointly trace the original cubic", () => {
+    const t0 = 0.3
+    const split = splitCubicBezier(a0, c1, c2, a1, t0)
+    for (const u of [0, 0.1, 0.2, 0.3]) {
+      const orig = evalAt(a0, c1, c2, a1, u)
+      const left = evalAt(a0, split.left.c1, split.left.c2, split.point, u / t0)
+      expect(left.x).toBeCloseTo(orig.x, 6)
+      expect(left.y).toBeCloseTo(orig.y, 6)
+    }
+    for (const u of [0.3, 0.5, 0.8, 1]) {
+      const orig = evalAt(a0, c1, c2, a1, u)
+      const right = evalAt(
+        split.point,
+        split.right.c1,
+        split.right.c2,
+        a1,
+        (u - t0) / (1 - t0)
+      )
+      expect(right.x).toBeCloseTo(orig.x, 6)
+      expect(right.y).toBeCloseTo(orig.y, 6)
+    }
+  })
+})
+
+describe("nearestTOnCubic", () => {
+  const a0 = pt(0, 0)
+  const c1 = pt(30, 60, PathPointType.CURVE)
+  const c2 = pt(70, 60, PathPointType.CURVE)
+  const a1 = pt(100, 0)
+
+  test("recovers t for an on-curve click", () => {
+    const target = evalAt(a0, c1, c2, a1, 0.4)
+    const near = nearestTOnCubic(a0, c1, c2, a1, target)
+    expect(near.distance).toBeLessThan(0.01)
+    expect(near.t).toBeCloseTo(0.4, 2)
+  })
+
+  test("finds the nearest curve point for an off-curve click", () => {
+    // The symmetric curve's apex is (50, 45); click straight above it.
+    const near = nearestTOnCubic(a0, c1, c2, a1, { x: 50, y: 55 })
+    expect(near.point.x).toBeCloseTo(50, 1)
+    expect(near.point.y).toBeCloseTo(45, 1)
+    expect(near.distance).toBeCloseTo(10, 1)
+  })
+
+  test("clamps to the ends for clicks beyond them", () => {
+    const nearStart = nearestTOnCubic(a0, c1, c2, a1, { x: -20, y: -5 })
+    expect(nearStart.t).toBeLessThan(0.05)
+    const nearEnd = nearestTOnCubic(a0, c1, c2, a1, { x: 120, y: -5 })
+    expect(nearEnd.t).toBeGreaterThan(0.95)
   })
 })

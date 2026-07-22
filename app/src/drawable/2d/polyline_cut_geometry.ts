@@ -67,6 +67,158 @@ function projectOntoSegment(
   return { dist: Math.hypot(px - x, py - y), x, y }
 }
 
+/** A plain 2D coordinate. */
+export interface Point2D {
+  x: number
+  y: number
+}
+
+/**
+ * Linear interpolation between two points.
+ *
+ * @param a start point
+ * @param b end point
+ * @param t interpolation parameter in [0, 1]
+ */
+function lerp(a: Point2D, b: Point2D, t: number): Point2D {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+}
+
+/**
+ * Evaluate a cubic bezier at t (Bernstein form).
+ *
+ * @param a0 start anchor
+ * @param c1 first control point
+ * @param c2 second control point
+ * @param a1 end anchor
+ * @param t curve parameter in [0, 1]
+ */
+function evalCubic(
+  a0: Point2D,
+  c1: Point2D,
+  c2: Point2D,
+  a1: Point2D,
+  t: number
+): Point2D {
+  const s = 1 - t
+  const w0 = s * s * s
+  const w1 = 3 * s * s * t
+  const w2 = 3 * s * t * t
+  const w3 = t * t * t
+  return {
+    x: w0 * a0.x + w1 * c1.x + w2 * c2.x + w3 * a1.x,
+    y: w0 * a0.y + w1 * c1.y + w2 * c2.y + w3 * a1.y
+  }
+}
+
+/** Result of splitting a cubic bezier at a parameter t. */
+export interface CubicSplit {
+  /** left half's control points (anchors: original a0 .. point) */
+  left: { c1: Point2D; c2: Point2D }
+  /** the on-curve split point */
+  point: Point2D
+  /** right half's control points (anchors: point .. original a1) */
+  right: { c1: Point2D; c2: Point2D }
+}
+
+/**
+ * Split a cubic bezier at parameter t (de Casteljau). The two halves
+ * jointly trace exactly the original curve.
+ *
+ * @param a0 start anchor
+ * @param c1 first control point
+ * @param c2 second control point
+ * @param a1 end anchor
+ * @param t split parameter in [0, 1]
+ */
+export function splitCubicBezier(
+  a0: Point2D,
+  c1: Point2D,
+  c2: Point2D,
+  a1: Point2D,
+  t: number
+): CubicSplit {
+  const p01 = lerp(a0, c1, t)
+  const p12 = lerp(c1, c2, t)
+  const p23 = lerp(c2, a1, t)
+  const p012 = lerp(p01, p12, t)
+  const p123 = lerp(p12, p23, t)
+  const point = lerp(p012, p123, t)
+  return {
+    left: { c1: p01, c2: p012 },
+    point,
+    right: { c1: p123, c2: p23 }
+  }
+}
+
+/** Nearest point on a cubic bezier to a query point. */
+export interface NearestOnCubic {
+  /** curve parameter of the nearest point */
+  t: number
+  /** the nearest point on the curve */
+  point: Point2D
+  /** distance from the query point (image px) */
+  distance: number
+}
+
+/** Coarse samples for the nearest-t search. */
+const NEAREST_T_SAMPLES = 32
+/** Ternary-search refinement iterations around the best sample. */
+const NEAREST_T_REFINEMENTS = 24
+
+/**
+ * Find the point on a cubic bezier nearest to a click: coarse sampling
+ * followed by ternary-search refinement in the bracket around the best
+ * sample. Sub-pixel accurate at annotation scales.
+ *
+ * @param a0 start anchor
+ * @param c1 first control point
+ * @param c2 second control point
+ * @param a1 end anchor
+ * @param click the query point
+ */
+export function nearestTOnCubic(
+  a0: Point2D,
+  c1: Point2D,
+  c2: Point2D,
+  a1: Point2D,
+  click: Point2D
+): NearestOnCubic {
+  let bestT = 0
+  let bestD = Number.POSITIVE_INFINITY
+  for (let i = 0; i <= NEAREST_T_SAMPLES; i++) {
+    const t = i / NEAREST_T_SAMPLES
+    const p = evalCubic(a0, c1, c2, a1, t)
+    const d = Math.hypot(click.x - p.x, click.y - p.y)
+    if (d < bestD) {
+      bestD = d
+      bestT = t
+    }
+  }
+  let lo = Math.max(0, bestT - 1 / NEAREST_T_SAMPLES)
+  let hi = Math.min(1, bestT + 1 / NEAREST_T_SAMPLES)
+  for (let i = 0; i < NEAREST_T_REFINEMENTS; i++) {
+    const m1 = lo + (hi - lo) / 3
+    const m2 = hi - (hi - lo) / 3
+    const p1 = evalCubic(a0, c1, c2, a1, m1)
+    const p2 = evalCubic(a0, c1, c2, a1, m2)
+    const d1 = Math.hypot(click.x - p1.x, click.y - p1.y)
+    const d2 = Math.hypot(click.x - p2.x, click.y - p2.y)
+    if (d1 <= d2) {
+      hi = m2
+    } else {
+      lo = m1
+    }
+  }
+  const t = (lo + hi) / 2
+  const point = evalCubic(a0, c1, c2, a1, t)
+  return {
+    t,
+    point,
+    distance: Math.hypot(click.x - point.x, click.y - point.y)
+  }
+}
+
 /**
  * Find where a click would cut a polyline.
  *
