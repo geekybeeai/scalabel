@@ -606,6 +606,133 @@ export interface SegmentDeletePieces {
 }
 
 /**
+ * Split the point list at a mid-curve pick and rewrite the pick as a
+ * vertex snap on the inserted on-curve point. The group's control pair is
+ * replaced by [L1, L2, P, R1, R2] (net +3 points); indices after
+ * groupStart shift by +3.
+ *
+ * @param points the polyline's stored vertices
+ * @param site the pick's site (must carry curveSplit)
+ */
+function splitAtCurvePick(
+  points: readonly SimplePathPoint2DType[],
+  site: CutSite
+): { points: SimplePathPoint2DType[]; pick: DeleteSitePick } {
+  if (site.curveSplit === undefined) {
+    throw new Error("not a curve pick")
+  }
+  const { groupStart, t } = site.curveSplit
+  const split = splitCubicBezier(
+    points[groupStart],
+    points[groupStart + 1],
+    points[groupStart + 2],
+    points[groupStart + 3],
+    t
+  )
+  const curvePoint = (p: Point2D): SimplePathPoint2DType => ({
+    x: p.x,
+    y: p.y,
+    pointType: PathPointType.CURVE
+  })
+  const vertexIndex = groupStart + 3
+  const nextPoints = [
+    ...points.slice(0, groupStart + 1),
+    curvePoint(split.left.c1),
+    curvePoint(split.left.c2),
+    { x: split.point.x, y: split.point.y, pointType: PathPointType.LINE },
+    curvePoint(split.right.c1),
+    curvePoint(split.right.c2),
+    ...points.slice(groupStart + 3)
+  ]
+  return {
+    points: nextPoints,
+    pick: {
+      kind: "interior",
+      site: {
+        segmentIndex: vertexIndex,
+        point: { x: split.point.x, y: split.point.y },
+        snappedVertexIndex: vertexIndex,
+        distance: site.distance
+      }
+    }
+  }
+}
+
+/**
+ * Convert any mid-curve picks into vertex snaps on a bezier-split copy of
+ * the points, so the slicing below stays curve-agnostic. Ordering
+ * contract: `first`/`second` are already ordered along the line. The
+ * later pick is split first (earlier indices stay valid); same-group
+ * picks remap the earlier parameter to t1/t2; after splitting the earlier
+ * pick, the later pick's indices shift by +3.
+ *
+ * @param points the polyline's stored vertices
+ * @param first the earlier pick
+ * @param second the later pick
+ */
+function normalizeCurvePicks(
+  points: readonly SimplePathPoint2DType[],
+  first: DeleteSitePick,
+  second: DeleteSitePick
+): {
+  points: readonly SimplePathPoint2DType[]
+  first: DeleteSitePick
+  second: DeleteSitePick
+} {
+  const firstSplit =
+    first.kind === "interior" ? first.site.curveSplit : undefined
+  const secondSplit =
+    second.kind === "interior" ? second.site.curveSplit : undefined
+  if (firstSplit === undefined && secondSplit === undefined) {
+    return { points, first, second }
+  }
+  let pts: readonly SimplePathPoint2DType[] = points
+  let f = first
+  let s = second
+  if (secondSplit !== undefined && s.kind === "interior") {
+    if (
+      firstSplit !== undefined &&
+      f.kind === "interior" &&
+      firstSplit.groupStart === secondSplit.groupStart
+    ) {
+      // Same group: after splitting at t2, the left sub-curve occupies the
+      // original group indices; the earlier pick lives on it at t1/t2.
+      f = {
+        kind: "interior",
+        site: {
+          ...f.site,
+          curveSplit: {
+            groupStart: firstSplit.groupStart,
+            t: firstSplit.t / secondSplit.t
+          }
+        }
+      }
+    }
+    const r = splitAtCurvePick(pts, s.site)
+    pts = r.points
+    s = r.pick
+  }
+  if (f.kind === "interior" && f.site.curveSplit !== undefined) {
+    const g = f.site.curveSplit.groupStart
+    const r = splitAtCurvePick(pts, f.site)
+    pts = r.points
+    f = r.pick
+    // The earlier split inserted +3 points before the later pick.
+    if (s.kind === "interior") {
+      const site = { ...s.site }
+      if (site.segmentIndex > g) {
+        site.segmentIndex += 3
+      }
+      if (site.snappedVertexIndex !== null && site.snappedVertexIndex > g) {
+        site.snappedVertexIndex += 3
+      }
+      s = { kind: "interior", site }
+    }
+  }
+  return { points: pts, first: f, second: s }
+}
+
+/**
  * Build the survivors and the doomed piece of a segment delete.
  *
  * `first`/`second` MUST already be ordered by normalizeDeletePicks. Interior
@@ -620,6 +747,24 @@ export interface SegmentDeletePieces {
  * @param second the later pick along the line
  */
 export function buildSegmentDeletePieces(
+  points: readonly SimplePathPoint2DType[],
+  first: DeleteSitePick,
+  second: DeleteSitePick
+): SegmentDeletePieces {
+  const n = normalizeCurvePicks(points, first, second)
+  return buildPiecesFromSnappedPicks(n.points, n.first, n.second)
+}
+
+/**
+ * Slice the pieces from picks that are already vertex snaps, plain
+ * interior projections, or end trims (curve picks were normalized away by
+ * the caller).
+ *
+ * @param points the (possibly bezier-split) vertices
+ * @param first the earlier pick
+ * @param second the later pick
+ */
+function buildPiecesFromSnappedPicks(
   points: readonly SimplePathPoint2DType[],
   first: DeleteSitePick,
   second: DeleteSitePick

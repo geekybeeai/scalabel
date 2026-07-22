@@ -695,3 +695,186 @@ describe("sitePositionKey for curve picks", () => {
     expect(afterGroup).toBeLessThan(lastEnd)
   })
 })
+
+describe("buildSegmentDeletePieces with curve picks", () => {
+  const RADIUS = 10
+  const SNAP = 8
+  // 0:(0,0) 1:(100,0) 2:C 3:C 4:(200,0) 5:(300,0); group [1..4], apex (150,45).
+  const points = [
+    pt(0, 0),
+    pt(100, 0),
+    pt(130, 60, PathPointType.CURVE),
+    pt(170, 60, PathPointType.CURVE),
+    pt(200, 0),
+    pt(300, 0)
+  ]
+
+  /**
+   * Build a real interior pick from a click via findCutSite (splitCurves on).
+   *
+   * @param x click x
+   * @param y click y
+   */
+  function pickAt(x: number, y: number): DeleteSitePick {
+    const r = findCutSite(points, { x, y }, RADIUS, SNAP, {
+      splitCurves: true
+    })
+    if (r.kind !== "site") {
+      throw new Error(`pickAt(${x},${y}) got ${r.kind}`)
+    }
+    return { kind: "interior", site: r.site }
+  }
+
+  test("curve pick + straight pick across mixed geometry", () => {
+    const a = pickAt(150, 52) // mid-curve, t ~ 0.5
+    const b = pickAt(250, 3) // straight segment 4->5
+    const norm = normalizeDeletePicks(points, a, b, SNAP)
+    expect(norm.kind).toBe("ok")
+    if (norm.kind !== "ok") return
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      points,
+      norm.first,
+      norm.second
+    )
+    // Left survivor: [v0, A0, L1, L2, P] — keeps its curved lead-out.
+    expect(left).toBeDefined()
+    expect((left as SimplePathPoint2DType[]).map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE
+    ])
+    // Right survivor: [(250,0), (300,0)].
+    expect(right).toBeDefined()
+    const r = right as SimplePathPoint2DType[]
+    expect(r.length).toBe(2)
+    expect(r[0].x).toBeCloseTo(250, 0)
+    // Doomed: P -> R1 -> R2 -> A1(200,0) -> cut point on the straight span.
+    expect(doomed[0].x).toBeCloseTo(150, 0)
+    expect(doomed[doomed.length - 1].x).toBeCloseTo(250, 0)
+    expect(doomed.map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE,
+      PathPointType.LINE
+    ])
+    // The left survivor's curve segment traces the original up to t.
+    const t0 = norm.first.kind === "interior"
+      ? (norm.first.site.curveSplit?.t ?? 0)
+      : 0
+    const l = left as SimplePathPoint2DType[]
+    for (const u of [0.1, 0.25, 0.45]) {
+      const orig = evalAt(points[1], points[2], points[3], points[4], u)
+      const h = evalAt(l[1], l[2], l[3], l[4], u / t0)
+      expect(h.x).toBeCloseTo(orig.x, 4)
+      expect(h.y).toBeCloseTo(orig.y, 4)
+    }
+  })
+
+  test("both picks inside one curved sweep", () => {
+    const a = pickAt(138, 44) // earlier on the curve
+    const b = pickAt(162, 44) // later on the curve
+    const norm = normalizeDeletePicks(points, b, a, SNAP) // reversed on purpose
+    expect(norm.kind).toBe("ok")
+    if (norm.kind !== "ok") return
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      points,
+      norm.first,
+      norm.second
+    )
+    const l = left as SimplePathPoint2DType[]
+    const r = right as SimplePathPoint2DType[]
+    // Left: [v0, A0, l1, l2, P1]; Right: [P2, r1, r2, A1, v5].
+    expect(l.map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE
+    ])
+    expect(r.map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE,
+      PathPointType.LINE
+    ])
+    // Doomed: the pure sub-curve [P1, m1, m2, P2].
+    expect(doomed.map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE
+    ])
+    // All three pieces jointly trace the original cubic.
+    const t1 = norm.first.kind === "interior"
+      ? (norm.first.site.curveSplit?.t ?? 0)
+      : 0
+    const t2 = norm.second.kind === "interior"
+      ? (norm.second.site.curveSplit?.t ?? 0)
+      : 0
+    let maxErr = 0
+    for (const u of [0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95]) {
+      const orig = evalAt(points[1], points[2], points[3], points[4], u)
+      let h
+      if (u <= t1) {
+        h = evalAt(l[1], l[2], l[3], l[4], u / t1)
+      } else if (u <= t2) {
+        h = evalAt(doomed[0], doomed[1], doomed[2], doomed[3],
+          (u - t1) / (t2 - t1))
+      } else {
+        h = evalAt(r[0], r[1], r[2], r[3], (u - t2) / (1 - t2))
+      }
+      maxErr = Math.max(maxErr,
+        Math.hypot(h.x - orig.x, h.y - orig.y))
+    }
+    expect(maxErr).toBeLessThan(0.001)
+    // Doomed endpoints are the resolved pick points.
+    expect(doomed[0].x).toBeCloseTo(norm.first.kind === "interior"
+      ? norm.first.site.point.x : NaN)
+    expect(doomed[3].x).toBeCloseTo(norm.second.kind === "interior"
+      ? norm.second.site.point.x : NaN)
+  })
+
+  test("end trim + curve pick", () => {
+    const endPick: DeleteSitePick = { kind: "end", endpointIndex: 0 }
+    const curvePick = pickAt(150, 52)
+    const norm = normalizeDeletePicks(points, endPick, curvePick, SNAP)
+    expect(norm.kind).toBe("ok")
+    if (norm.kind !== "ok") return
+    const { left, right, doomed } = buildSegmentDeletePieces(
+      points,
+      norm.first,
+      norm.second
+    )
+    expect(left).toBeUndefined()
+    const r = right as SimplePathPoint2DType[]
+    // Survivor: [P, R1, R2, A1, v5].
+    expect(r.map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE,
+      PathPointType.LINE
+    ])
+    // Doomed: [v0, A0, l1, l2, P].
+    expect(doomed.map((p) => p.pointType)).toEqual([
+      PathPointType.LINE,
+      PathPointType.LINE,
+      PathPointType.CURVE,
+      PathPointType.CURVE,
+      PathPointType.LINE
+    ])
+  })
+
+  test("straight-only picks are untouched by normalization", () => {
+    const a = interior(0, 40, 0)
+    const b = interior(4, 260, 0)
+    const { left, right, doomed } = buildSegmentDeletePieces(points, a, b)
+    expect((left as SimplePathPoint2DType[]).length).toBe(2)
+    expect((right as SimplePathPoint2DType[]).length).toBe(2)
+    expect(doomed.length).toBe(6)
+  })
+})
