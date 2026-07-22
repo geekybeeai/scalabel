@@ -33,6 +33,13 @@ export const saveTimeout = 20000
  */
 export const NAVBAR_TOOLS_SLOT_ID = "navbar-tools-slot"
 
+/**
+ * Default width of the left (category) sidebar. Shared with label_layout's
+ * SplitPane default so the navbar tools slot starts exactly where the
+ * sidebar ends.
+ */
+export const LEFT_SIDEBAR_DEFAULT_WIDTH = 230
+
 interface ClassType {
   /** App bar class */
   appBar: string
@@ -198,14 +205,19 @@ class TitleBar extends Component<Props> {
           <Fade in={!statusTextHide} timeout={300}>
             <StatusMessageBox>{statusText}</StatusMessageBox>
           </Fade>
-          {/* Slot the drawable viewer portals its toolbar buttons into */}
+          {/* Slot the drawable viewer portals its toolbar buttons into.
+              Absolutely positioned so the icons start exactly where the
+              left sidebar ends, independent of the title/status width. */}
           <div
             id={NAVBAR_TOOLS_SLOT_ID}
             style={{
+              position: "absolute",
+              left: LEFT_SIDEBAR_DEFAULT_WIDTH,
+              top: 0,
+              bottom: 0,
               display: "flex",
               flexDirection: "row",
-              alignItems: "center",
-              marginLeft: 16
+              alignItems: "center"
             }}
           />
           <div className={classes.grow} />

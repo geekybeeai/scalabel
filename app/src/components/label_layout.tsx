@@ -8,6 +8,7 @@ import { LayoutStyles } from "../styles/label"
 import LabelPane from "./label_pane"
 import PlayerControl from "./player_control"
 import { CustomAlert } from "../components/alert"
+import { LEFT_SIDEBAR_DEFAULT_WIDTH } from "./title_bar"
 import { Severity } from "../types/common"
 
 /**
@@ -201,7 +202,7 @@ class LabelLayout extends React.Component<Props, LayoutState> {
       rightSidebar2,
       classes
     } = this.props
-    const leftDefaultWidth = 230
+    const leftDefaultWidth = LEFT_SIDEBAR_DEFAULT_WIDTH
     const leftMaxWidth = 300
     const leftMinWidth = 200
     const rightDefaultWidth = 200
