@@ -24,6 +24,19 @@ Open when: changing how a line is drawn, edited, its vertices/curves, merge, val
   `updateShapes` (rebuilds `_points` from state, **reconstructs MID midpoints**),
   `initTempLabel`, `mergeWith` (endpoint snap/merge), `isValid`. `_closed` = polygon vs
   polyline.
+- **Endpoint join / connect** (drag an open line's START or END vertex onto
+  another endpoint within 15 screen px): `Label2DList.findNearestEndpoint`
+  returns an `EndpointSnapCandidate {polyline, isStart, mergeable}`;
+  `Polygon2D.onMouseMove` (RESHAPE) snaps the dragged coord onto the target
+  point and shows `drawSnapIndicator`; `onMouseUp` calls `mergeWith` **only
+  if `mergeable`** (same `category[0]`, or self-close start↔end → polygon).
+  Different-category endpoints still SNAP (bit-identical coords, no gap) but
+  the two lines stay distinct labels with their own categories — it commits
+  as a plain reshape edit (`recordEdit`, one-step undo). Indicator: solid
+  green halo + white centre = merge; dashed white halo + dark centre =
+  connect-only. Merge deletes the target via `_mergedOut` → `isValid()=false`
+  → `deleteInvalidLabel` (history: `edited(A)` + `deleted(B)`, i.e. two undo
+  steps). Closed shapes never participate.
 - `app/src/drawable/2d/path_point2d.ts` — `PathPoint2D`, `PathPointType` (LINE/MID/CURVE),
   point styles.
 - `app/src/drawable/2d/label2d.ts` — base **`Label2D`**: `editing`, `temporary`, `type`,

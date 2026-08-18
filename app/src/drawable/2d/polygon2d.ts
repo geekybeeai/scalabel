@@ -77,6 +77,13 @@ export class Polygon2D extends Label2D {
   private _snapTargetPolyline: Polygon2D | null
   /** snap target endpoint index */
   private _snapTargetPointIndex: number
+  /**
+   * whether releasing on the snap target MERGES the two lines into one label
+   * (same primary category / self-close). When false the endpoint only snaps
+   * onto the target point ("connect"): no gap, but the lines stay distinct
+   * labels with their own categories.
+   */
+  private _snapMergeable: boolean
   /** whether this polyline has been merged out into another */
   private _mergedOut: boolean
 
@@ -96,6 +103,7 @@ export class Polygon2D extends Label2D {
     this._closed = closed
     this._snapTargetPolyline = null
     this._snapTargetPointIndex = -1
+    this._snapMergeable = false
     this._mergedOut = false
   }
 
@@ -179,7 +187,12 @@ export class Polygon2D extends Label2D {
   }
 
   /**
-   * Draw snap indicator (glowing halo, enlarged green endpoint, white center dot)
+   * Draw snap indicator (glowing halo, enlarged endpoint, center dot).
+   * Solid green halo + white center = release MERGES the lines into one.
+   * Dashed white halo + dark center = release only CONNECTS the endpoint to
+   * the other line's endpoint (different category; two labels remain).
+   * White + dashed is used so it cannot be confused with any category
+   * colour (the palette has yellows/oranges/greens) or the cyan curve points.
    *
    * @param context
    * @param ratio
@@ -205,27 +218,35 @@ export class Polygon2D extends Label2D {
     const endpointRadius = Math.max(2, 8 * styleFactor)
     const centerRadius = Math.max(1, 3 * styleFactor)
     const strokeWidth = Math.max(1, 2 * styleFactor)
+    const merge = this._snapMergeable
+    const rgb = merge ? "0, 255, 0" : "255, 255, 255"
 
     context.save()
 
-    // 1. Green outer halo
+    // 1. Outer halo (dashed for connect-only)
     context.beginPath()
-    context.strokeStyle = "rgba(0, 255, 0, 0.8)"
-    context.fillStyle = "rgba(0, 255, 0, 0.2)"
+    context.strokeStyle = `rgba(${rgb}, 0.9)`
+    context.fillStyle = `rgba(${rgb}, 0.2)`
     context.lineWidth = strokeWidth
+    if (!merge) {
+      const dash = Math.max(2, 4 * styleFactor)
+      context.setLineDash([dash, dash])
+    }
     context.arc(realCoord.x, realCoord.y, haloRadius, 0, 2 * Math.PI)
     context.fill()
     context.stroke()
+    context.setLineDash([])
 
-    // 2. Slightly enlarged green endpoint
+    // 2. Slightly enlarged endpoint
     context.beginPath()
-    context.fillStyle = "rgba(0, 255, 0, 0.9)"
+    context.fillStyle = `rgba(${rgb}, 0.9)`
     context.arc(realCoord.x, realCoord.y, endpointRadius, 0, 2 * Math.PI)
     context.fill()
 
-    // 3. White center dot
+    // 3. Center dot (white on the green merge marker, dark on the white
+    //    connect marker)
     context.beginPath()
-    context.fillStyle = "#ffffff"
+    context.fillStyle = merge ? "#ffffff" : "#222222"
     context.arc(realCoord.x, realCoord.y, centerRadius, 0, 2 * Math.PI)
     context.fill()
 
@@ -238,6 +259,7 @@ export class Polygon2D extends Label2D {
   private clearSnapState(): void {
     this._snapTargetPolyline = null
     this._snapTargetPointIndex = -1
+    this._snapMergeable = false
   }
 
   /**
@@ -746,7 +768,9 @@ export class Polygon2D extends Label2D {
           this._snapTargetPointIndex = candidate.isStart
             ? 0
             : candidate.polyline.points.length - 1
+          this._snapMergeable = candidate.mergeable
           // Snap the coordinates of the dragged vertex to the target coordinates
+          // (for both merge and connect-only candidates, so there is no gap)
           const targetPoint = candidate.polyline._points[this._snapTargetPointIndex]
           coord.x = targetPoint.x
           coord.y = targetPoint.y
@@ -786,8 +810,15 @@ export class Polygon2D extends Label2D {
         }
       }
     } else if (this.editing && this._state === Polygon2DState.RESHAPE) {
-      // Finish dragging point
-      if (this._snapTargetPolyline !== null && this._snapTargetPointIndex !== -1) {
+      // Finish dragging point. Same-category (or self) snap => merge the two
+      // lines into one label. Different-category snap => the vertex already
+      // sits exactly on the other endpoint (connected, no gap) and the two
+      // lines stay distinct labels; it commits as an ordinary reshape edit.
+      if (
+        this._snapTargetPolyline !== null &&
+        this._snapTargetPointIndex !== -1 &&
+        this._snapMergeable
+      ) {
         this.mergeWith(this._snapTargetPolyline, this._snapTargetPointIndex === 0)
       }
       this._state = Polygon2DState.FINISHED

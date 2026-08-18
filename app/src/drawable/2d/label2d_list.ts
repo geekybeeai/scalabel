@@ -40,6 +40,20 @@ export function makeDrawableLabel2D(
   return null
 }
 
+/** An endpoint the dragged polyline endpoint can snap onto. */
+export interface EndpointSnapCandidate {
+  /** the polyline owning the endpoint */
+  polyline: Polygon2D
+  /** true if it is the start (index 0) endpoint, false if the end */
+  isStart: boolean
+  /**
+   * true if releasing merges the two lines into one label (same primary
+   * category, or self-close); false if the vertex only snaps onto the
+   * point and the lines stay two distinct labels
+   */
+  mergeable: boolean
+}
+
 /**
  * List of drawable labels
  * ViewController for the labels
@@ -409,7 +423,11 @@ export class Label2DList {
 
   /**
    * Find nearest endpoint of another polyline within screen-space radius.
-   * Returns the polyline and whether it is the start endpoint, or null.
+   * Returns the polyline, whether it is the start endpoint, and whether the
+   * two lines may be MERGED into one label (same primary category). Endpoints
+   * of a different category are still returned so the dragged vertex can be
+   * snapped exactly onto them (a "connect": no gap, but the lines stay two
+   * distinct labels with their own categories). Returns null if none.
    *
    * @param source The polyline being dragged
    * @param coord Mouse coordinate in image space
@@ -419,12 +437,12 @@ export class Label2DList {
     source: Polygon2D,
     coord: Vector2D,
     radiusLimit: number
-  ): { polyline: Polygon2D, isStart: boolean } | null {
+  ): EndpointSnapCandidate | null {
     const upResRatio = this._lastViewScale > 3 ? 1 : 2
     const displayToImageRatio = this._lastRatio / upResRatio
     const snapRadiusImage = radiusLimit / displayToImageRatio
 
-    let bestCandidate: { polyline: Polygon2D, isStart: boolean } | null = null
+    let bestCandidate: EndpointSnapCandidate | null = null
     let minDistance = snapRadiusImage
 
     // Find all active polylines (excluding closed ones)
@@ -449,7 +467,7 @@ export class Label2DList {
           const dist = Math.sqrt(dx * dx + dy * dy)
           if (dist < minDistance) {
             minDistance = dist
-            bestCandidate = { polyline, isStart: false }
+            bestCandidate = { polyline, isStart: false, mergeable: true }
           }
         } else if (draggedIndex === points.length - 1) {
           // Dragging end, can only snap to start
@@ -459,18 +477,15 @@ export class Label2DList {
           const dist = Math.sqrt(dx * dx + dy * dy)
           if (dist < minDistance) {
             minDistance = dist
-            bestCandidate = { polyline, isStart: true }
+            bestCandidate = { polyline, isStart: true, mergeable: true }
           }
         }
         continue
       }
 
-      // Check category match for other polylines
-      const sourceCat = source.category[0]
-      const polylineCat = polyline.category[0]
-      if (sourceCat !== polylineCat) {
-        continue
-      }
+      // Same primary category => the lines merge into one on release.
+      // Different category => snap only (connect without merging).
+      const mergeable = source.category[0] === polyline.category[0]
 
       const points = polyline.points
       if (points.length === 0) {
@@ -484,7 +499,7 @@ export class Label2DList {
       const distStart = Math.sqrt(dxStart * dxStart + dyStart * dyStart)
       if (distStart < minDistance) {
         minDistance = distStart
-        bestCandidate = { polyline, isStart: true }
+        bestCandidate = { polyline, isStart: true, mergeable }
       }
 
       // End endpoint (index points.length - 1)
@@ -494,7 +509,7 @@ export class Label2DList {
       const distEnd = Math.sqrt(dxEnd * dxEnd + dyEnd * dyEnd)
       if (distEnd < minDistance) {
         minDistance = distEnd
-        bestCandidate = { polyline, isStart: false }
+        bestCandidate = { polyline, isStart: false, mergeable }
       }
     }
 
