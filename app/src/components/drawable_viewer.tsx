@@ -5,6 +5,7 @@ import ReactDOM from "react-dom"
 import Session from "../common/session"
 import { ViewerConfigType } from "../types/state"
 import { Component } from "./component"
+import { SaveCloseButton } from "./save_close_button"
 import { NAVBAR_TOOLS_SLOT_ID } from "./title_bar"
 
 /**
@@ -159,6 +160,20 @@ export abstract class DrawableViewer<
               </div>
             </div>
           )}
+          {/* Embedded mode has no title bar, so the tool buttons render in
+              this row; Save & Close sits at its right end on the same line. */}
+          {Session.embedded && Session.activeViewerId === this.props.id && (
+            <div
+              style={{
+                marginLeft: "auto",
+                display: "flex",
+                alignItems: "center",
+                paddingRight: 12
+              }}
+            >
+              <SaveCloseButton />
+            </div>
+          )}
         </Grid>
         <div
           ref={(element) => {
@@ -171,7 +186,10 @@ export abstract class DrawableViewer<
               this.forceUpdate()
             }
           }}
-          style={{ flexGrow: 1, position: "relative" }}
+          // overflow hidden: zoom/pan are CSS offsets on the absolutely
+          // positioned canvases, so without a clip a zoomed canvas paints
+          // over the toolbar row above (Save & Close vanished behind it).
+          style={{ flexGrow: 1, position: "relative", overflow: "hidden" }}
           onMouseDown={(e) => this.onMouseDown(e)}
           onMouseUp={(e) => this.onMouseUp(e)}
           onMouseMove={(e) => this.onMouseMove(e)}
