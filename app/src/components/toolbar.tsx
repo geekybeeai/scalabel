@@ -373,9 +373,12 @@ export class ToolBar extends Component<Props> {
               { keys: ["Ctrl", "Z"], label: "undo" },
               { keys: ["Ctrl", "Y"], label: "redo" },
               { keys: ["C"], label: "control curve" },
+              { keys: ["1", "…", "N"], label: "set category (by sidebar order)" },
               { keys: ["Scroll"], label: "zoom (mouse)" },
               { keys: ["Pinch"], label: "zoom (trackpad)" },
-              { keys: ["Drag"], label: "pan (mouse / trackpad)" }
+              { keys: ["Drag"], label: "pan (mouse / trackpad)" },
+              { keys: ["Tilt"], label: "pan horizontally (mouse)" },
+              { keys: ["Shift", "Scroll"], label: "pan horizontally" }
             ].map((row) => (
               <div
                 key={row.label}

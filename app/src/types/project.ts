@@ -35,6 +35,8 @@ export interface CreationForm {
   instructionUrl: string
   /** whether demo mode is true */
   demoMode: boolean
+  /** whether to ROI-clamp and auto-connect the imported annotations */
+  autoCorrect: boolean
 }
 
 /* file data parsed from form */

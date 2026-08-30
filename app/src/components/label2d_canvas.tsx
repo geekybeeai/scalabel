@@ -4,7 +4,8 @@ import { withStyles } from "@material-ui/core/styles"
 import * as React from "react"
 import { connect } from "react-redux"
 
-import { changeViewerConfig } from "../action/common"
+import { changeSelect, changeViewerConfig } from "../action/common"
+import { changeSelectedLabelsCategories } from "../action/select"
 import { drawHistory } from "../common/draw_history"
 import Session from "../common/session"
 import { isInteracting, onIdle } from "../common/interaction_state"
@@ -1180,6 +1181,44 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         const newConfig: ImageViewerConfigType = { ...config, rotation }
         Session.dispatch(changeViewerConfig(this.props.id, newConfig))
         return
+      }
+    }
+
+    if (/^[0-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // A number key sets the category: it applies to every selected label and
+      // becomes the default for the next line drawn. 1 is the first category
+      // in the sidebar, matching what the user reads there rather than the
+      // zero-based index underneath. 0 is accepted as the tenth slot.
+      // Skipped while typing (digits are input there) and while drawing, where
+      // switching category mid-line would apply to the wrong thing.
+      const target = e.target as HTMLElement | null
+      const typing =
+        target !== null &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+      const blocked =
+        Session.label2dList.isDrawingInProgress() ||
+        getSegmentDeletePhase() === "preview"
+      if (!typing && !blocked) {
+        const digit = Number(e.key)
+        const categoryIndex = digit === 0 ? 9 : digit - 1
+        const categories = this.state.task.config.categories
+        if (categoryIndex < categories.length) {
+          e.preventDefault()
+          Session.dispatch(changeSelect({ category: categoryIndex }))
+          // Only retarget existing labels when something is actually
+          // selected: changeSelectedLabelsCategories dereferences
+          // labelIds[0][0] and would throw on an empty selection.
+          const state = Session.getState()
+          const hasSelected = Object.values(state.user.select.labels).some(
+            (ids) => ids.length > 0
+          )
+          if (hasSelected) {
+            Session.dispatch(
+              changeSelectedLabelsCategories(state, [categoryIndex])
+            )
+          }
+          return
+        }
       }
     }
 

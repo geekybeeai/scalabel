@@ -33,6 +33,7 @@ import {
   TaskType,
   TrackIdMap
 } from "../types/state"
+import { correctAnnotations } from "./annotation_fix"
 import * as defaults from "./defaults"
 import { convertItemToImport } from "./import"
 import { ProjectStore } from "./project_store"
@@ -108,6 +109,7 @@ export async function parseForm(
     throw Error("Project name already exists.")
   }
   const demoMode = fields[FormField.DEMO_MODE] === "true"
+  const autoCorrect = fields[FormField.AUTO_CORRECT] === "true"
   const form = util.makeCreationForm(
     projectName,
     itemType,
@@ -116,7 +118,8 @@ export async function parseForm(
     taskSize,
     keyInterval,
     instructionUrl,
-    demoMode
+    demoMode,
+    autoCorrect
   )
   return form
 }
@@ -375,6 +378,15 @@ export async function createProject(
 
   // Ensure that all video names are set to default if empty
   let projectItems = formFileData.items
+
+  // Optional pre-import correction: clamp annotations that stray outside the
+  // imagery and join near-touching polyline endpoints. Runs before any other
+  // processing so downstream conversion sees final geometry. Falls back to the
+  // uncorrected items if the service is unavailable.
+  if (form.autoCorrect) {
+    projectItems = await correctAnnotations(projectItems)
+  }
+
   projectItems.forEach((itemExport) => {
     if (itemExport.videoName === undefined) {
       itemExport.videoName = ""

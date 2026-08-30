@@ -100,7 +100,8 @@ const CATEGORY_NAME_COLOR_MAP: { [name: string]: number[] } = {
   continuous_white_line:  [255, 215, 0],    // yellow
   dashed_white_line:      [100, 180, 255],  // blue
   double_yellow_line:     [102, 51, 0],     // brown
-  center_turn_lane:       [255, 140, 0]     // orange
+  center_turn_lane:       [255, 140, 0],     // orange
+  solid_single_line:      [255, 215, 0],    // yellow
 }
 
 /**

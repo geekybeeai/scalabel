@@ -70,6 +70,14 @@ import {
 import ImageCanvas from "./image_canvas"
 import Label2dCanvas from "./label2d_canvas"
 
+/**
+ * Display pixels panned per unit of horizontal wheel delta.
+ *
+ * 1 maps a wheel notch straight onto the pan distance the browser would have
+ * scrolled, which keeps a tilt wheel and a trackpad swipe feeling the same.
+ */
+const WHEEL_PAN_RATIO = 1
+
 interface ClassType extends ViewerClassTypes {
   /** buttons */
   viewer_button: string
@@ -695,36 +703,47 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         const dy = this._mY - oldY
 
         notifyGesture()
-        // Accumulate raw deltas within the frame so fast drags don't drop
-        // sub-frame movement. _pendingPan holds the SUMMED delta; the RAF
-        // applies it on top of the latest committed config. (Storing an
-        // absolute snapshot off a stale displayLeft would discard every
-        // mousemove except the last one before the frame ticked.)
-        if (this._pendingPan === null) {
-          this._pendingPan = { left: dx, top: dy }
-        } else {
-          this._pendingPan.left += dx
-          this._pendingPan.top += dy
-        }
-        if (!this._panRAFPending) {
-          this._panRAFPending = true
-          requestAnimationFrame(() => {
-            this._panRAFPending = false
-            const pan = this._pendingPan
-            this._pendingPan = null
-            if (pan === null) {
-              return
-            }
-            const rafConfig = this._viewerConfig as ImageViewerConfigType
-            const newConfig = {
-              ...rafConfig,
-              displayLeft: rafConfig.displayLeft + pan.left,
-              displayTop: rafConfig.displayTop + pan.top
-            }
-            Session.dispatch(changeViewerConfig(this._viewerId, newConfig))
-          })
-        }
+        this.panBy(dx, dy)
       }
+    }
+  }
+
+  /**
+   * Shift the view by a pixel delta, batched to one repaint per frame.
+   *
+   * Accumulates raw deltas within the frame so fast input does not drop
+   * sub-frame movement. `_pendingPan` holds the SUMMED delta and the RAF
+   * applies it on top of the latest committed config. (Storing an absolute
+   * snapshot off a stale displayLeft would discard every event except the last
+   * one before the frame ticked.)
+   *
+   * @param dx horizontal shift in display pixels
+   * @param dy vertical shift in display pixels
+   */
+  protected panBy(dx: number, dy: number): void {
+    if (this._pendingPan === null) {
+      this._pendingPan = { left: dx, top: dy }
+    } else {
+      this._pendingPan.left += dx
+      this._pendingPan.top += dy
+    }
+    if (!this._panRAFPending) {
+      this._panRAFPending = true
+      requestAnimationFrame(() => {
+        this._panRAFPending = false
+        const pan = this._pendingPan
+        this._pendingPan = null
+        if (pan === null || this._viewerConfig === undefined) {
+          return
+        }
+        const rafConfig = this._viewerConfig as ImageViewerConfigType
+        const newConfig = {
+          ...rafConfig,
+          displayLeft: rafConfig.displayLeft + pan.left,
+          displayTop: rafConfig.displayTop + pan.top
+        }
+        Session.dispatch(changeViewerConfig(this._viewerId, newConfig))
+      })
     }
   }
 
@@ -782,6 +801,26 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     notifyGesture()
     e.preventDefault()
     if (this._viewerConfig !== undefined && this._container !== null) {
+      // A horizontal wheel (tilt wheel, side-scroll button, or a trackpad
+      // two-finger swipe) pans instead of zooming. Such an event carries
+      // deltaX with deltaY at or near zero; feeding it to the zoom path below
+      // would read deltaY === 0 as "zoom in" and the horizontal intent would
+      // be lost entirely. Shift+wheel is the conventional
+      // horizontal-scroll alias, and browsers deliver it as deltaX on some
+      // platforms and deltaY on others, so both are accepted.
+      // Ctrl/Meta is excluded: that is the pinch/zoom gesture.
+      if (!e.ctrlKey && !e.metaKey) {
+        const horizontal =
+          Math.abs(e.deltaX) > Math.abs(e.deltaY)
+            ? e.deltaX
+            : e.shiftKey
+            ? e.deltaY
+            : 0
+        if (horizontal !== 0) {
+          this.panBy(-horizontal * WHEEL_PAN_RATIO, 0)
+          return
+        }
+      }
       // Plain mouse-wheel scroll zooms directly — no modifier required. Ctrl/
       // Meta scroll zooms too, and trackpad pinch arrives as a wheel event with
       // ctrlKey set, so pinch-to-zoom is covered as well. Reading deltaY from

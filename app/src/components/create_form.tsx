@@ -67,6 +67,8 @@ interface State {
   showTaskSize: boolean
   /** submit with multiple files or a single complete file*/
   submitSingleFile: boolean
+  /** run ROI clamp + polyline auto-connect on the imported annotations */
+  autoCorrect: boolean
 }
 
 /**
@@ -93,7 +95,8 @@ export default class CreateForm extends React.Component<Props, State> {
       hasSubmitted: false,
       showCategoriesUpload: true,
       showTaskSize: true,
-      submitSingleFile: false
+      submitSingleFile: false,
+      autoCorrect: false
     }
   }
 
@@ -211,6 +214,32 @@ export default class CreateForm extends React.Component<Props, State> {
               value={this.state.submitSingleFile}
               label="Submit single file"
               labelPlacement="end"
+            />
+            <FormControlLabel
+              control={
+                <StyledCheckbox
+                  checked={this.state.autoCorrect}
+                  onChange={() => {
+                    this.setState({
+                      autoCorrect: !this.state.autoCorrect
+                    })
+                  }}
+                />
+              }
+              id="auto_correct"
+              label="Auto-correct annotations"
+              labelPlacement="end"
+            />
+            {/*
+              The value has to ride on a real input. FormControlLabel renders a
+              <label>, so a name/value placed on it never reaches
+              new FormData(form) and the server always sees the field as absent
+              (i.e. false). A hidden input is what actually gets submitted.
+            */}
+            <input
+              type="hidden"
+              name={FormField.AUTO_CORRECT}
+              value={this.state.autoCorrect ? "true" : "false"}
             />
           </FormGroup>
           {this.state.submitSingleFile ? (
