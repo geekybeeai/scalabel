@@ -374,6 +374,7 @@ export class ToolBar extends Component<Props> {
               { keys: ["Ctrl", "Y"], label: "redo" },
               { keys: ["C"], label: "control curve" },
               { keys: ["1", "…", "N"], label: "set category (by sidebar order)" },
+              { keys: ["A"], label: "straighten hovered curve" },
               { keys: ["Scroll"], label: "zoom (mouse)" },
               { keys: ["Pinch"], label: "zoom (trackpad)" },
               { keys: ["Drag"], label: "pan (mouse / trackpad)" },

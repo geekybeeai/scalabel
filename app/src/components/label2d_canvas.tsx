@@ -17,6 +17,14 @@ import {
   shouldDeferPointerDown
 } from "../common/pointer_pan_state"
 import { isCutMode, setCutMode } from "../common/cut_state"
+import {
+  isCurveCutMode,
+  setCurveCutMode
+} from "../common/curve_cut_state"
+import {
+  isStraightenMode,
+  setStraightenMode
+} from "../common/straighten_state"
 import { armKey, recordKeyDown, recordKeyUp } from "../common/keyboard_state"
 import {
   armSegmentDelete,
@@ -61,7 +69,15 @@ import {
 } from "../drawable/2d/polyline_segment_delete"
 import { DASH_LINE, DELETE_HIGHLIGHT_COLOR } from "../drawable/2d/common"
 import { advanceAnts, getAntsOffset } from "../drawable/2d/marching_ants"
-import { ContentCutIcon, CUT_CURSOR, DeleteSegmentIcon } from "./cut_icon"
+import {
+  ContentCutIcon,
+  CURVE_CUT_CURSOR,
+  CUT_CURSOR,
+  DeleteSegmentIcon,
+  STRAIGHTEN_CURSOR
+} from "./cut_icon"
+import { performCurveCut } from "../drawable/2d/polyline_curve_cut"
+import { performStraighten } from "../drawable/2d/polyline_straighten"
 import { Key, LabelTypeName } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
@@ -154,6 +170,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _offIdle: (() => void) | null = null
   /** last seen item index, to disarm the cut tools on item navigation */
   private _cutItemIndex: number = -1
+  /**
+   * Last cursor position in image coordinates, or null before the pointer has
+   * entered the canvas. Lets keyboard shortcuts act on the line under the
+   * cursor rather than on the redux selection, which can hold more labels than
+   * the one the user means (linked labels, appended multi-select).
+   */
+  private _lastMousePos: Vector2D | null = null
   /** context-menu anchor (viewport px), null while the menu is closed */
   private _menuAnchor: { left: number; top: number } | null = null
   /** unsubscribe from delete-segment state changes */
@@ -715,6 +738,17 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       }
       return
     }
+    // Divide curve: splits the clicked bezier into two adjustable groups.
+    // The polyline stays ONE label — nothing is cut into separate lines.
+    if (isCurveCutMode()) {
+      this.handleCurveCut(mousePos)
+      return
+    }
+    // Straighten: drop the clicked curve's control points.
+    if (isStraightenMode()) {
+      this.handleStraighten(mousePos)
+      return
+    }
     // Empty canvas, OR within the post-double-click pan window: defer the
     // action. A drag pans (Viewer2D, via the armed flag); a click replays the
     // draw/select in onMouseUp. Arming (rather than returning early) inside the
@@ -860,6 +894,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
 
     // Update the currently hovered shape
     const mousePos = this.getMousePos(e)
+    this._lastMousePos = mousePos
     const [labelIndex, handleIndex] = this.fetchHandleId(mousePos)
     if (
       this._labelHandler.onMouseMove(
@@ -881,6 +916,14 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.setDefaultCursor()
     }
 
+    if (isCurveCutMode()) {
+      this.setCursor(CURVE_CUT_CURSOR)
+      return
+    }
+    if (isStraightenMode()) {
+      this.setCursor(STRAIGHTEN_CURSOR)
+      return
+    }
     if (isCutMode() || isSegmentDeleteActive()) {
       // The scissors cursor overrides hover cursors while a tool is armed.
       this.setCursor(CUT_CURSOR)
@@ -1114,6 +1157,20 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       return
     }
 
+    if (e.key === Key.ESCAPE && isStraightenMode()) {
+      // Escape disarms the one-shot straighten tool.
+      setStraightenMode(false)
+      this.setDefaultCursor()
+      return
+    }
+
+    if (e.key === Key.ESCAPE && isCurveCutMode()) {
+      // Escape disarms the one-shot curve-aware cut tool.
+      setCurveCutMode(false)
+      this.setDefaultCursor()
+      return
+    }
+
     if (e.key === Key.ESCAPE && isCutMode()) {
       // Escape disarms the one-shot cut tool.
       setCutMode(false)
@@ -1184,6 +1241,34 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       }
     }
 
+    if (
+      (e.key === "a" || e.key === "A") &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey
+    ) {
+      // A straightens the single curve nearest the CURSOR — the keyboard
+      // equivalent of the straighten toolbar button. Hover-targeted, not
+      // selection-targeted (selection can hold more labels than the user
+      // means), and per-curve, not whole-line (a merged line holds several
+      // curve groups in one label). NOT bound to S: the title bar already claims bare S for Save on
+      // document keydown and calls preventDefault, so an S binding here never
+      // ran. Skipped while typing (A is input there) and while drawing, where
+      // the line is not committed yet.
+      const target = e.target as HTMLElement | null
+      const typing =
+        target !== null &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+      const blocked =
+        Session.label2dList.isDrawingInProgress() ||
+        getSegmentDeletePhase() === "preview"
+      if (!typing && !blocked) {
+        e.preventDefault()
+        this.straightenSelection()
+        return
+      }
+    }
+
     if (/^[0-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
       // A number key sets the category: it applies to every selected label and
       // becomes the default for the next line drawn. 1 is the first category
@@ -1236,6 +1321,106 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   }
 
   /**
+   * Divide the curve at a click and report the outcome.
+   *
+   * A successful divide disarms the one-shot tool; a rejection keeps it armed
+   * so the user can re-aim. The polyline is never broken in two — only the
+   * bezier under the click is split into two adjustable groups.
+   *
+   * @param mousePos the click position in image coordinates
+   */
+  private handleCurveCut(mousePos: Vector2D): void {
+    const config = this.state.user.viewerConfigs[this.props.id]
+    const result = performCurveCut(
+      mousePos,
+      CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+      CUT_SNAP_RADIUS_PX / this.displayToImageRatio,
+      {
+        hideLabels: config.hideLabels,
+        hiddenLabelTypes:
+          config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : [],
+        hiddenCategories:
+          config.hiddenCategories !== undefined ? config.hiddenCategories : []
+      }
+    )
+    switch (result) {
+      case "cut":
+        setCurveCutMode(false)
+        this.setDefaultCursor()
+        break
+      // No "closed" case: dividing only inserts an anchor, so closed rings are
+      // valid targets and never rejected.
+      case "near-endpoint":
+        alert(Severity.WARNING, "Too close to an endpoint to divide.")
+        break
+      default:
+        break
+    }
+  }
+
+  /**
+   * Straighten the single curve nearest the cursor.
+   *
+   * The keyboard equivalent of the straighten toolbar button, sharing its
+   * executor so both behave identically. Deliberately per-curve, not
+   * whole-line: merged lines hold several curve groups in ONE label, so a
+   * whole-line straighten there wipes out every curve at once — which reads as
+   * "it straightened both lines". Press A again to straighten the next curve.
+   */
+  private straightenSelection(): void {
+    if (this._lastMousePos === null) {
+      return
+    }
+    const config = this.state.user.viewerConfigs[this.props.id]
+    const result = performStraighten(
+      this._lastMousePos,
+      CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+      {
+        hideLabels: config.hideLabels,
+        hiddenLabelTypes:
+          config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : [],
+        hiddenCategories:
+          config.hiddenCategories !== undefined ? config.hiddenCategories : []
+      }
+    )
+    if (result !== "straightened") {
+      alert(
+        Severity.WARNING,
+        "Hover a curved segment, then press A to straighten it."
+      )
+    }
+  }
+
+  /**
+   * Straighten the curve nearest a click and report the outcome.
+   *
+   * A successful straighten disarms the one-shot tool; a miss keeps it armed
+   * so the user can re-aim.
+   *
+   * @param mousePos the click position in image coordinates
+   */
+  private handleStraighten(mousePos: Vector2D): void {
+    const config = this.state.user.viewerConfigs[this.props.id]
+    const result = performStraighten(
+      mousePos,
+      CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+      {
+        hideLabels: config.hideLabels,
+        hiddenLabelTypes:
+          config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : [],
+        hiddenCategories:
+          config.hiddenCategories !== undefined ? config.hiddenCategories : []
+      }
+    )
+    if (result === "straightened") {
+      setStraightenMode(false)
+      this.setDefaultCursor()
+    } else {
+      alert(Severity.WARNING, "Click a curved segment to straighten it.")
+    }
+  }
+
+  /**
    * Callback function when key is up
    *
    * @param {KeyboardEvent} e - event
@@ -1273,6 +1458,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       // Navigating to another image disarms the cut tools.
       if (this._cutItemIndex !== -1) {
         setCutMode(false)
+        setCurveCutMode(false)
+        setStraightenMode(false)
         resetSegmentDelete()
         clearMarked()
         resetFreeform()

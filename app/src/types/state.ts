@@ -417,6 +417,8 @@ export interface ConfigType {
   taskId: IdType
   /** Whether or not in demo mode */
   demoMode: boolean
+  /** whether imported annotations are auto-corrected in the background */
+  autoCorrect?: boolean
   /** whether to use autosave */
   autosave: boolean
   /** whether bots are enabled */

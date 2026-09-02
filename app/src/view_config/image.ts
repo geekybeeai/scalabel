@@ -7,8 +7,19 @@ import { Vector2D } from "../math/vector2d"
 import { ImageViewerConfigType, State } from "../types/state"
 
 // Display export constants
-/** The maximum scale */
-export const MAX_SCALE = 10.0
+/**
+ * The maximum scale.
+ *
+ * The canvas is sized to `displayRect * viewScale`, so backing-store memory
+ * grows quadratically with this value, and a canvas past Chrome's 16384px
+ * per-dimension limit fails to allocate and renders blank rather than
+ * erroring. Very wide images are the first to hit that: on a 1600px-wide
+ * display a landscape image reaches ~19200px here, so 12 keeps ordinary
+ * images comfortable while leaving the widest ones near the edge. Raise this
+ * further only alongside viewport culling in `updateCanvasScale`, which would
+ * size the canvas to the visible region instead of the whole image.
+ */
+export const MAX_SCALE = 12.0
 /** The minimum scale */
 export const MIN_SCALE = 1.0
 /**

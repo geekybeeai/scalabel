@@ -59,6 +59,18 @@ export interface TaskOptions {
   handlerUrl: string
 }
 
+/**
+ * Where one task is in the background annotation-correction pipeline.
+ */
+export interface TaskCorrectionStatus {
+  /** pending | running | ready | failed */
+  state: string
+  /** polyline pairs joined into one label */
+  merged?: number
+  /** why the correction failed, when it did */
+  error?: string
+}
+
 export interface DashboardContents {
   /** project metadata */
   projectMetaData: ProjectOptions
@@ -68,6 +80,11 @@ export interface DashboardContents {
   taskKeys?: string[]
   /** num users */
   numUsers: number
+  /**
+   * Correction status per task id, for projects created with auto-correct.
+   * Absent or empty once every task is done, which reads as "all ready".
+   */
+  correctionStatuses?: { [taskId: string]: TaskCorrectionStatus }
 }
 
 interface DashboardClassType {
@@ -160,6 +177,8 @@ export interface DashboardState {
   numUsers: number
   /** task keys */
   taskKeys: string[]
+  /** correction status per task id, empty when nothing is outstanding */
+  correctionStatuses: { [taskId: string]: TaskCorrectionStatus }
 }
 
 /**
@@ -180,8 +199,73 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
       projectMetaData: props.dashboardContents.projectMetaData,
       taskMetaDatas: props.dashboardContents.taskMetaDatas,
       numUsers: props.dashboardContents.numUsers,
-      taskKeys: props.dashboardContents.taskKeys as string[]
+      taskKeys: props.dashboardContents.taskKeys as string[],
+      correctionStatuses: props.dashboardContents.correctionStatuses ?? {}
     }
+  }
+
+  /** poll handle for background-correction status */
+  private correctionTimer?: ReturnType<typeof setInterval>
+
+  /**
+   * Whether any task is still queued or being corrected.
+   */
+  private hasOutstandingCorrections(): boolean {
+    return Object.values(this.state.correctionStatuses).some(
+      (status) => status.state === "pending" || status.state === "running"
+    )
+  }
+
+  /**
+   * Re-read correction status until every task is done.
+   *
+   * The dashboard is otherwise rendered once from server-side contents, so
+   * without this a task would stay greyed out until the page was reloaded by
+   * hand. Polling stops as soon as nothing is outstanding.
+   */
+  private pollCorrectionStatus(): void {
+    const request = new XMLHttpRequest()
+    request.onreadystatechange = () => {
+      if (request.readyState !== 4 || request.status !== 200) {
+        return
+      }
+      try {
+        const contents = JSON.parse(request.responseText) as DashboardContents
+        this.setState(
+          { correctionStatuses: contents.correctionStatuses ?? {} },
+          () => {
+            if (!this.hasOutstandingCorrections()) {
+              this.stopCorrectionPolling()
+            }
+          }
+        )
+      } catch {
+        // A malformed response just means this tick is skipped.
+      }
+    }
+    request.open(
+      "GET",
+      `${Endpoint.DASHBOARD}?name=` +
+        encodeURIComponent(this.state.projectMetaData.name)
+    )
+    request.send()
+  }
+
+  /**
+   * Stop polling for correction status.
+   */
+  private stopCorrectionPolling(): void {
+    if (this.correctionTimer !== undefined) {
+      clearInterval(this.correctionTimer)
+      this.correctionTimer = undefined
+    }
+  }
+
+  /**
+   * Stop polling when the dashboard goes away.
+   */
+  public componentWillUnmount(): void {
+    this.stopCorrectionPolling()
   }
 
   /**
@@ -197,6 +281,12 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
         this.state.taskKeys[index],
         index
       )
+    }
+    // Only poll while a correction is actually outstanding.
+    if (this.hasOutstandingCorrections()) {
+      this.correctionTimer = setInterval(() => {
+        this.pollCorrectionStatus()
+      }, 5000)
     }
   }
 
@@ -295,22 +385,60 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
                     {dateString}
                   </TableCell>
                   <TableCell className={classes.bodyCell} align={align}>
-                    <IconButton
-                      className={classes.linkButton}
-                      color="inherit"
-                      href={
-                        `./${value.handlerUrl}` +
-                        `?${QueryArg.PROJECT_NAME}=${this.state.projectMetaData.name}` +
-                        `&${QueryArg.TASK_INDEX}=${index}`
-                      }
-                      data-testid={"task-link-" + index.toString()}
-                    >
-                      <FontAwesomeIcon
-                        icon={fa.faExternalLinkAlt}
-                        size="1x"
-                        transform="grow-6"
-                      />
-                    </IconButton>
+                    {(() => {
+                      // A task being corrected in the background is not safe to
+                      // open: its annotations are about to be replaced, so any
+                      // edits made now would be overwritten. Disable the link
+                      // until the correction lands. A FAILED task keeps its
+                      // original annotations and stays openable — a broken
+                      // helper must never block annotation work.
+                      const taskId = this.state.taskKeys?.[index]
+                      const status =
+                        taskId !== undefined
+                          ? this.state.correctionStatuses[taskId]
+                          : undefined
+                      const busy =
+                        status?.state === "pending" || status?.state === "running"
+                      const failed = status?.state === "failed"
+                      const title = busy
+                        ? status?.state === "running"
+                          ? "Correcting annotations…"
+                          : "Queued for correction"
+                        : failed
+                        ? `Correction failed (${status?.error ?? "unknown"}) — ` +
+                          "opening the original annotations"
+                        : "Open task"
+                      return (
+                        <span title={title}>
+                          <IconButton
+                            className={classes.linkButton}
+                            color="inherit"
+                            disabled={busy}
+                            href={
+                              busy
+                                ? ""
+                                : `./${value.handlerUrl}` +
+                                  `?${QueryArg.PROJECT_NAME}=${this.state.projectMetaData.name}` +
+                                  `&${QueryArg.TASK_INDEX}=${index}`
+                            }
+                            data-testid={"task-link-" + index.toString()}
+                          >
+                            <FontAwesomeIcon
+                              icon={
+                                busy
+                                  ? fa.faSpinner
+                                  : failed
+                                  ? fa.faExclamationTriangle
+                                  : fa.faExternalLinkAlt
+                              }
+                              size="1x"
+                              spin={busy}
+                              transform="grow-6"
+                            />
+                          </IconButton>
+                        </span>
+                      )
+                    })()}
                   </TableCell>
                 </TableRow>
               )

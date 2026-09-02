@@ -33,7 +33,6 @@ import {
   TaskType,
   TrackIdMap
 } from "../types/state"
-import { correctAnnotations } from "./annotation_fix"
 import * as defaults from "./defaults"
 import { convertItemToImport } from "./import"
 import { ProjectStore } from "./project_store"
@@ -372,6 +371,7 @@ export async function createProject(
     tracking,
     policyTypes: [],
     demoMode: form.demoMode,
+    autoCorrect: form.autoCorrect,
     autosave: true,
     bots: false
   }
@@ -379,13 +379,12 @@ export async function createProject(
   // Ensure that all video names are set to default if empty
   let projectItems = formFileData.items
 
-  // Optional pre-import correction: clamp annotations that stray outside the
-  // imagery and join near-touching polyline endpoints. Runs before any other
-  // processing so downstream conversion sees final geometry. Falls back to the
-  // uncorrected items if the service is unavailable.
-  if (form.autoCorrect) {
-    projectItems = await correctAnnotations(projectItems)
-  }
+  // Auto-correction does NOT happen here. At roughly 6 seconds per frame it
+  // runs for ~22 minutes on a 221-frame project, far past the 10-minute browser
+  // submission timeout — correcting inline meant the request aborted and no
+  // project was created at all. The project is now created immediately with its
+  // original annotations and corrected task-by-task in the background; see
+  // correction_worker.ts.
 
   projectItems.forEach((itemExport) => {
     if (itemExport.videoName === undefined) {

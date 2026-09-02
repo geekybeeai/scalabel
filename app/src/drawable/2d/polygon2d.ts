@@ -6,6 +6,7 @@ import {
   isKeyHeld
 } from "../../common/keyboard_state"
 import { isMarked } from "../../common/multi_delete_state"
+import { isSnapEnabled } from "../../common/snap_state"
 import { Cursor, Key, LabelTypeName } from "../../const/common"
 import { makeLabel } from "../../functional/states"
 import { Size2D } from "../../math/size2d"
@@ -576,6 +577,9 @@ export class Polygon2D extends Label2D {
         )
         const tmpStyle = { ...pointStyle }
         tmpStyle.color = assignColor(numPoints + 1)
+        if (mode === DrawMode.VIEW) {
+          tmpStyle.strokeColor = [0, 0, 0]
+        }
         tmpPoint.draw(context, ratio, tmpStyle)
         let numVertices = 1
         _.forEach(this._points, (point, index) => {
@@ -585,6 +589,9 @@ export class Polygon2D extends Label2D {
               style = { ...highPointStyle }
             }
             style.color = assignColor(index + 1)
+            if (mode === DrawMode.VIEW) {
+              style.strokeColor = [0, 0, 0]
+            }
             point.draw(context, ratio, style)
             numVertices++
           }
@@ -607,8 +614,14 @@ export class Polygon2D extends Label2D {
             style = { ...highPointStyle }
           }
           style.color = assignColor(i + 1)
-          if (mode === DrawMode.VIEW && point.type === PathPointType.CURVE) {
-            style.color = [0, 255, 255]
+          if (mode === DrawMode.VIEW) {
+            if (point.type === PathPointType.CURVE) {
+              style.color = [0, 255, 255]
+            }
+            // Outline every handle, not just curve control points: a vertex
+            // whose fill is close to the imagery underneath is otherwise hard
+            // to spot. VIEW only — on the control canvas the fill IS the hit
+            // -test id, so a stroke there would corrupt the encoded color.
             style.strokeColor = [0, 0, 0]
           }
           point.draw(context, ratio, style)
@@ -761,7 +774,11 @@ export class Polygon2D extends Label2D {
     } else if (this._mouseDown && this._state === Polygon2DState.RESHAPE) {
       // Dragging point
       const draggedIndex = this._highlightedHandle - 1
-      if (this.isEndpoint(draggedIndex)) {
+      // Snapping can be switched off from the toolbar when lines legitimately
+      // run close together and their endpoints must stay distinct. Toggling it
+      // off mid-drag falls through to clearSnapState below, so a target picked
+      // up before the toggle cannot survive into onMouseUp and merge anyway.
+      if (this.isEndpoint(draggedIndex) && isSnapEnabled()) {
         const candidate = this._labelList.findNearestEndpoint(this, coord, 15)
         if (candidate !== null) {
           this._snapTargetPolyline = candidate.polyline

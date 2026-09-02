@@ -34,11 +34,164 @@ export function ContentCutIcon(props: SvgIconProps): JSX.Element {
   )
 }
 
+/**
+ * An S-curve, drawn under the scissors to mark the curve-aware cut tool.
+ * Distinguishes it at a glance from the plain scissors, which refuse curves.
+ */
+const CURVE_HINT_PATH = "M2 21c5 0 5-7 10-7s5 7 10 7"
+
+/**
+ * Scissors over a curve: the cut tool that also splits curved segments.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function ContentCutCurveIcon(props: SvgIconProps): JSX.Element {
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path d={CONTENT_CUT_PATH} transform="translate(0,-3) scale(0.92)" />
+      <path
+        d={CURVE_HINT_PATH}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+      />
+    </SvgIcon>
+  )
+}
+
+/**
+ * Glyph for the straighten tool: a curve flattening into a straight line,
+ * with the endpoint anchors marked. Reads as the inverse of the curve tools.
+ */
+const STRAIGHTEN_CURVE_PATH = "M3 7c5 0 6-4 9-4"
+const STRAIGHTEN_LINE_PATH = "M3 17h18"
+
+/**
+ * Curve-to-straight icon for the straighten tool.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function StraightenIcon(props: SvgIconProps): JSX.Element {
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path
+        d={STRAIGHTEN_CURVE_PATH}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        opacity={0.55}
+      />
+      <path
+        d={STRAIGHTEN_LINE_PATH}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+      />
+      <circle cx={3} cy={17} r={2.6} fill="currentColor" />
+      <circle cx={21} cy={17} r={2.6} fill="currentColor" />
+      <path
+        d="M15 6l3 3-3 3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </SvgIcon>
+  )
+}
+
+const STRAIGHTEN_CURSOR_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
+  'viewBox="0 0 24 24">' +
+  '<path d="' + STRAIGHTEN_LINE_PATH +
+  '" fill="none" stroke="white" stroke-width="4"/>' +
+  '<path d="' + STRAIGHTEN_LINE_PATH +
+  '" fill="none" stroke="black" stroke-width="2"/>' +
+  '<path d="' + STRAIGHTEN_CURVE_PATH +
+  '" fill="none" stroke="white" stroke-width="4"/>' +
+  '<path d="' + STRAIGHTEN_CURVE_PATH +
+  '" fill="none" stroke="black" stroke-width="2"/></svg>'
+
+/**
+ * CSS cursor shown while the straighten tool is armed. Same hotspot as the cut
+ * cursors so every one-shot tool aims identically.
+ */
+export const STRAIGHTEN_CURSOR = `url('data:image/svg+xml;utf8,${encodeURIComponent(
+  STRAIGHTEN_CURSOR_SVG
+)}') 12 12, crosshair`
+
+/**
+ * Two line ends meeting at a shared point: endpoint snapping is ON.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function SnapOnIcon(props: SvgIconProps): JSX.Element {
+  const stroke = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round" as const
+  }
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path {...stroke} d="M2 12h9" />
+      <path {...stroke} d="M13 12h9" />
+      <circle cx={12} cy={12} r={3.4} fill="currentColor" />
+    </SvgIcon>
+  )
+}
+
+/**
+ * The same two line ends held apart, with a slash: endpoint snapping is OFF.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function SnapOffIcon(props: SvgIconProps): JSX.Element {
+  const stroke = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round" as const
+  }
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path {...stroke} d="M2 12h7" />
+      <path {...stroke} d="M15 12h7" />
+      <circle cx={9} cy={12} r={2.4} fill="currentColor" />
+      <circle cx={15} cy={12} r={2.4} fill="currentColor" />
+      <path {...stroke} d="M4 20L20 4" />
+    </SvgIcon>
+  )
+}
+
 const CUT_CURSOR_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
   'viewBox="0 0 24 24"><path d="' +
   CONTENT_CUT_PATH +
   '" fill="white" stroke="black" stroke-width="1"/></svg>'
+
+const CURVE_CUT_CURSOR_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
+  'viewBox="0 0 24 24"><path d="' +
+  CONTENT_CUT_PATH +
+  '" transform="translate(0,-3) scale(0.92)" fill="white" stroke="black" ' +
+  'stroke-width="1"/><path d="' +
+  CURVE_HINT_PATH +
+  '" fill="none" stroke="white" stroke-width="3"/><path d="' +
+  CURVE_HINT_PATH +
+  '" fill="none" stroke="black" stroke-width="1.5"/></svg>'
+
+/**
+ * CSS cursor shown while the curve-aware cut tool is armed. Same hotspot as
+ * CUT_CURSOR so the two tools aim identically.
+ */
+export const CURVE_CUT_CURSOR = `url('data:image/svg+xml;utf8,${encodeURIComponent(
+  CURVE_CUT_CURSOR_SVG
+)}') 12 12, crosshair`
 
 /**
  * CSS cursor shown while the cut tool is armed: a scissors glyph (white fill,

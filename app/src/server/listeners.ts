@@ -10,6 +10,8 @@ import { getSubmissionTime } from "../components/util"
 import { FormField } from "../const/project"
 import { DatasetExport, ItemExport } from "../types/export"
 import { Project } from "../types/project"
+import { getProjectStatuses } from "./correction_status"
+import { correctProjectInBackground, splitIntoTaskChunks } from "./correction_worker"
 import {
   createProject,
   createTasks,
@@ -37,6 +39,7 @@ import {
 import { Storage } from "./storage"
 import { UserManager } from "./user_manager"
 import { parseProjectName } from "./util"
+import { index2str } from "../common/util"
 import { QueryArg } from "../const/common"
 import { ServerConfig } from "../types/config"
 
@@ -669,7 +672,10 @@ export class Listeners {
         projectMetaData,
         taskMetaDatas: taskOptions,
         taskKeys,
-        numUsers
+        numUsers,
+        // Empty once a project is fully corrected (or was never corrected at
+        // all), which the dashboard reads as "every task ready".
+        correctionStatuses: getProjectStatuses(projectName)
       }
 
       res.send(JSON.stringify(contents))
@@ -903,6 +909,30 @@ export class Listeners {
         // Create tasks then save them
         createTasks(filteredProject, this.projectStore)
       ])
+
+      // Respond BEFORE correcting. Correction takes minutes per task and the
+      // browser gives up after ten, so the project is created with its original
+      // annotations and each task is corrected and re-saved in the background.
+      // The dashboard disables a task's link until its correction lands.
+      if (filteredProject.config.autoCorrect === true) {
+        const chunks = splitIntoTaskChunks(filteredProject, index2str)
+        correctProjectInBackground(
+          filteredProject,
+          chunks,
+          async (chunk, corrected) => {
+            // Rebuild this task from the corrected frames using the same
+            // conversion project creation used, so the saved task is identical
+            // to one created from already-corrected input.
+            await createTasks(
+              { ...filteredProject, items: corrected },
+              this.projectStore,
+              chunk.taskIndex,
+              chunk.taskIndex * filteredProject.config.taskSize
+            )
+          }
+        )
+      }
+
       res.send(filterXSS(msg))
     } catch (err) {
       Logger.error(err as Error)

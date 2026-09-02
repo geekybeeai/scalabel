@@ -20,6 +20,21 @@ import { drawHistory } from "../common/draw_history"
 import Session from "../common/session"
 import { isCutMode, onCutModeChange, setCutMode } from "../common/cut_state"
 import {
+  isCurveCutMode,
+  onCurveCutModeChange,
+  setCurveCutMode
+} from "../common/curve_cut_state"
+import {
+  isStraightenMode,
+  onStraightenModeChange,
+  setStraightenMode
+} from "../common/straighten_state"
+import {
+  isSnapEnabled,
+  onSnapChange,
+  setSnapEnabled
+} from "../common/snap_state"
+import {
   armSegmentDelete,
   getSegmentDeletePhase,
   isSegmentDeleteActive,
@@ -61,7 +76,11 @@ import {
   ViewerProps
 } from "./drawable_viewer"
 import {
+  ContentCutCurveIcon,
   ContentCutIcon,
+  SnapOffIcon,
+  SnapOnIcon,
+  StraightenIcon,
   DeleteSegmentIcon,
   FreeformSelectIcon,
   RectangleSelectIcon,
@@ -106,6 +125,12 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   private _panRAFPending: boolean = false
   /** unsubscribe from cut-mode change notifications */
   private _offCutModeChange: (() => void) | null = null
+  /** unsubscribe from curve-cut-mode change notifications */
+  private _offCurveCutModeChange: (() => void) | null = null
+  /** unsubscribe from straighten-mode change notifications */
+  private _offStraightenModeChange: (() => void) | null = null
+  /** unsubscribe from endpoint-snap toggle notifications */
+  private _offSnapChange: (() => void) | null = null
   /** unsubscribe from delete-segment state changes */
   private _offSegmentDeleteChange: (() => void) | null = null
   /** anchor element for the select-mode dropdown menu (null = closed) */
@@ -121,6 +146,11 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   public componentDidMount(): void {
     super.componentDidMount()
     this._offCutModeChange = onCutModeChange(() => this.forceUpdate())
+    this._offCurveCutModeChange = onCurveCutModeChange(() => this.forceUpdate())
+    this._offStraightenModeChange = onStraightenModeChange(() =>
+      this.forceUpdate()
+    )
+    this._offSnapChange = onSnapChange(() => this.forceUpdate())
     this._offSegmentDeleteChange = onSegmentDeleteChange(() =>
       this.forceUpdate()
     )
@@ -135,6 +165,18 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     if (this._offCutModeChange !== null) {
       this._offCutModeChange()
       this._offCutModeChange = null
+    }
+    if (this._offCurveCutModeChange !== null) {
+      this._offCurveCutModeChange()
+      this._offCurveCutModeChange = null
+    }
+    if (this._offStraightenModeChange !== null) {
+      this._offStraightenModeChange()
+      this._offStraightenModeChange = null
+    }
+    if (this._offSnapChange !== null) {
+      this._offSnapChange()
+      this._offSnapChange = null
     }
     if (this._offSegmentDeleteChange !== null) {
       this._offSegmentDeleteChange()
@@ -343,6 +385,9 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         ...this.getRotationButtons(),
         ...this.getHistoryButtons(),
         this.getCutButton(),
+        this.getCurveCutButton(),
+        this.getStraightenButton(),
+        this.getSnapButton(),
         this.getDeleteSegmentButton(),
         this.getFreeformSelectButton()
       ]
@@ -531,6 +576,8 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
               (this._viewerConfig as ImageViewerConfigType)?.showCurvesOnly !==
                 true
             ) {
+              setCurveCutMode(false)
+              setStraightenMode(false)
               setCutMode(true)
             }
           }}
@@ -539,6 +586,136 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           edge={"start"}
         >
           <ContentCutIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the divide-curve toolbar button.
+   *
+   * Unlike the plain cut button this does NOT break the line in two: it splits
+   * the clicked bezier into two adjustable curve groups while the polyline
+   * stays a single label. Arming it disarms the other one-shot tools.
+   *
+   * @return {JSX.Element} the divide-curve button
+   */
+  protected getCurveCutButton(): JSX.Element {
+    const armed = isCurveCutMode()
+    return (
+      <Tooltip
+        key={`curveCut2dButton${this.props.id}`}
+        title="Divide curve"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              setCurveCutMode(false)
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking &&
+              (this._viewerConfig as ImageViewerConfigType)?.showCurvesOnly !==
+                true
+            ) {
+              setCutMode(false)
+              setStraightenMode(false)
+              setCurveCutMode(true)
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <ContentCutCurveIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the straighten toolbar button.
+   *
+   * Arms a one-shot tool that removes the control points of the clicked curve,
+   * leaving its two anchors joined by a straight span. Mutually exclusive with
+   * both cut tools.
+   *
+   * @return {JSX.Element} the straighten button
+   */
+  protected getStraightenButton(): JSX.Element {
+    const armed = isStraightenMode()
+    return (
+      <Tooltip
+        key={`straighten2dButton${this.props.id}`}
+        title="Straighten curve"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              setStraightenMode(false)
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking
+            ) {
+              setCutMode(false)
+              setCurveCutMode(false)
+              setStraightenMode(true)
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <StraightenIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the endpoint-snap toggle button.
+   *
+   * Unlike the one-shot tools this is a sticky mode: dragging an endpoint near
+   * another normally snaps and (same category) merges the two lines, which is
+   * wrong where lane lines legitimately run close together. Turning it off
+   * suppresses snap, merge and indicator so vertices land exactly where they
+   * are dragged.
+   *
+   * @return {JSX.Element} the snap toggle button
+   */
+  protected getSnapButton(): JSX.Element {
+    const enabled = isSnapEnabled()
+    return (
+      <Tooltip
+        key={`snap2dButton${this.props.id}`}
+        title={
+          enabled
+            ? "Endpoint snapping on — click to keep lines separate"
+            : "Endpoint snapping off — lines will not join"
+        }
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            setSnapEnabled(!enabled)
+          }}
+          className={this.props.classes.viewer_button}
+          // Tinted while OFF: the non-default state is the one worth flagging,
+          // since a silent merge is what the user is trying to avoid.
+          style={{ color: enabled ? undefined : "#ff9800" }}
+          edge={"start"}
+        >
+          {enabled ? <SnapOnIcon /> : <SnapOffIcon />}
         </IconButton>
       </Tooltip>
     )
