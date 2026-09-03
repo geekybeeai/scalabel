@@ -50,13 +50,6 @@ export enum Polygon2DState {
   MOVE
 }
 
-/** list all orientation types */
-enum OrientationType {
-  COLLINEAR,
-  CLOCKWISE,
-  COUNTERCLOCKWISE
-}
-
 /**
  * polygon 2d label
  */
@@ -884,9 +877,6 @@ export class Polygon2D extends Label2D {
       return false
     }
     if (this._closed) {
-      const lines: PathPoint2D[][] = []
-      let l = 0
-      let r = 1
       let maxx = Number.MIN_VALUE
       let minx = Number.MAX_VALUE
       let maxy = Number.MIN_VALUE
@@ -900,49 +890,14 @@ export class Polygon2D extends Label2D {
       if ((maxx - minx) * (maxy - miny) < MIN_SIZE) {
         return false
       }
-      while (r < this._points.length) {
-        if (this._points[r].type === PathPointType.LINE) {
-          lines.push([this._points[l], this._points[r]])
-          l = r
-        }
-        r++
-      }
-      if (this._state === Polygon2DState.FINISHED) {
-        if (this._points[l].type === PathPointType.LINE) {
-          lines.push([this._points[l], this._points[0]])
-        }
-      }
-      for (let i = 0; i < lines.length; i++) {
-        for (let j = i + 1; j < lines.length; j++) {
-          if (
-            lines[i][0].x === lines[j][0].x &&
-            lines[i][0].y === lines[j][0].y
-          ) {
-            continue
-          }
-          if (
-            lines[i][0].x === lines[j][1].x &&
-            lines[i][0].y === lines[j][1].y
-          ) {
-            continue
-          }
-          if (
-            lines[i][1].x === lines[j][0].x &&
-            lines[i][1].y === lines[j][0].y
-          ) {
-            continue
-          }
-          if (
-            lines[i][1].x === lines[j][1].x &&
-            lines[i][1].y === lines[j][1].y
-          ) {
-            continue
-          }
-          if (this.intersect(lines[i], lines[j])) {
-            return false
-          }
-        }
-      }
+      // NOTE: self-intersection is deliberately NOT rejected. Upstream treated
+      // any closed shape whose edges cross as invalid, which for lane work
+      // silently DELETED the line: closing a curb edge that doubles back on
+      // itself (a hairpin) produces a legitimately self-crossing ring, and
+      // commit2DLabels routes an invalid existing drawable to
+      // deleteInvalidLabel. A doubled-back lane edge is valid annotation
+      // geometry here, so only degenerate shapes (below MIN_SIZE) are
+      // rejected.
     } else {
       // TODO: check polyline validation
       if (this._points.length <= 1) {
@@ -1407,89 +1362,6 @@ export class Polygon2D extends Label2D {
     for (const point of this._points) {
       this._startingPoints.push(point.clone())
     }
-  }
-
-  /**
-   * Given three collinear points p, q, r, the function checks if q lies
-   * on line segment pr
-   *
-   * @param p
-   * @param q
-   * @param r
-   */
-  private onSegment(p: PathPoint2D, q: PathPoint2D, r: PathPoint2D): boolean {
-    if (
-      q.x <= Math.max(p.x, r.x) &&
-      q.x >= Math.min(p.x, r.x) &&
-      q.y <= Math.max(p.y, r.y) &&
-      q.y >= Math.min(p.y, r.y)
-    ) {
-      return true
-    }
-    return false
-  }
-
-  /**
-   * To find orientation of ordered triplet
-   * The function returns following values
-   * 0 -> p, q and r are collinear
-   * 1 -> Clockwise
-   * 2 -> Counterclockwise
-   *
-   * @param p
-   * @param q
-   * @param r
-   */
-  private orientation(
-    p: PathPoint2D,
-    q: PathPoint2D,
-    r: PathPoint2D
-  ): OrientationType {
-    const val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y)
-    switch (true) {
-      case val === 0:
-        return OrientationType.COLLINEAR
-      case val > 0:
-        return OrientationType.CLOCKWISE
-      default:
-        return OrientationType.COUNTERCLOCKWISE
-    }
-  }
-
-  /**
-   * to check whether two line segments intersect
-   *
-   * @param a
-   * @param b
-   */
-  private intersect(a: PathPoint2D[], b: PathPoint2D[]): boolean {
-    const p1 = a[0]
-    const q1 = a[1]
-    const p2 = b[0]
-    const q2 = b[1]
-    const length1 =
-      (q1.x - p1.x) * (q1.x - p1.x) + (q1.y - p1.y) * (q1.y - p1.y)
-    const length2 =
-      (q2.x - p2.x) * (q2.x - p2.x) + (q2.y - p2.y) * (q2.y - p2.y)
-    if (length1 < 1 || length2 < 1) {
-      return false
-    }
-    const o1 = this.orientation(p1, q1, p2)
-    const o2 = this.orientation(p1, q1, q2)
-    const o3 = this.orientation(p2, q2, p1)
-    const o4 = this.orientation(p2, q2, q1)
-    if (o1 !== o2 && o3 !== o4) {
-      return true
-    }
-    if (o1 === OrientationType.COLLINEAR && this.onSegment(p1, p2, q1))
-      return true
-    if (o2 === OrientationType.COLLINEAR && this.onSegment(p1, q2, q1))
-      return true
-    if (o3 === OrientationType.COLLINEAR && this.onSegment(p2, p1, q2))
-      return true
-    if (o4 === OrientationType.COLLINEAR && this.onSegment(p2, q1, q2))
-      return true
-    return false
   }
 
   /**
