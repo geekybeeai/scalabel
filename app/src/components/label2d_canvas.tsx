@@ -68,15 +68,62 @@ import {
   SEGMENT_DELETE_PREVIEW_MS
 } from "../drawable/2d/polyline_segment_delete"
 import { DASH_LINE, DELETE_HIGHLIGHT_COLOR } from "../drawable/2d/common"
+import { getColorByCategory, toCssColor } from "../drawable/util"
 import { advanceAnts, getAntsOffset } from "../drawable/2d/marching_ants"
 import {
   ContentCutIcon,
   CURVE_CUT_CURSOR,
   CUT_CURSOR,
+  GRAB_CURSOR,
   DeleteSegmentIcon,
   STRAIGHTEN_CURSOR
 } from "./cut_icon"
 import { performCurveCut } from "../drawable/2d/polyline_curve_cut"
+import { performSimplify } from "../drawable/2d/polyline_simplify"
+import {
+  captureMarkAt,
+  commitStamp,
+  findGuideLine,
+  previewMarks
+} from "../drawable/2d/polyline_stamp"
+import {
+  addTemplate,
+  endPreview,
+  getAppliedIds,
+  getPreviewGuide,
+  getStampOptions,
+  getTemplates,
+  hasApplied,
+  isCaptureMode,
+  isPreviewing,
+  isStampMode,
+  onStampChange,
+  redoPositions,
+  setAppliedIds,
+  setCaptureMode,
+  setPositions,
+  setStampHandlers,
+  setStampMode,
+  setStampOptions,
+  startPreview,
+  undoPositions
+} from "../common/stamp_state"
+import {
+  isSimplifyMode,
+  setSimplifyMode
+} from "../common/simplify_state"
+import {
+  commitGrab,
+  findGrabbableLabel
+} from "../drawable/2d/polyline_grab_move"
+import {
+  endGrab,
+  getGrab,
+  GrabMode,
+  isGrabbing,
+  startGrab,
+  updateGrab
+} from "../common/grab_move_state"
 import { performStraighten } from "../drawable/2d/polyline_straighten"
 import { Key, LabelTypeName } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
@@ -84,7 +131,11 @@ import { Label2DList } from "../drawable/2d/label2d_list"
 import { getCurrentViewerConfig, isFrameLoaded } from "../functional/state_util"
 import { Vector2D } from "../math/vector2d"
 import { label2dViewStyle } from "../styles/label"
-import { ImageViewerConfigType, State } from "../types/state"
+import {
+  ImageViewerConfigType,
+  PathPoint2DType,
+  State
+} from "../types/state"
 import {
   clearCanvas,
   getCurrentImageSize,
@@ -104,6 +155,10 @@ import {
   mapStateToDrawableProps
 } from "./viewer"
 import { isKeyFrame } from "./util"
+import {
+  projectToPath,
+  StampTemplate
+} from "../drawable/2d/polyline_stamp_geometry"
 import { alert } from "../common/alert"
 import { Severity } from "../types/common"
 
@@ -185,6 +240,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _offMarkedChange: (() => void) | null = null
   /** unsubscribe from freeform-select tool changes */
   private _offFreeformChange: (() => void) | null = null
+  /** unsubscribe from stamp-tool changes */
+  private _offStampChange: (() => void) | null = null
   /** pending commit timer for the delete-segment preview */
   private _segmentDeleteTimer: number | null = null
   /** rAF handle for the marching-ants animation */
@@ -230,6 +287,16 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * Component mount callback
    */
   public componentDidMount(): void {
+    // The settings panel lives in the viewer so it does not pan with the
+    // image, but the commit logic lives here.
+    setStampHandlers(
+      () => {
+        this.commitStampPreview()
+      },
+      () => {
+        this.finishStampPreview()
+      }
+    )
     super.componentDidMount()
     document.addEventListener("keydown", this._keyDownListener)
     document.addEventListener("keyup", this._keyUpListener)
@@ -240,6 +307,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // stale 0.7x motion resolution, leaving labels blurry until the next state
     // change. Mirrors ImageCanvas's idle handler.
     this._offIdle = onIdle(() => this.forceUpdate())
+    // The settings panel renders in the viewer, so its own re-render does not
+    // repaint this canvas. Subscribe to the shared state instead, so tuning a
+    // slider redraws the preview immediately.
+    this._offStampChange = onStampChange(() => {
+      this.redraw()
+    })
     this._offSegmentDelete = onSegmentDeleteChange(() =>
       this.onSegmentDeleteStateChange()
     )
@@ -258,6 +331,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * Unmount callback
    */
   public componentWillUnmount(): void {
+    setStampHandlers(null, null)
+    if (this._offStampChange !== null) {
+      this._offStampChange()
+      this._offStampChange = null
+    }
     super.componentWillUnmount()
     document.removeEventListener("keydown", this._keyDownListener)
     document.removeEventListener("keyup", this._keyUpListener)
@@ -546,6 +624,14 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         this.labelContext,
         this.displayToImageRatio * this._upResRatio
       )
+      this.drawGrabPreview(
+        this.labelContext,
+        this.displayToImageRatio * this._upResRatio
+      )
+      this.drawStampPreview(
+        this.labelContext,
+        this.displayToImageRatio * this._upResRatio
+      )
       this.labelContext.restore()
       this.controlContext.restore()
     }
@@ -744,9 +830,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.handleCurveCut(mousePos)
       return
     }
-    // Straighten: drop the clicked curve's control points.
-    if (isStraightenMode()) {
-      this.handleStraighten(mousePos)
+    // A carried line or an armed one-shot tool consumes the click entirely.
+    if (this.handleArmedTool(mousePos)) {
       return
     }
     // Empty canvas, OR within the post-double-click pan window: defer the
@@ -895,6 +980,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // Update the currently hovered shape
     const mousePos = this.getMousePos(e)
     this._lastMousePos = mousePos
+    if (isGrabbing()) {
+      // The carried line follows the cursor with no button held.
+      updateGrab(mousePos.x, mousePos.y)
+      this.redraw()
+      return
+    }
     const [labelIndex, handleIndex] = this.fetchHandleId(mousePos)
     if (
       this._labelHandler.onMouseMove(
@@ -918,6 +1009,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
 
     if (isCurveCutMode()) {
       this.setCursor(CURVE_CUT_CURSOR)
+      return
+    }
+    if (isStampMode() || isCaptureMode()) {
+      // Both pick a line by clicking it, so they share the cut tools' aim.
+      this.setCursor(CUT_CURSOR)
       return
     }
     if (isStraightenMode()) {
@@ -1099,6 +1195,124 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   }
 
   /**
+   * Draw the marks that would be added by the pending stamp.
+   *
+   * Preview only: nothing is written until the user clicks to commit, so the
+   * settings can be tuned and the marks redrawn as often as needed.
+   *
+   * @param context the label canvas context
+   * @param ratio image-to-canvas scale (displayToImageRatio * upResRatio)
+   */
+  private drawStampPreview(
+    context: CanvasRenderingContext2D,
+    ratio: number
+  ): void {
+    const guideId = getPreviewGuide()
+    if (guideId === null) {
+      return
+    }
+    const marks = previewMarks(guideId, getStampOptions())
+    if (marks.length === 0) {
+      return
+    }
+    // After Apply the committed marks are drawn by the normal label path. The
+    // preview still runs, so moving a slider shows where the marks WOULD go
+    // before Update is pressed; it is drawn thinner so the two are
+    // distinguishable rather than looking like doubled lines.
+    const applied = hasApplied()
+    const trace = (): void => {
+      for (const mark of marks) {
+        context.beginPath()
+        context.moveTo(mark[0].x * ratio, mark[0].y * ratio)
+        for (let i = 1; i < mark.length; i++) {
+          context.lineTo(mark[i].x * ratio, mark[i].y * ratio)
+        }
+        context.stroke()
+      }
+    }
+    context.save()
+    // Black casing then a bright fill, matching the grab preview, so the marks
+    // stay readable over imagery of any brightness.
+    context.lineWidth = applied ? 3 : 4
+    context.strokeStyle = "#000000"
+    trace()
+    context.lineWidth = applied ? 1.5 : 2
+    context.strokeStyle = "#00e676"
+    if (applied) {
+      context.setLineDash(DASH_LINE)
+    }
+    trace()
+    context.restore()
+  }
+
+  /**
+   * Draw the line currently being carried by the cursor.
+   *
+   * A dashed white outline at the pending offset. Preview only: the stored
+   * geometry is untouched until the drop commits.
+   *
+   * @param context the label canvas context
+   * @param ratio image-to-canvas scale (displayToImageRatio * upResRatio)
+   */
+  private drawGrabPreview(
+    context: CanvasRenderingContext2D,
+    ratio: number
+  ): void {
+    const grab = getGrab()
+    if (grab === null) {
+      return
+    }
+    const state = this.state
+    const label = state.task.items[grab.itemIndex]?.labels[grab.labelId]
+    if (label === undefined) {
+      return
+    }
+    const points = label.shapes
+      .map((id) => state.task.items[grab.itemIndex].shapes[id])
+      .filter((shape) => shape !== undefined)
+    if (points.length < 2) {
+      return
+    }
+    // Preview only — the real geometry is not touched until the drop commits.
+    const p = points as Array<{ x: number; y: number }>
+    const trace = (): void => {
+      context.beginPath()
+      context.moveTo(
+        (p[0].x + grab.offsetX) * ratio,
+        (p[0].y + grab.offsetY) * ratio
+      )
+      for (let i = 1; i < p.length; i++) {
+        context.lineTo(
+          (p[i].x + grab.offsetX) * ratio,
+          (p[i].y + grab.offsetY) * ratio
+        )
+      }
+    }
+
+    const categories = state.task.config.categories
+    const categoryIndex = label.category[0]
+    const color = getColorByCategory(
+      categoryIndex,
+      categories !== undefined ? categories[categoryIndex] : undefined
+    )
+
+    context.save()
+    // Black casing under the line, matching the vertex handles: the preview
+    // has to stay readable over imagery of any brightness.
+    context.lineWidth = 4
+    context.strokeStyle = "#000000"
+    trace()
+    context.stroke()
+    // The line's own category colour on top, so what is being carried is
+    // identifiable at a glance rather than an anonymous white outline.
+    context.lineWidth = 2
+    context.strokeStyle = toCssColor(color)
+    trace()
+    context.stroke()
+    context.restore()
+  }
+
+  /**
    * Draw the in-progress freeform lasso: the accumulated path as a dashed
    * magenta polyline, closed back to its start. Drawn on top of the labels
    * like the delete-segment overlay.
@@ -1157,37 +1371,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       return
     }
 
-    if (e.key === Key.ESCAPE && isStraightenMode()) {
-      // Escape disarms the one-shot straighten tool.
-      setStraightenMode(false)
-      this.setDefaultCursor()
-      return
-    }
-
-    if (e.key === Key.ESCAPE && isCurveCutMode()) {
-      // Escape disarms the one-shot curve-aware cut tool.
-      setCurveCutMode(false)
-      this.setDefaultCursor()
-      return
-    }
-
-    if (e.key === Key.ESCAPE && isCutMode()) {
-      // Escape disarms the one-shot cut tool.
-      setCutMode(false)
-      this.setDefaultCursor()
-      return
-    }
-
-    if (e.key === Key.ESCAPE && markedCount() > 0) {
-      // Escape clears the batch-delete selection (redraw via the subscription).
-      clearMarked()
-      return
-    }
-
-    if (e.key === Key.ESCAPE && isFreeformActive()) {
-      // Escape disarms the freeform tool and drops any in-progress lasso.
-      resetFreeform()
-      this.setDefaultCursor()
+    if (e.key === Key.ESCAPE && this.handleEscape()) {
       return
     }
 
@@ -1220,14 +1404,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       // R rotates the view 90° clockwise; Shift+R counter-clockwise.
       // Display-only (stored coords stay in the original frame). Skipped
       // while typing, while drawing, and during a delete-segment preview.
-      const target = e.target as HTMLElement | null
-      const typing =
-        target !== null &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
-      const blocked =
-        Session.label2dList.isDrawingInProgress() ||
-        getSegmentDeletePhase() === "preview"
-      if (!typing && !blocked) {
+      if (this.canRunShortcut(e)) {
         e.preventDefault()
         const config = this.state.user.viewerConfigs[
           this.props.id
@@ -1237,6 +1414,25 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         const rotation = (((current + delta) % 360) + 360) % 360
         const newConfig: ImageViewerConfigType = { ...config, rotation }
         Session.dispatch(changeViewerConfig(this.props.id, newConfig))
+        return
+      }
+    }
+
+    if (
+      (e.key === "w" || e.key === "W" || e.key === "e" || e.key === "E") &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey
+    ) {
+      // W picks up the hovered line so it follows the cursor; E does the same
+      // with a copy, leaving the original in place. A click drops it, Escape
+      // cancels. Press-move-click rather than press-and-drag: a drag would
+      // collide with the pan/reshape handling on mouse-down, and this works on
+      // a trackpad where holding a button while moving is awkward.
+      if (this.canRunShortcut(e)) {
+        e.preventDefault()
+        const copy = e.key === "e" || e.key === "E"
+        this.grabHoveredLine(copy ? GrabMode.COPY : GrabMode.MOVE)
         return
       }
     }
@@ -1255,14 +1451,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       // document keydown and calls preventDefault, so an S binding here never
       // ran. Skipped while typing (A is input there) and while drawing, where
       // the line is not committed yet.
-      const target = e.target as HTMLElement | null
-      const typing =
-        target !== null &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
-      const blocked =
-        Session.label2dList.isDrawingInProgress() ||
-        getSegmentDeletePhase() === "preview"
-      if (!typing && !blocked) {
+      if (this.canRunShortcut(e)) {
         e.preventDefault()
         this.straightenSelection()
         return
@@ -1276,14 +1465,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       // zero-based index underneath. 0 is accepted as the tenth slot.
       // Skipped while typing (digits are input there) and while drawing, where
       // switching category mid-line would apply to the wrong thing.
-      const target = e.target as HTMLElement | null
-      const typing =
-        target !== null &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
-      const blocked =
-        Session.label2dList.isDrawingInProgress() ||
-        getSegmentDeletePhase() === "preview"
-      if (!typing && !blocked) {
+      if (this.canRunShortcut(e)) {
         const digit = Number(e.key)
         const categoryIndex = digit === 0 ? 9 : digit - 1
         const categories = this.state.task.config.categories
@@ -1304,6 +1486,16 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
           }
           return
         }
+      }
+    }
+
+    // While placing marks by hand, Ctrl+Z/Y act on the placements rather than
+    // the annotation: they are not in redux yet, so DrawHistory cannot see
+    // them, and a mis-click is exactly what undo is expected to fix.
+    if (isPreviewing() && !getStampOptions().evenSpacing) {
+      if (this.handlePlacementUndo(e)) {
+        e.preventDefault()
+        return
       }
     }
 
@@ -1356,6 +1548,357 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       default:
         break
     }
+  }
+
+  /**
+   * Cancel whatever one-shot tool or gesture is active.
+   *
+   * Returns true when something was cancelled, so the caller can stop
+   * processing the key.
+   */
+  private handleEscape(): boolean {
+    if (isPreviewing()) {
+      // Discard the previewed marks; nothing was written.
+      endPreview()
+      this.setDefaultCursor()
+      this.redraw()
+      return true
+    }
+    if (isGrabbing()) {
+      // Cancel the carry: nothing was committed, so the line simply snaps back.
+      endGrab()
+      this.setDefaultCursor()
+      this.redraw()
+      return true
+    }
+
+    if (isStraightenMode()) {
+      // Escape disarms the one-shot straighten tool.
+      setStraightenMode(false)
+      this.setDefaultCursor()
+      return true
+    }
+
+    if (isCurveCutMode()) {
+      // Escape disarms the one-shot curve-aware cut tool.
+      setCurveCutMode(false)
+      this.setDefaultCursor()
+      return true
+    }
+
+    if (isCutMode()) {
+      // Escape disarms the one-shot cut tool.
+      setCutMode(false)
+      this.setDefaultCursor()
+      return true
+    }
+
+    if (markedCount() > 0) {
+      // Escape clears the batch-delete selection (redraw via the subscription).
+      clearMarked()
+      return true
+    }
+
+    if (isFreeformActive()) {
+      // Escape disarms the freeform tool and drops any in-progress lasso.
+      resetFreeform()
+      this.setDefaultCursor()
+      return true
+    }
+
+    return false
+  }
+
+  /**
+   * Whether a bare-letter shortcut may run for this event.
+   *
+   * False while typing in a text field, where the letter is real input, and
+   * while a line is being drawn or a delete-segment preview is pending, where
+   * the geometry is not settled.
+   *
+   * @param e the keyboard event
+   */
+  private canRunShortcut(e: KeyboardEvent): boolean {
+    const target = e.target as HTMLElement | null
+    const typing =
+      target !== null &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+    const blocked =
+      Session.label2dList.isDrawingInProgress() ||
+      getSegmentDeletePhase() === "preview"
+    return !typing && !blocked
+  }
+
+  /**
+   * Run whichever carried line or armed one-shot tool owns this click.
+   *
+   * @param mousePos the click position in image coordinates
+   * @returns true when the click was consumed
+   */
+  private handleArmedTool(mousePos: Vector2D): boolean {
+    if (isGrabbing()) {
+      // A carried line (W/E) drops on the next click.
+      this.dropGrabbedLine()
+      return true
+    }
+    if (isStraightenMode()) {
+      this.handleStraighten(mousePos)
+      return true
+    }
+    if (isSimplifyMode()) {
+      this.handleSimplify(mousePos)
+      return true
+    }
+    if (isPreviewing()) {
+      const options = getStampOptions()
+      if (!options.evenSpacing) {
+        // Manual mode: each click drops a mark where it lands rather than
+        // committing, so a run can be built up one paint stripe at a time.
+        this.addManualMark(mousePos)
+        return true
+      }
+      // Even mode: a click applies the marks at the current settings; the
+      // panel stays open so they can still be adjusted.
+      this.commitStampPreview()
+      return true
+    }
+    if (isCaptureMode()) {
+      this.handleCapture(mousePos)
+      return true
+    }
+    if (isStampMode()) {
+      this.handleStamp(mousePos)
+      return true
+    }
+    return false
+  }
+
+  /**
+   * Capture the mark under the cursor as a reusable stamp template.
+   *
+   * @param mousePos the click position in image coordinates
+   */
+  private handleCapture(mousePos: Vector2D): void {
+    const config = this.state.user.viewerConfigs[this.props.id]
+    const template = captureMarkAt(
+      mousePos,
+      CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+      `Mark ${getTemplates().length + 1}`,
+      {
+        hideLabels: config.hideLabels,
+        hiddenLabelTypes:
+          config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : [],
+        hiddenCategories:
+          config.hiddenCategories !== undefined ? config.hiddenCategories : []
+      }
+    )
+    setCaptureMode(false)
+    this.setDefaultCursor()
+    if (template === null) {
+      alert(Severity.WARNING, "Hover a mark, then click to save it as a shape.")
+      return
+    }
+    addTemplate(template)
+    // Select it straight away: capturing is almost always followed by using it.
+    setStampOptions({
+      ...getStampOptions(),
+      template: StampTemplate.CUSTOM,
+      custom: template
+    })
+    alert(Severity.INFO, `Saved "${template.name}" — pick it in the stamp bar.`)
+    this.forceUpdate()
+  }
+
+  /**
+   * Pick the line under the cursor as the stamp guide and start previewing.
+   *
+   * Nothing is written yet: the marks are drawn as a preview so the spacing and
+   * angle can be tuned before committing.
+   *
+   * @param mousePos the click position in image coordinates
+   */
+  private handleStamp(mousePos: Vector2D): void {
+    const config = this.state.user.viewerConfigs[this.props.id]
+    const guideId = findGuideLine(
+      mousePos,
+      CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+      {
+        hideLabels: config.hideLabels,
+        hiddenLabelTypes:
+          config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : [],
+        hiddenCategories:
+          config.hiddenCategories !== undefined ? config.hiddenCategories : []
+      }
+    )
+    if (guideId === null) {
+      alert(
+        Severity.WARNING,
+        "Hover a line, then click to preview marks along it."
+      )
+      return
+    }
+    startPreview(guideId)
+    this.setDefaultCursor()
+    this.redraw()
+  }
+
+  /**
+   * Handle undo/redo for manually placed marks.
+   *
+   * @param e the keyboard event
+   * @returns true when a placement was undone or redone
+   */
+  private handlePlacementUndo(e: KeyboardEvent): boolean {
+    if (!e.ctrlKey && !e.metaKey) {
+      return false
+    }
+    const key = e.key.toLowerCase()
+    if (key === "z" && !e.shiftKey) {
+      return undoPositions()
+    }
+    if (key === "y" || (key === "z" && e.shiftKey)) {
+      return redoPositions()
+    }
+    return false
+  }
+
+  /**
+   * Record a manually placed mark at the click.
+   *
+   * The click is stored as a distance along the guide, so the mark stays put if
+   * the guide is later reshaped. Clicking an existing mark removes it, which
+   * makes correcting a misplaced one a single click rather than an undo.
+   *
+   * @param mousePos the click position in image coordinates
+   */
+  private addManualMark(mousePos: Vector2D): void {
+    const guideId = getPreviewGuide()
+    if (guideId === null) {
+      return
+    }
+    const state = this.state
+    const itemIndex = state.user.select.item
+    const guide = state.task.items[itemIndex]?.labels[guideId]
+    if (guide === undefined) {
+      return
+    }
+    const points = (
+      guide.shapes
+        .map((id) => state.task.items[itemIndex].shapes[id])
+        .filter((shape) => shape !== undefined) as PathPoint2DType[]
+    ).map((p) => ({ x: p.x, y: p.y, pointType: p.pointType }))
+    const hit = projectToPath(points, mousePos)
+    if (hit === null) {
+      return
+    }
+    const options = getStampOptions()
+    // A click within half a period of an existing mark toggles it off.
+    const nearby = options.positions.findIndex(
+      (d) => Math.abs(d - hit.distance) < Math.max(8, options.length / 2)
+    )
+    const positions =
+      nearby >= 0
+        ? options.positions.filter((_, i) => i !== nearby)
+        : [...options.positions, hit.distance].sort((a, b) => a - b)
+    setPositions(positions)
+  }
+
+  /**
+   * Write the previewed marks to the annotation and end the preview.
+   */
+  private commitStampPreview(): void {
+    const guideId = getPreviewGuide()
+    if (guideId === null) {
+      return
+    }
+    // Replace the previous run's marks, so applying again after changing a
+    // setting adjusts the stamp instead of stacking a second set on top.
+    const result = commitStamp(guideId, getStampOptions(), getAppliedIds())
+    if (result.count > 0) {
+      setAppliedIds(result.labelIds ?? [])
+      alert(Severity.INFO, `${result.count} marks placed — adjust or Done.`)
+    } else {
+      alert(Severity.WARNING, "That line is too short to stamp marks along.")
+    }
+    this.redraw()
+  }
+
+  /**
+   * Close the stamp preview, keeping whatever was last applied.
+   */
+  private finishStampPreview(): void {
+    endPreview()
+    this.setDefaultCursor()
+    this.redraw()
+  }
+
+  /**
+   * Simplify the line nearest the cursor.
+   *
+   * @param mousePos the click position in image coordinates
+   */
+  private handleSimplify(mousePos: Vector2D): void {
+    const config = this.state.user.viewerConfigs[this.props.id]
+    const result = performSimplify(
+      mousePos,
+      CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+      undefined,
+      {
+        hideLabels: config.hideLabels,
+        hiddenLabelTypes:
+          config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : [],
+        hiddenCategories:
+          config.hiddenCategories !== undefined ? config.hiddenCategories : []
+      }
+    )
+    if (result === "simplified") {
+      setSimplifyMode(false)
+      this.setDefaultCursor()
+    } else if (result === "nothing-to-do") {
+      alert(Severity.INFO, "That line has no redundant vertices.")
+    }
+  }
+
+  /**
+   * Pick up the hovered line so it follows the cursor.
+   *
+   * @param mode whether the drop moves the original or leaves a copy
+   */
+  private grabHoveredLine(mode: GrabMode): void {
+    if (this._lastMousePos === null || isGrabbing()) {
+      return
+    }
+    const labelId = findGrabbableLabel(
+      this._lastMousePos,
+      CUT_CLICK_RADIUS_PX / this.displayToImageRatio
+    )
+    if (labelId === null) {
+      alert(
+        Severity.WARNING,
+        "Hover a line first, then press W to move it or E to copy it."
+      )
+      return
+    }
+    startGrab(
+      labelId,
+      this.state.user.select.item,
+      mode,
+      this._lastMousePos.x,
+      this._lastMousePos.y
+    )
+    this.setCursor(GRAB_CURSOR)
+  }
+
+  /**
+   * Drop the carried line at the cursor.
+   */
+  private dropGrabbedLine(): void {
+    const grab = endGrab()
+    this.setDefaultCursor()
+    if (grab === null) {
+      return
+    }
+    commitGrab(grab)
   }
 
   /**
@@ -1460,6 +2003,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         setCutMode(false)
         setCurveCutMode(false)
         setStraightenMode(false)
+        setSimplifyMode(false)
+        setStampMode(false)
+        setCaptureMode(false)
+        endPreview()
+        endGrab()
         resetSegmentDelete()
         clearMarked()
         resetFreeform()

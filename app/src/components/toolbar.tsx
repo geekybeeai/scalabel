@@ -265,6 +265,20 @@ export class ToolBar extends Component<Props> {
                 changeViewerConfig(this.safeActiveViewerId, config)
               )
             }}
+            imageBrightness={activeConfig.imageBrightness ?? 1}
+            onImageBrightnessChange={(brightness: number) => {
+              const config = { ...activeConfig, imageBrightness: brightness }
+              Session.dispatch(
+                changeViewerConfig(this.safeActiveViewerId, config)
+              )
+            }}
+            imageContrast={activeConfig.imageContrast ?? 1}
+            onImageContrastChange={(contrast: number) => {
+              const config = { ...activeConfig, imageContrast: contrast }
+              Session.dispatch(
+                changeViewerConfig(this.safeActiveViewerId, config)
+              )
+            }}
             onToggleCategoryVisibility={(index: number) =>
               this.toggleCategoryVisibility(index)
             }
@@ -375,6 +389,8 @@ export class ToolBar extends Component<Props> {
               { keys: ["C"], label: "control curve" },
               { keys: ["1", "…", "N"], label: "set category (by sidebar order)" },
               { keys: ["A"], label: "straighten hovered curve" },
+              { keys: ["W"], label: "move hovered line" },
+              { keys: ["E"], label: "copy hovered line" },
               { keys: ["Scroll"], label: "zoom (mouse)" },
               { keys: ["Pinch"], label: "zoom (trackpad)" },
               { keys: ["Drag"], label: "pan (mouse / trackpad)" },

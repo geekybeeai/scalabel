@@ -144,7 +144,7 @@ export abstract class DrawableViewer<
           ? ReactDOM.createPortal(<>{menuComponents}</>, toolsSlot)
           : null}
         <Grid justifyContent={"flex-start"} container direction="row">
-          {...(portalTools ? [] : menuComponents)}
+          {...portalTools ? [] : menuComponents}
           {bannerMessage !== undefined && (
             <div style={{ flexGrow: 1, height: "48px" }}>
               <div
@@ -200,6 +200,22 @@ export abstract class DrawableViewer<
           <div style={{ width: "100%", height: "100%", position: "absolute" }}>
             {this.getDrawableComponents()}
           </div>
+          {/*
+            Sibling of the panning div, not a child: overlays anchored here
+            stay put while the image is panned and zoomed. pointerEvents none
+            so the empty area never swallows canvas drags; each overlay turns
+            it back on for itself.
+          */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              pointerEvents: "none",
+              zIndex: 10
+            }}
+          >
+            {this.getOverlayComponents()}
+          </div>
         </div>
       </div>
     )
@@ -231,6 +247,15 @@ export abstract class DrawableViewer<
 
   /** Get child components for rendering */
   protected abstract getDrawableComponents(): React.ReactElement[]
+
+  /**
+   * Components pinned to the viewport, outside the pan/zoom transform.
+   *
+   * Default is none; viewers that need a docked panel override it.
+   */
+  protected getOverlayComponents(): React.ReactElement[] {
+    return []
+  }
 
   /** Get components for viewer menu */
   protected abstract getMenuComponents(): React.ReactElement[]

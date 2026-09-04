@@ -1,10 +1,17 @@
-import { Checkbox, ListItemText, ListItem, Slider } from "@material-ui/core"
+import {
+  Checkbox,
+  IconButton,
+  ListItemText,
+  ListItem,
+  Slider
+} from "@material-ui/core"
 import FormControl from "@material-ui/core/FormControl"
 import { withStyles } from "@material-ui/core/styles"
 import TreeView from "@material-ui/lab/TreeView"
 import TreeItem from "@material-ui/lab/TreeItem"
 import ExpandMoreIcon from "@material-ui/icons/ExpandMore"
 import ChevronRightIcon from "@material-ui/icons/ChevronRight"
+import RefreshIcon from "@material-ui/icons/Refresh"
 import * as React from "react"
 
 import { changeSelect } from "../action/common"
@@ -163,8 +170,16 @@ interface Props {
   onToggleImage?: () => void
   /** opacity of the underlying image, 0-1 */
   imageOpacity?: number
+  /** image brightness multiplier, 1 = unchanged */
+  imageBrightness?: number
+  /** image contrast multiplier, 1 = unchanged */
+  imageContrast?: number
   /** change the opacity of the underlying image */
   onImageOpacityChange?: (opacity: number) => void
+  /** called when the brightness slider moves */
+  onImageBrightnessChange?: (brightness: number) => void
+  /** called when the contrast slider moves */
+  onImageContrastChange?: (contrast: number) => void
 }
 
 /**
@@ -174,6 +189,8 @@ interface Props {
  * @param categoryNameMap
  * @param treeLevel
  * @param classes
+ * @param hiddenCategories
+ * @param onToggleVisibility
  */
 function renderTreeCategory(
   treeCategory: Category,
@@ -433,8 +450,7 @@ class MultipleSelect extends Component<Props> {
                 (this.props.hiddenCategories ?? []).length === 0,
                 () => this.props.onToggleAllCategoryVisibility?.(),
                 (this.props.hiddenCategories ?? []).length > 0 &&
-                  (this.props.hiddenCategories ?? []).length <
-                    categories.length
+                  (this.props.hiddenCategories ?? []).length < categories.length
               )}
               {this.props.onToggleTags !== undefined &&
                 this.renderToggleCell(
@@ -459,36 +475,116 @@ class MultipleSelect extends Component<Props> {
                 )}
             </div>
           )}
-          {this.props.onImageOpacityChange !== undefined && (
-            // Same box model as the toggle grid so the row lines up with it.
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "1px 8px 1px 4px",
-                border: "1px solid transparent"
-              }}
-            >
-              <span
-                style={{ fontSize: 12, opacity: 0.75, whiteSpace: "nowrap" }}
-              >
-                Image opacity
-              </span>
-              <Slider
-                value={Math.round((this.props.imageOpacity ?? 1) * 100)}
-                min={0}
-                max={100}
-                disabled={!(this.props.showImage ?? true)}
-                onChange={(_event, value) =>
-                  this.props.onImageOpacityChange?.((value as number) / 100)
-                }
-                title="Adjust the opacity of the underlying image"
-              />
-            </div>
-          )}
+          {this.renderImageSliders()}
         </FormControl>
       </>
+    )
+  }
+
+  /**
+   * Render the image adjustment sliders (opacity, brightness, contrast).
+   *
+   * Extracted from the category render so that method stays within its size
+   * limit; these controls are independent of the category list.
+   */
+  private renderImageSliders(): React.ReactNode {
+    const showImage = this.props.showImage ?? true
+    return (
+      <>
+        {this.props.onImageOpacityChange !== undefined &&
+          this.renderImageSlider(
+            "Image opacity",
+            this.props.imageOpacity ?? 1,
+            1,
+            100,
+            "Adjust the opacity of the underlying image",
+            (value) => this.props.onImageOpacityChange?.(value),
+            !showImage
+          )}
+        {showImage &&
+          this.renderImageSlider(
+            "Brightness",
+            this.props.imageBrightness ?? 1,
+            1,
+            200,
+            "Adjust image brightness (100 = unchanged)",
+            (value) => this.props.onImageBrightnessChange?.(value),
+            false
+          )}
+        {showImage &&
+          this.renderImageSlider(
+            "Contrast",
+            this.props.imageContrast ?? 1,
+            1,
+            200,
+            "Adjust image contrast (100 = unchanged)",
+            (value) => this.props.onImageContrastChange?.(value),
+            false
+          )}
+      </>
+    )
+  }
+
+  /**
+   * Render one labelled image-adjustment slider with its own reset button.
+   *
+   * The reset is per-row rather than a single "reset all" so one adjustment
+   * can be undone without discarding the other two. It is disabled while the
+   * value already equals its default, which doubles as an at-a-glance
+   * indicator of which rows have been touched.
+   *
+   * @param label the row's caption
+   * @param value the current multiplier
+   * @param defaultValue the multiplier that counts as untouched
+   * @param max slider maximum, as a percentage
+   * @param title hover text for the slider
+   * @param onChange called with the new multiplier
+   * @param disabled whether the row is inert
+   */
+  private renderImageSlider(
+    label: string,
+    value: number,
+    defaultValue: number,
+    max: number,
+    title: string,
+    onChange: (value: number) => void,
+    disabled: boolean
+  ): React.ReactNode {
+    const isDefault = Math.round(value * 100) === Math.round(defaultValue * 100)
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "0 8px",
+          border: "1px solid transparent"
+        }}
+      >
+        <span style={{ fontSize: 12, opacity: 0.75, whiteSpace: "nowrap" }}>
+          {label}
+        </span>
+        <Slider
+          // Percentages on the wire, multipliers in the config: 100 is the
+          // untouched image, so the midpoint of a 0-200 range reads as "no
+          // change".
+          value={Math.round(value * 100)}
+          min={0}
+          max={max}
+          disabled={disabled}
+          onChange={(_event, next) => onChange((next as number) / 100)}
+          title={title}
+        />
+        <IconButton
+          size="small"
+          disabled={disabled || isDefault}
+          onClick={() => onChange(defaultValue)}
+          title={`Reset ${label.toLowerCase()}`}
+          style={{ padding: 2 }}
+        >
+          <RefreshIcon style={{ fontSize: 16 }} />
+        </IconButton>
+      </div>
     )
   }
 

@@ -35,6 +35,20 @@ import {
   setSnapEnabled
 } from "../common/snap_state"
 import {
+  isSimplifyMode,
+  onSimplifyModeChange,
+  setSimplifyMode
+} from "../common/simplify_state"
+import {
+  isCaptureMode,
+  isPanelOpen,
+  isStampMode,
+  onStampChange,
+  setCaptureMode,
+  setPanelOpen,
+  setStampMode
+} from "../common/stamp_state"
+import {
   armSegmentDelete,
   getSegmentDeletePhase,
   isSegmentDeleteActive,
@@ -78,7 +92,10 @@ import {
 import {
   ContentCutCurveIcon,
   ContentCutIcon,
+  CaptureShapeIcon,
+  SimplifyIcon,
   SnapOffIcon,
+  StampIcon,
   SnapOnIcon,
   StraightenIcon,
   DeleteSegmentIcon,
@@ -88,6 +105,7 @@ import {
 } from "./cut_icon"
 import ImageCanvas from "./image_canvas"
 import Label2dCanvas from "./label2d_canvas"
+import StampSettings from "./stamp_settings"
 
 /**
  * Display pixels panned per unit of horizontal wheel delta.
@@ -131,6 +149,10 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   private _offStraightenModeChange: (() => void) | null = null
   /** unsubscribe from endpoint-snap toggle notifications */
   private _offSnapChange: (() => void) | null = null
+  /** unsubscribe from simplify-mode change notifications */
+  private _offSimplifyChange: (() => void) | null = null
+  /** unsubscribe from stamp-tool change notifications */
+  private _offStampChange: (() => void) | null = null
   /** unsubscribe from delete-segment state changes */
   private _offSegmentDeleteChange: (() => void) | null = null
   /** anchor element for the select-mode dropdown menu (null = closed) */
@@ -151,6 +173,8 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
       this.forceUpdate()
     )
     this._offSnapChange = onSnapChange(() => this.forceUpdate())
+    this._offSimplifyChange = onSimplifyModeChange(() => this.forceUpdate())
+    this._offStampChange = onStampChange(() => this.forceUpdate())
     this._offSegmentDeleteChange = onSegmentDeleteChange(() =>
       this.forceUpdate()
     )
@@ -177,6 +201,14 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     if (this._offSnapChange !== null) {
       this._offSnapChange()
       this._offSnapChange = null
+    }
+    if (this._offSimplifyChange !== null) {
+      this._offSimplifyChange()
+      this._offSimplifyChange = null
+    }
+    if (this._offStampChange !== null) {
+      this._offStampChange()
+      this._offStampChange = null
     }
     if (this._offSegmentDeleteChange !== null) {
       this._offSegmentDeleteChange()
@@ -222,6 +254,20 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     }
 
     return views
+  }
+
+  /**
+   * Overlays pinned to the viewport, outside the pan/zoom transform.
+   *
+   * @return {React.ReactElement[]} the stamp settings panel
+   */
+  protected getOverlayComponents(): React.ReactElement[] {
+    return [
+      <StampSettings
+        key={`stampSettings${this.props.id}`}
+        onChange={() => this.forceUpdate()}
+      />
+    ]
   }
 
   /**
@@ -387,6 +433,9 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         this.getCutButton(),
         this.getCurveCutButton(),
         this.getStraightenButton(),
+        this.getSimplifyButton(),
+        this.getStampButton(),
+        this.getCaptureButton(),
         this.getSnapButton(),
         this.getDeleteSegmentButton(),
         this.getFreeformSelectButton()
@@ -674,6 +723,147 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           edge={"start"}
         >
           <StraightenIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the simplify toolbar button.
+   *
+   * Arms a one-shot tool that merges the clicked line's nearly-collinear
+   * straight spans, dropping the vertices between them. Curves are never
+   * touched.
+   *
+   * @return {JSX.Element} the simplify button
+   */
+  protected getSimplifyButton(): JSX.Element {
+    const armed = isSimplifyMode()
+    return (
+      <Tooltip
+        key={`simplify2dButton${this.props.id}`}
+        title="Merge straight segments"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              setSimplifyMode(false)
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking
+            ) {
+              setCutMode(false)
+              setCurveCutMode(false)
+              setStraightenMode(false)
+              setSimplifyMode(true)
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <SimplifyIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the stamp-along-path toolbar button.
+   *
+   * Arms a one-shot tool that walks the clicked line and adds a repeated mark
+   * along it — the dash or chevron pattern that makes up most of the manual
+   * work on these images.
+   *
+   * @return {JSX.Element} the stamp button
+   */
+  protected getStampButton(): JSX.Element {
+    // Tinted while either the tool is armed or its panel is open, so the button
+    // reflects "this tool is in use" rather than only the armed instant.
+    const armed = isStampMode() || isPanelOpen()
+    return (
+      <Tooltip
+        key={`stamp2dButton${this.props.id}`}
+        title="Repeat marks along a line"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              setStampMode(false)
+              setPanelOpen(false)
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking
+            ) {
+              setCutMode(false)
+              setCurveCutMode(false)
+              setStraightenMode(false)
+              setSimplifyMode(false)
+              // Open the panel AND arm the tool: the settings are editable
+              // straight away, and the next click picks the guide line.
+              setPanelOpen(true)
+              setStampMode(true)
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <StampIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the capture-shape toolbar button.
+   *
+   * Saves the clicked mark as a reusable stamp shape. The built-in dash and
+   * chevron do not cover everything — across this batch 422 marks have three
+   * vertices and 40 have four to six — so any drawn mark can become a template.
+   *
+   * @return {JSX.Element} the capture button
+   */
+  protected getCaptureButton(): JSX.Element {
+    const armed = isCaptureMode()
+    return (
+      <Tooltip
+        key={`capture2dButton${this.props.id}`}
+        title="Save a mark as a stamp shape"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              setCaptureMode(false)
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking
+            ) {
+              setCutMode(false)
+              setCurveCutMode(false)
+              setStraightenMode(false)
+              setSimplifyMode(false)
+              setStampMode(false)
+              setCaptureMode(true)
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <CaptureShapeIcon />
         </IconButton>
       </Tooltip>
     )

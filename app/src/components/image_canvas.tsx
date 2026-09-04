@@ -20,6 +20,27 @@ import {
   mapStateToDrawableProps
 } from "./viewer"
 
+/**
+ * Build the CSS `filter` value for the image layer.
+ *
+ * Returns "none" when both adjustments are at their defaults, so the common
+ * case adds no filter to the compositing path at all. These are display-only:
+ * the decoded pixels and everything exported are untouched.
+ *
+ * @param brightness brightness multiplier, 1 = unchanged
+ * @param contrast contrast multiplier, 1 = unchanged
+ */
+export function buildImageFilter(brightness: number, contrast: number): string {
+  const parts: string[] = []
+  if (brightness !== 1) {
+    parts.push(`brightness(${brightness})`)
+  }
+  if (contrast !== 1) {
+    parts.push(`contrast(${contrast})`)
+  }
+  return parts.length > 0 ? parts.join(" ") : "none"
+}
+
 interface ClassType {
   /** image canvas */
   image_canvas: string
@@ -99,9 +120,16 @@ export class ImageCanvas extends DrawableCanvas<Props> {
       <canvas
         key="image-canvas"
         className={classes.image_canvas}
-        // Labels live on separate canvases, so CSS opacity dims only the
-        // image layer without touching the blit path.
-        style={{ opacity: config?.imageOpacity ?? 1 }}
+        // Labels live on separate canvases, so these CSS filters affect only
+        // the image layer, never the annotations drawn over it — and none of
+        // it touches the blit path or the stored pixels.
+        style={{
+          opacity: config?.imageOpacity ?? 1,
+          filter: buildImageFilter(
+            config?.imageBrightness ?? 1,
+            config?.imageContrast ?? 1
+          )
+        }}
         ref={(canvas) => {
           if (canvas !== null && this.display !== null) {
             this.imageCanvas = canvas

@@ -107,13 +107,17 @@ export function StraightenIcon(props: SvgIconProps): JSX.Element {
 const STRAIGHTEN_CURSOR_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
   'viewBox="0 0 24 24">' +
-  '<path d="' + STRAIGHTEN_LINE_PATH +
+  '<path d="' +
+  STRAIGHTEN_LINE_PATH +
   '" fill="none" stroke="white" stroke-width="4"/>' +
-  '<path d="' + STRAIGHTEN_LINE_PATH +
+  '<path d="' +
+  STRAIGHTEN_LINE_PATH +
   '" fill="none" stroke="black" stroke-width="2"/>' +
-  '<path d="' + STRAIGHTEN_CURVE_PATH +
+  '<path d="' +
+  STRAIGHTEN_CURVE_PATH +
   '" fill="none" stroke="white" stroke-width="4"/>' +
-  '<path d="' + STRAIGHTEN_CURVE_PATH +
+  '<path d="' +
+  STRAIGHTEN_CURVE_PATH +
   '" fill="none" stroke="black" stroke-width="2"/></svg>'
 
 /**
@@ -164,6 +168,119 @@ export function SnapOffIcon(props: SvgIconProps): JSX.Element {
       <circle cx={9} cy={12} r={2.4} fill="currentColor" />
       <circle cx={15} cy={12} r={2.4} fill="currentColor" />
       <path {...stroke} d="M4 20L20 4" />
+    </SvgIcon>
+  )
+}
+
+/**
+ * Simplify icon: a jagged path flattening into a straight one, with the
+ * dropped vertices shown hollow.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function SimplifyIcon(props: SvgIconProps): JSX.Element {
+  const stroke = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const
+  }
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path {...stroke} d="M2 8l6-3 6 3 8-3" opacity={0.5} />
+      <path {...stroke} d="M2 18h20" />
+      <circle cx={2} cy={18} r={2.6} fill="currentColor" />
+      <circle cx={22} cy={18} r={2.6} fill="currentColor" />
+      <circle
+        cx={8}
+        cy={5}
+        r={2}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        opacity={0.6}
+      />
+      <circle
+        cx={14}
+        cy={8}
+        r={2}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        opacity={0.6}
+      />
+    </SvgIcon>
+  )
+}
+
+const GRAB_CURSOR_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
+  'viewBox="0 0 24 24">' +
+  // An open crosshair: four short arms with a clear gap at the centre, so a
+  // short line being carried stays visible underneath instead of being hidden
+  // by a solid glyph (which is what the stock "move" cursor did).
+  '<g stroke="black" stroke-width="3" stroke-linecap="round">' +
+  '<path d="M12 1v6M12 17v6M1 12h6M17 12h6"/></g>' +
+  '<g stroke="white" stroke-width="1.5" stroke-linecap="round">' +
+  '<path d="M12 1v6M12 17v6M1 12h6M17 12h6"/></g></svg>'
+
+/**
+ * CSS cursor shown while a line is being carried by W or E.
+ *
+ * Deliberately not the stock `move` cursor: that glyph is solid and large
+ * enough to completely hide a short line, so the user cannot see what they are
+ * placing. This one leaves the centre empty around the hotspot.
+ */
+export const GRAB_CURSOR = `url('data:image/svg+xml;utf8,${encodeURIComponent(
+  GRAB_CURSOR_SVG
+)}') 12 12, move`
+
+/**
+ * Stamp-along-path icon: a guide line with repeated tick marks across it.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function StampIcon(props: SvgIconProps): JSX.Element {
+  const stroke = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const
+  }
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path {...stroke} strokeWidth={1.5} d="M1 20L23 4" opacity={0.55} />
+      <path {...stroke} strokeWidth={2.4} d="M3 15l4-3" />
+      <path {...stroke} strokeWidth={2.4} d="M10 10l4-3" />
+      <path {...stroke} strokeWidth={2.4} d="M17 5l4-3" />
+    </SvgIcon>
+  )
+}
+
+/**
+ * Capture-shape icon: a mark inside a dashed frame, i.e. "save this shape".
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function CaptureShapeIcon(props: SvgIconProps): JSX.Element {
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeDasharray="3 2"
+        d="M2 2h20v20H2z"
+        opacity={0.6}
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2.4}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7 15l5-6 5 6"
+      />
     </SvgIcon>
   )
 }
@@ -261,9 +378,15 @@ export function RefreshCcwIcon(props: SvgIconProps): JSX.Element {
   }
   return (
     <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
-      <path {...strokeProps} d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path
+        {...strokeProps}
+        d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+      />
       <path {...strokeProps} d="M3 3v5h5" />
-      <path {...strokeProps} d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+      <path
+        {...strokeProps}
+        d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"
+      />
       <path {...strokeProps} d="M16 16h5v5" />
     </SvgIcon>
   )

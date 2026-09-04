@@ -15,7 +15,7 @@ export interface LineSnapshot {
 }
 
 /** Kind of recorded user action on a polyline. */
-type CommandKind = "created" | "deleted" | "edited" | "cut"
+type CommandKind = "created" | "deleted" | "edited" | "cut" | "stamped"
 
 /**
  * One recorded user action on a polyline.
@@ -42,6 +42,8 @@ interface Command {
   after?: LineSnapshot
   /** "cut": the new second-half polyline created by the cut. */
   newLine?: LineSnapshot
+  /** "stamped": every mark added by one stamp, undone and redone together. */
+  stampedLines?: LineSnapshot[]
 }
 
 /**
@@ -134,6 +136,28 @@ export class DrawHistory {
   }
 
   /**
+   * Record a stamp run as ONE undo step.
+   *
+   * A stamp adds dozens of marks at once; recording them individually would
+   * mean dozens of Ctrl+Z presses to take a single action back.
+   *
+   * @param itemIndex the item the marks belong to
+   * @param lines a snapshot of every mark added
+   */
+  public recordStamp(itemIndex: number, lines: LineSnapshot[]): void {
+    if (lines.length === 0) {
+      return
+    }
+    this._undoStack.push({
+      kind: "stamped",
+      itemIndex,
+      labelId: lines[0].label.id,
+      stampedLines: lines
+    })
+    this._redoStack = []
+  }
+
+  /**
    * Record that one polyline is being removed (deleted by the user, or dropped
    * because an edit made it invalid), so undo can restore it from the given
    * snapshot. Any pending redo is invalidated.
@@ -215,6 +239,16 @@ export class DrawHistory {
         this.setLine(command.itemIndex, command.snapshot)
         this._redoStack.push(command)
         return true
+      } else if (command.kind === "stamped") {
+        // Undo a stamp = remove every mark it added, in one step.
+        if (command.stampedLines === undefined) {
+          continue
+        }
+        for (const line of command.stampedLines) {
+          this.removeLine(command.itemIndex, line.label.id)
+        }
+        this._redoStack.push(command)
+        return true
       } else if (command.kind === "cut") {
         // Undo a cut = remove the new second half, restore the original line.
         if (command.before === undefined || command.newLine === undefined) {
@@ -256,6 +290,16 @@ export class DrawHistory {
       } else if (command.kind === "deleted") {
         // Redo a delete = delete the line again.
         this.removeLine(command.itemIndex, command.labelId)
+        this._undoStack.push(command)
+        return true
+      } else if (command.kind === "stamped") {
+        // Redo a stamp = re-add every mark.
+        if (command.stampedLines === undefined) {
+          continue
+        }
+        for (const line of command.stampedLines) {
+          this.setLine(command.itemIndex, line)
+        }
         this._undoStack.push(command)
         return true
       } else if (command.kind === "cut") {

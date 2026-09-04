@@ -215,6 +215,10 @@ export interface ViewerConfigType {
   hideImage?: boolean
   /** image layer opacity, 0-1 (view-only; default 1) */
   imageOpacity?: number
+  /** image brightness multiplier (view-only; 1 = unchanged) */
+  imageBrightness?: number
+  /** image contrast multiplier (view-only; 1 = unchanged) */
+  imageContrast?: number
 }
 
 export interface ImageViewerConfigType extends ViewerConfigType {
