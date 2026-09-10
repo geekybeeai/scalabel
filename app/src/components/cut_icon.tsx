@@ -285,6 +285,51 @@ export function CaptureShapeIcon(props: SvgIconProps): JSX.Element {
   )
 }
 
+/**
+ * Arc icon: an open arc with its three defining points marked.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function ArcIcon(props: SvgIconProps): JSX.Element {
+  const stroke = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round" as const
+  }
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path {...stroke} d="M3 19a10 10 0 0 1 18 0" />
+      <circle cx={3} cy={19} r={2.2} fill="currentColor" />
+      <circle cx={12} cy={9} r={2.2} fill="currentColor" />
+      <circle cx={21} cy={19} r={2.2} fill="currentColor" />
+    </SvgIcon>
+  )
+}
+
+/**
+ * Disjoint icon: a line parting at a marked join, the two ends pulling away.
+ *
+ * @param props standard SvgIcon props (fontSize, style, ...)
+ */
+export function DisjointIcon(props: SvgIconProps): JSX.Element {
+  const stroke = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round" as const
+  }
+  return (
+    <SvgIcon {...props} viewBox={INSET_VIEW_BOX}>
+      <path {...stroke} d="M2 8h6" />
+      <path {...stroke} d="M16 16h6" />
+      <path {...stroke} strokeDasharray="2 3" d="M12 3v18" />
+      <circle cx={8} cy={8} r={2.4} fill="currentColor" />
+      <circle cx={16} cy={16} r={2.4} fill="currentColor" />
+    </SvgIcon>
+  )
+}
+
 const CUT_CURSOR_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
   'viewBox="0 0 24 24"><path d="' +

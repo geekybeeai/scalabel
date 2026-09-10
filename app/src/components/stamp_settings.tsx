@@ -133,7 +133,21 @@ export class StampSettings extends React.Component<Props> {
                 })
               }
             } else {
-              setStampOptions({ ...options, template: value as StampTemplate })
+              const template = value as StampTemplate
+              // The dash slider only spans -90..90. Switching to it from a
+              // chevron turned past that would strand the angle off-scale, so
+              // fold it back onto the equivalent dash orientation — which is
+              // the same drawn line, because a dash is symmetric.
+              let angle = options.angle
+              if (template === StampTemplate.DASH) {
+                while (angle > 90) {
+                  angle -= 180
+                }
+                while (angle < -90) {
+                  angle += 180
+                }
+              }
+              setStampOptions({ ...options, template, angle })
             }
             this.props.onChange()
           }}
@@ -149,9 +163,20 @@ export class StampSettings extends React.Component<Props> {
         </Select>
 
         {this.renderCategoryPicker()}
-        {this.renderSlider("Angle", options.angle, -90, 90, "°", (v) => {
-          setStampOptions({ ...options, angle: v })
-        })}
+        {/* A dash is symmetric about its centre, so -90..90 already reaches
+            every orientation it has. A chevron and a captured shape both point
+            somewhere — 0 and 180 face opposite ways — so they need the full
+            turn, or half their orientations are unreachable. */}
+        {this.renderSlider(
+          "Angle",
+          options.angle,
+          isChevron || isCustom ? -180 : -90,
+          isChevron || isCustom ? 180 : 90,
+          "°",
+          (v) => {
+            setStampOptions({ ...options, angle: v })
+          }
+        )}
         {!isChevron &&
           !isCustom &&
           this.renderSlider("Length", options.length, 4, 200, "px", (v) => {
@@ -353,6 +378,13 @@ export class StampSettings extends React.Component<Props> {
         {options.evenSpacing &&
           this.renderSlider("Spacing", options.period, 10, 400, "px", (v) => {
             setStampOptions({ ...options, period: v })
+          })}
+        {/* Start shifts only the first mark. Margin trims both ends together,
+            so it cannot line a run up with existing paint without also cutting
+            the far end short. */}
+        {options.evenSpacing &&
+          this.renderSlider("Start", options.start, 0, 400, "px", (v) => {
+            setStampOptions({ ...options, start: v })
           })}
         {!options.evenSpacing && (
           <div

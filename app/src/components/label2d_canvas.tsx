@@ -17,14 +17,8 @@ import {
   shouldDeferPointerDown
 } from "../common/pointer_pan_state"
 import { isCutMode, setCutMode } from "../common/cut_state"
-import {
-  isCurveCutMode,
-  setCurveCutMode
-} from "../common/curve_cut_state"
-import {
-  isStraightenMode,
-  setStraightenMode
-} from "../common/straighten_state"
+import { isCurveCutMode, setCurveCutMode } from "../common/curve_cut_state"
+import { isStraightenMode, setStraightenMode } from "../common/straighten_state"
 import { armKey, recordKeyDown, recordKeyUp } from "../common/keyboard_state"
 import {
   armSegmentDelete,
@@ -108,10 +102,19 @@ import {
   startPreview,
   undoPositions
 } from "../common/stamp_state"
+import { performDisjoint } from "../drawable/2d/polyline_disjoint"
+import { disjointableAnchors } from "../drawable/2d/polyline_disjoint_geometry"
+import { isDisjointMode, setDisjointMode } from "../common/disjoint_state"
+import { performArc } from "../drawable/2d/polyline_arc"
+import { curveThroughPoints } from "../drawable/2d/polyline_arc_geometry"
 import {
-  isSimplifyMode,
-  setSimplifyMode
-} from "../common/simplify_state"
+  addArcPick,
+  clearArcPicks,
+  getArcPicks,
+  isArcMode,
+  setArcMode
+} from "../common/arc_state"
+import { isSimplifyMode, setSimplifyMode } from "../common/simplify_state"
 import {
   commitGrab,
   findGrabbableLabel
@@ -128,20 +131,19 @@ import { performStraighten } from "../drawable/2d/polyline_straighten"
 import { Key, LabelTypeName } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
-import { getCurrentViewerConfig, isFrameLoaded } from "../functional/state_util"
+import {
+  getCurrentViewerConfig,
+  getShapes,
+  isFrameLoaded
+} from "../functional/state_util"
 import { Vector2D } from "../math/vector2d"
 import { label2dViewStyle } from "../styles/label"
-import {
-  ImageViewerConfigType,
-  PathPoint2DType,
-  State
-} from "../types/state"
+import { ImageViewerConfigType, PathPoint2DType, State } from "../types/state"
 import {
   clearCanvas,
   getCurrentImageSize,
   imageDataToHandleId,
-  MAX_SCALE,
-  MIN_SCALE,
+  isScaleRenderable,
   normalizeMouseCoordinates,
   rotatePoint,
   toCanvasCoords,
@@ -232,6 +234,16 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * the one the user means (linked labels, appended multi-select).
    */
   private _lastMousePos: Vector2D | null = null
+  /**
+   * Item index the cached canvas scale was computed for.
+   *
+   * updateScale runs from the canvas ref callback, which React invokes when
+   * the element is created — NOT when the frame changes. Image sizes vary
+   * enormously between frames (2500x3540 to 15000x3540 within one task), so a
+   * stale displayToImageRatio scales the new frame's labels by the previous
+   * frame's ratio and draws them far outside the image.
+   */
+  private _scaledForItem: number = -1
   /** context-menu anchor (viewport px), null while the menu is closed */
   private _menuAnchor: { left: number; top: number } | null = null
   /** unsubscribe from delete-segment state changes */
@@ -379,10 +391,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
 
   /** Current display-only view rotation (0/90/180/270) for this viewer. */
   private get viewRotation(): number {
-    const config = this.state.user.viewerConfigs[
-      this.props.id
-    ] as ImageViewerConfigType
-    return config.rotation ?? 0
+    // Guarded: a canvas can mount a frame before its viewer config lands (the
+    // zoom panel adds one at runtime), and an unguarded read here throws
+    // during render, which blanks the whole app.
+    const config = this.state.user.viewerConfigs[this.props.id] as
+      | ImageViewerConfigType
+      | undefined
+    return config?.rotation ?? 0
   }
 
   /**
@@ -539,6 +554,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @return {boolean}
    */
   public redraw(): boolean {
+    // The frame may have changed since the scale was last computed; the ref
+    // callback does not fire on a frame change, so rescale here or the new
+    // frame's labels are drawn at the previous frame's scale.
+    this.rescaleIfItemChanged()
+
     this.clear()
     if (
       this.labelCanvas !== null &&
@@ -632,6 +652,14 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         this.labelContext,
         this.displayToImageRatio * this._upResRatio
       )
+      this.drawArcPreview(
+        this.labelContext,
+        this.displayToImageRatio * this._upResRatio
+      )
+      this.drawDisjointHints(
+        this.labelContext,
+        this.displayToImageRatio * this._upResRatio
+      )
       this.labelContext.restore()
       this.controlContext.restore()
     }
@@ -692,7 +720,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (!e.ctrlKey && !e.metaKey && freeformAllowed) {
       // Shift+drag is always a freeform lasso; the armed toolbar mode follows
       // the selected sub-mode.
-      if (e.shiftKey || (isFreeformActive() && getSelectMode() === "freeform")) {
+      if (
+        e.shiftKey ||
+        (isFreeformActive() && getSelectMode() === "freeform")
+      ) {
         beginFreeformPath(mousePos)
         this.setCursor("crosshair")
         return
@@ -742,17 +773,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
               ? config.hiddenLabelTypes
               : [],
           hiddenCategories:
-            config.hiddenCategories !== undefined
-              ? config.hiddenCategories
-              : []
+            config.hiddenCategories !== undefined ? config.hiddenCategories : []
         }
       )
       switch (outcome) {
         case "curve":
-          alert(
-            Severity.WARNING,
-            "Cannot cut a curved segment."
-          )
+          alert(Severity.WARNING, "Cannot cut a curved segment.")
           break
         case "closed":
           alert(
@@ -797,9 +823,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
               ? config.hiddenLabelTypes
               : [],
           hiddenCategories:
-            config.hiddenCategories !== undefined
-              ? config.hiddenCategories
-              : []
+            config.hiddenCategories !== undefined ? config.hiddenCategories : []
         }
       )
       switch (result) {
@@ -848,7 +872,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       hoveredLabel !== null && hoveredLabel.index === labelIndex
         ? hoveredLabel.highlightedHandle
         : -1
-    if (shouldDeferPointerDown(labelIndex, handleIndex, Date.now(), liveHandle)) {
+    if (
+      shouldDeferPointerDown(labelIndex, handleIndex, Date.now(), liveHandle)
+    ) {
       const rect = (this.display as HTMLDivElement).getBoundingClientRect()
       armEmptyDrag(e.clientX - rect.left, e.clientY - rect.top)
       this.setCursor("grab")
@@ -883,9 +909,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
               ? config.hiddenLabelTypes
               : [],
           hiddenCategories:
-            config.hiddenCategories !== undefined
-              ? config.hiddenCategories
-              : []
+            config.hiddenCategories !== undefined ? config.hiddenCategories : []
         })
       }
       this.setDefaultCursor()
@@ -986,6 +1010,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.redraw()
       return
     }
+    if (isArcMode() && getArcPicks().length > 0) {
+      // Rubber-band the curve: the cursor is a provisional next point, so the
+      // shape has to repaint as the mouse moves.
+      this.redraw()
+      return
+    }
     const [labelIndex, handleIndex] = this.fetchHandleId(mousePos)
     if (
       this._labelHandler.onMouseMove(
@@ -1009,6 +1039,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
 
     if (isCurveCutMode()) {
       this.setCursor(CURVE_CUT_CURSOR)
+      return
+    }
+    if (isArcMode() || isDisjointMode()) {
+      this.setCursor(CUT_CURSOR)
       return
     }
     if (isStampMode() || isCaptureMode()) {
@@ -1172,10 +1206,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       context.lineDashOffset = -getAntsOffset()
       context.moveTo(preview.doomed[0].x * ratio, preview.doomed[0].y * ratio)
       for (let i = 1; i < preview.doomed.length; i++) {
-        context.lineTo(
-          preview.doomed[i].x * ratio,
-          preview.doomed[i].y * ratio
-        )
+        context.lineTo(preview.doomed[i].x * ratio, preview.doomed[i].y * ratio)
       }
       context.stroke()
       // Halos on both picked points, on top of the dashed path.
@@ -1190,6 +1221,180 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         pickData.pick1Point.x * ratio,
         pickData.pick1Point.y * ratio
       )
+    }
+    context.restore()
+  }
+
+  /**
+   * Break the clicked line apart at the join point nearest the cursor.
+   *
+   * @param mousePos the click position, in image px
+   */
+  private handleDisjoint(mousePos: Vector2D): void {
+    const config = this.state.user.viewerConfigs[this.props.id]
+    const result = performDisjoint(
+      mousePos,
+      CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
+      {
+        hideLabels: config.hideLabels,
+        hiddenLabelTypes:
+          config.hiddenLabelTypes !== undefined ? config.hiddenLabelTypes : [],
+        hiddenCategories:
+          config.hiddenCategories !== undefined ? config.hiddenCategories : []
+      }
+    )
+    if (result === "disjointed") {
+      setDisjointMode(false)
+      this.setDefaultCursor()
+      alert(Severity.INFO, "Disconnected into two lines.")
+    } else if (result === "closed") {
+      alert(Severity.WARNING, "Closed shapes cannot be disconnected.")
+    } else if (result === "no-anchor") {
+      // The ends of a line are already free, so only interior anchors count.
+      alert(
+        Severity.WARNING,
+        "No join point there — click the vertex where two lines meet."
+      )
+    }
+    this.redraw()
+  }
+
+  /**
+   * Ring the anchors the disjoint tool can break, so the seams are visible.
+   *
+   * A merged run looks like one continuous line; without this the user would
+   * have to guess where its pieces were joined.
+   *
+   * @param context the label canvas context
+   * @param ratio image-to-canvas scale (displayToImageRatio * upResRatio)
+   */
+  private drawDisjointHints(
+    context: CanvasRenderingContext2D,
+    ratio: number
+  ): void {
+    if (!isDisjointMode()) {
+      return
+    }
+    const itemIndex = this.state.user.select.item
+    const item = this.state.task.items[itemIndex]
+    if (item === undefined) {
+      return
+    }
+    context.save()
+    context.strokeStyle = "#4caf50"
+    context.lineWidth = 2
+    for (const labelId of Object.keys(item.labels)) {
+      const label = item.labels[labelId]
+      if (label.type !== LabelTypeName.POLYLINE_2D || label.closed === true) {
+        continue
+      }
+      const stored = getShapes(
+        this.state,
+        itemIndex,
+        labelId
+      ) as PathPoint2DType[]
+      const points = stored.map((p) => ({
+        x: p.x,
+        y: p.y,
+        pointType: p.pointType
+      }))
+      for (const i of disjointableAnchors(points)) {
+        context.beginPath()
+        context.arc(points[i].x * ratio, points[i].y * ratio, 6, 0, 2 * Math.PI)
+        context.stroke()
+      }
+    }
+    context.restore()
+  }
+
+  /**
+   * Record one click of the arc gesture, placing the arc on the third.
+   *
+   * @param mousePos the click position, in image px
+   */
+  private handleArcPick(mousePos: Vector2D): void {
+    // Clicks simply accumulate; Enter (or a double-click) finishes the curve.
+    // Auto-committing on the third click would make an arc through more than
+    // three points impossible to draw.
+    addArcPick({ x: mousePos.x, y: mousePos.y })
+    this.redraw()
+  }
+
+  /**
+   * Finish the arc gesture, placing a curve through every clicked point.
+   */
+  private commitArc(): void {
+    const picks = getArcPicks()
+    if (picks.length < 2) {
+      alert(Severity.WARNING, "Click at least two points to draw a curve.")
+      return
+    }
+    const result = performArc(picks, this.state.user.select.category)
+    clearArcPicks()
+    if (!result.ok) {
+      // Every click landing on the same spot defines no curve. The tool stays
+      // armed so the user simply clicks again.
+      alert(Severity.WARNING, "Those points do not define a curve.")
+    }
+    this.redraw()
+  }
+
+  /**
+   * Draw the arc gesture in progress: the clicks made, and the arc they imply.
+   *
+   * The third point follows the cursor, so the arc's sweep is visible before it
+   * is committed — which is how a semicircle and an almost-full ring are told
+   * apart while drawing.
+   *
+   * @param context the label canvas context
+   * @param ratio image-to-canvas scale (displayToImageRatio * upResRatio)
+   */
+  private drawArcPreview(
+    context: CanvasRenderingContext2D,
+    ratio: number
+  ): void {
+    if (!isArcMode()) {
+      return
+    }
+    const picks = getArcPicks()
+    if (picks.length === 0) {
+      return
+    }
+    context.save()
+    context.strokeStyle = "#4caf50"
+    context.fillStyle = "#4caf50"
+    context.lineWidth = 2
+
+    // The clicks placed so far.
+    for (const p of picks) {
+      context.beginPath()
+      context.arc(p.x * ratio, p.y * ratio, 4, 0, 2 * Math.PI)
+      context.fill()
+    }
+
+    // The cursor acts as a provisional next point, so the curve's shape — and
+    // for three points its sweep — is visible before it is committed.
+    const cursor = this._lastMousePos
+    if (picks.length >= 1 && cursor !== null) {
+      const points = curveThroughPoints([
+        ...picks,
+        { x: cursor.x, y: cursor.y }
+      ])
+      if (points !== null) {
+        context.beginPath()
+        context.moveTo(points[0].x * ratio, points[0].y * ratio)
+        for (let i = 1; i + 2 < points.length; i += 3) {
+          context.bezierCurveTo(
+            points[i].x * ratio,
+            points[i].y * ratio,
+            points[i + 1].x * ratio,
+            points[i + 1].y * ratio,
+            points[i + 2].x * ratio,
+            points[i + 2].y * ratio
+          )
+        }
+        context.stroke()
+      }
     }
     context.restore()
   }
@@ -1368,6 +1573,14 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       // Escape cancels the pending delete at any phase — nothing committed.
       resetSegmentDelete()
       this.setDefaultCursor()
+      return
+    }
+
+    if (e.key === Key.ENTER && isArcMode()) {
+      // Enter finishes the curve. Clicks accumulate rather than committing at
+      // a fixed count, so the gesture has to be closed explicitly.
+      e.preventDefault()
+      this.commitArc()
       return
     }
 
@@ -1557,6 +1770,24 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * processing the key.
    */
   private handleEscape(): boolean {
+    if (isDisjointMode()) {
+      setDisjointMode(false)
+      this.setDefaultCursor()
+      this.redraw()
+      return true
+    }
+    if (isArcMode()) {
+      // First Esc abandons a half-drawn arc; a second disarms the tool, so a
+      // mis-click does not force re-arming from the toolbar.
+      if (getArcPicks().length > 0) {
+        clearArcPicks()
+      } else {
+        setArcMode(false)
+        this.setDefaultCursor()
+      }
+      this.redraw()
+      return true
+    }
     if (isPreviewing()) {
       // Discard the previewed marks; nothing was written.
       endPreview()
@@ -1660,6 +1891,14 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       // Even mode: a click applies the marks at the current settings; the
       // panel stays open so they can still be adjusted.
       this.commitStampPreview()
+      return true
+    }
+    if (isDisjointMode()) {
+      this.handleDisjoint(mousePos)
+      return true
+    }
+    if (isArcMode()) {
+      this.handleArcPick(mousePos)
       return true
     }
     if (isCaptureMode()) {
@@ -2148,7 +2387,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.state,
       this.props.id
     ) as ImageViewerConfigType
-    if (imgConfig.viewScale >= MIN_SCALE && imgConfig.viewScale < MAX_SCALE) {
+    if (isScaleRenderable(this.props.id, imgConfig.viewScale)) {
       ;[
         this.canvasWidth,
         this.canvasHeight,
@@ -2164,6 +2403,41 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         imgConfig.viewScale / this.scale,
         upRes
       )
+      this._scaledForItem = this.state.user.select.item
+    }
+  }
+
+  /**
+   * Recompute the canvas scale when the displayed frame has changed.
+   *
+   * Frames within a single task differ hugely in size, and the cached
+   * displayToImageRatio belongs to whichever frame was last scaled. Drawing a
+   * new frame with it puts labels far outside the image, so the scale is
+   * refreshed as soon as the item index moves.
+   */
+  private rescaleIfItemChanged(): void {
+    const item = this.state.user.select.item
+    if (item === this._scaledForItem) {
+      return
+    }
+    if (this.display === null) {
+      return
+    }
+    const sensor = this.state.user.viewerConfigs[this.props.id].sensor
+    if (!isFrameLoaded(this.state, item, sensor)) {
+      // The new frame's image has not arrived yet; its size is unknown, so
+      // leave the old scale and rescale once it loads.
+      return
+    }
+    const rect = this.display.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) {
+      return
+    }
+    if (this.labelCanvas !== null && this.labelContext !== null) {
+      this.updateScale(this.labelCanvas, this.labelContext, true)
+    }
+    if (this.controlCanvas !== null && this.controlContext !== null) {
+      this.updateScale(this.controlCanvas, this.controlContext, true)
     }
   }
 }

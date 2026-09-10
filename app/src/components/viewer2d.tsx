@@ -93,6 +93,8 @@ import {
   ContentCutCurveIcon,
   ContentCutIcon,
   CaptureShapeIcon,
+  ArcIcon,
+  DisjointIcon,
   SimplifyIcon,
   SnapOffIcon,
   StampIcon,
@@ -103,6 +105,17 @@ import {
   RectangleSelectIcon,
   RefreshCcwIcon
 } from "./cut_icon"
+import {
+  getArcPicks,
+  isArcMode,
+  onArcChange,
+  setArcMode
+} from "../common/arc_state"
+import {
+  isDisjointMode,
+  onDisjointChange,
+  setDisjointMode
+} from "../common/disjoint_state"
 import ImageCanvas from "./image_canvas"
 import Label2dCanvas from "./label2d_canvas"
 import StampSettings from "./stamp_settings"
@@ -153,6 +166,10 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   private _offSimplifyChange: (() => void) | null = null
   /** unsubscribe from stamp-tool change notifications */
   private _offStampChange: (() => void) | null = null
+  /** unsubscribe from arc-tool change notifications */
+  private _offArcChange: (() => void) | null = null
+  /** unsubscribe from disjoint-tool change notifications */
+  private _offDisjointChange: (() => void) | null = null
   /** unsubscribe from delete-segment state changes */
   private _offSegmentDeleteChange: (() => void) | null = null
   /** anchor element for the select-mode dropdown menu (null = closed) */
@@ -175,6 +192,8 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     this._offSnapChange = onSnapChange(() => this.forceUpdate())
     this._offSimplifyChange = onSimplifyModeChange(() => this.forceUpdate())
     this._offStampChange = onStampChange(() => this.forceUpdate())
+    this._offArcChange = onArcChange(() => this.forceUpdate())
+    this._offDisjointChange = onDisjointChange(() => this.forceUpdate())
     this._offSegmentDeleteChange = onSegmentDeleteChange(() =>
       this.forceUpdate()
     )
@@ -209,6 +228,14 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     if (this._offStampChange !== null) {
       this._offStampChange()
       this._offStampChange = null
+    }
+    if (this._offArcChange !== null) {
+      this._offArcChange()
+      this._offArcChange = null
+    }
+    if (this._offDisjointChange !== null) {
+      this._offDisjointChange()
+      this._offDisjointChange = null
     }
     if (this._offSegmentDeleteChange !== null) {
       this._offSegmentDeleteChange()
@@ -434,6 +461,8 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         this.getCurveCutButton(),
         this.getStraightenButton(),
         this.getSimplifyButton(),
+        this.getArcButton(),
+        this.getDisjointButton(),
         this.getStampButton(),
         this.getCaptureButton(),
         this.getSnapButton(),
@@ -767,6 +796,112 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           edge={"start"}
         >
           <SimplifyIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the disjoint toolbar button.
+   *
+   * Breaks a joined line back apart at the seam where two lines were merged.
+   * The split happens at an existing anchor, so no coordinate changes and the
+   * halves are exactly the lines that were joined.
+   *
+   * @return {JSX.Element} the disjoint button
+   */
+  protected getDisjointButton(): JSX.Element {
+    const armed = isDisjointMode()
+    return (
+      <Tooltip
+        key={`disjoint2dButton${this.props.id}`}
+        title="Disconnect a line at a join point"
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              setDisjointMode(false)
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking
+            ) {
+              setCutMode(false)
+              setCurveCutMode(false)
+              setStraightenMode(false)
+              setSimplifyMode(false)
+              setStampMode(false)
+              setPanelOpen(false)
+              setArcMode(false)
+              setDisjointMode(true)
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <DisjointIcon />
+        </IconButton>
+      </Tooltip>
+    )
+  }
+
+  /**
+   * Build the arc toolbar button.
+   *
+   * Click any number of points along the curve, then press Enter. Three clicks
+   * give the exact circular arc — the middle one deciding which way round it
+   * travels, so one gesture covers a semicircle and an almost-full ring alike.
+   * More points give a smooth spline through every one of them.
+   *
+   * The result is an ordinary curved polyline, so it merges with other lines
+   * using the usual endpoint drag.
+   *
+   * @return {JSX.Element} the arc button
+   */
+  protected getArcButton(): JSX.Element {
+    const armed = isArcMode()
+    const picked = getArcPicks().length
+    return (
+      <Tooltip
+        key={`arc2dButton${this.props.id}`}
+        title={
+          armed
+            ? `Click points along the curve (${picked} so far) — Enter to ` +
+              `finish, Esc to cancel`
+            : "Draw a curve or arc through any number of points"
+        }
+        enterDelay={500}
+        TransitionComponent={Fade}
+        TransitionProps={{ timeout: 600 }}
+        arrow
+      >
+        <IconButton
+          onClick={() => {
+            if (armed) {
+              setArcMode(false)
+            } else if (
+              !Session.label2dList.isDrawingInProgress() &&
+              !this.state.task.config.tracking
+            ) {
+              setCutMode(false)
+              setCurveCutMode(false)
+              setStraightenMode(false)
+              setSimplifyMode(false)
+              setStampMode(false)
+              setPanelOpen(false)
+              setDisjointMode(false)
+              setArcMode(true)
+            }
+          }}
+          className={this.props.classes.viewer_button}
+          style={{ color: armed ? "#4caf50" : undefined }}
+          edge={"start"}
+        >
+          <ArcIcon />
         </IconButton>
       </Tooltip>
     )

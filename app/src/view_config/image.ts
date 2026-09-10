@@ -10,24 +10,48 @@ import { ImageViewerConfigType, State } from "../types/state"
 /**
  * The maximum scale.
  *
- * The canvas is sized to `displayRect * viewScale`, so backing-store memory
- * grows quadratically with this value, and a canvas past Chrome's 16384px
- * per-dimension limit fails to allocate and renders blank rather than
- * erroring. Very wide images are the first to hit that: on a 1600px-wide
- * display a landscape image reaches ~19200px here, so 12 keeps ordinary
- * images comfortable while leaving the widest ones near the edge. Raise this
- * further only alongside viewport culling in `updateCanvasScale`, which would
- * size the canvas to the visible region instead of the whole image.
+ * The old ceiling of 12 existed because the canvas BACKING store was sized to
+ * the whole scaled image and so blew past the browser's 16384px per-dimension
+ * limit — a 20000px-wide image was already over it at 12x. The backing store is
+ * now capped independently of the CSS box (see MAX_CANVAS_DIMENSION), so zoom
+ * is bounded by usefulness rather than allocation.
+ *
+ * The trade-off at very high zoom is sharpness, not correctness: the backing
+ * store is stretched over a larger CSS box, so the image softens while every
+ * coordinate stays exact.
  */
-export const MAX_SCALE = 12.0
+export const MAX_SCALE = 60.0
+
 /** The minimum scale */
 export const MIN_SCALE = 1.0
+
+/**
+ * Whether a viewer may render at this zoom.
+ *
+ * The old MAX_SCALE ceiling existed only because the canvas was sized to the
+ * whole image, so it grew quadratically and hit the browser's 16384px
+ * per-dimension limit. Now the canvas covers only the visible viewport, so
+ * there is nothing to overflow and any zoom is renderable.
+ *
+ * @param _viewerId which viewer is asking (unused; kept for call sites)
+ * @param viewScale the zoom level
+ */
+export function isScaleRenderable(
+  _viewerId: number,
+  viewScale: number
+): boolean {
+  return viewScale >= MIN_SCALE
+}
+
 /**
  * Maximum canvas backing resolution (width or height).
- * Prevents excessive GPU memory usage at high zoom on large images.
- * 4096 is a safe limit for most GPUs; 8192 for high-end.
+ * Prevents excessive GPU memory usage at high zoom on large images and keeps
+ * every canvas inside the browser's 16384px per-dimension limit. 8192 is
+ * supported essentially everywhere and leaves headroom for the CSS box, which
+ * may be far larger at high zoom.
  */
-export const MAX_CANVAS_DIMENSION = 4096
+export const MAX_CANVAS_DIMENSION = 8192
+
 /** Backing-resolution multiplier applied while a gesture is in progress. */
 export const MOTION_RESOLUTION_SCALE = 0.7
 
@@ -224,7 +248,8 @@ export function drawImageOnCanvas(
 
   // Enable image smoothing for downscaled images (better quality)
   // Disable for upscaled images (preserves pixel detail)
-  const isDownscaled = canvas.width < image.width || canvas.height < image.height
+  const isDownscaled =
+    canvas.width < image.width || canvas.height < image.height
   context.imageSmoothingEnabled = isDownscaled
   context.imageSmoothingQuality = isDownscaled ? "high" : "low"
 
@@ -376,6 +401,7 @@ export function imageDataToHandleId(data: Uint8ClampedArray): number[] {
  * @param config
  * @param zoomRatio
  * @param upRes
+ * @param applyMotionScale
  */
 export function updateCanvasScale(
   state: State,
@@ -428,33 +454,26 @@ export function updateCanvasScale(
   let targetWidth = upRes ? canvasWidth * upResRatio : canvasWidth
   let targetHeight = upRes ? canvasHeight * upResRatio : canvasHeight
 
-  // Cap canvas backing resolution to prevent GPU memory issues.
+  // Cap the backing store so allocation never fails.
   //
-  // CRITICAL constraint: the backing canvas must NEVER be smaller than the
-  // CSS display size (canvasWidth × canvasHeight). If it were, the image
-  // would render at sub-1:1 pixel density → visibly blurry at high zoom.
-  // The cap only reduces the *extra* pixels added by the upRes 2× retina
-  // factor; the base 1:1 resolution is always preserved.
+  // The CSS box still covers the whole scaled image, so every coordinate
+  // mapping (which works in CSS px via getBoundingClientRect) is unchanged and
+  // annotations stay exactly where they are. Only RESOLUTION is capped: past
+  // this point the browser upscales the backing store to the CSS box.
   //
-  // At rest this guarantees effectiveUpResRatio >= 1, which keeps polyline
-  // thickness adaptation correct (styleFactor = 1/√viewScale applied in
-  // polygon2d.draw() maps directly to visual width in CSS pixels).
-  //
-  // EXCEPTION — the image canvas (applyMotionScale) uses MOTION_RESOLUTION_SCALE
-  // (< 1) during an active gesture, so its backing is intentionally sub-1:1
-  // (cheap-but-blurry while moving); the gesture-settled idle repaint restores
-  // full resolution. The label/control canvases never opt in, so they stay
-  // >= 1 at all times.
-  if (targetWidth > MAX_CANVAS_DIMENSION || targetHeight > MAX_CANVAS_DIMENSION) {
+  // Previously this clamp was undone by a floor at the CSS size, which is why
+  // a 20000px-wide image already exceeded the browser's 16384px per-dimension
+  // limit at 12x zoom and the canvas silently failed to allocate.
+  if (
+    targetWidth > MAX_CANVAS_DIMENSION ||
+    targetHeight > MAX_CANVAS_DIMENSION
+  ) {
     const scaleFactor = Math.min(
       MAX_CANVAS_DIMENSION / targetWidth,
       MAX_CANVAS_DIMENSION / targetHeight
     )
-    const cappedWidth = Math.floor(targetWidth * scaleFactor)
-    const cappedHeight = Math.floor(targetHeight * scaleFactor)
-    // Enforce floor at CSS display size so image quality is never degraded
-    targetWidth = Math.max(cappedWidth, Math.round(canvasWidth))
-    targetHeight = Math.max(cappedHeight, Math.round(canvasHeight))
+    targetWidth = Math.max(1, Math.floor(targetWidth * scaleFactor))
+    targetHeight = Math.max(1, Math.floor(targetHeight * scaleFactor))
   }
 
   // Set canvas backing resolution

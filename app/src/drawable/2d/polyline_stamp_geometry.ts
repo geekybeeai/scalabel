@@ -74,6 +74,15 @@ export interface StampOptions {
   /** skip this much path at each end before stamping, in image px */
   margin: number
   /**
+   * Extra path skipped at the START only, in image px.
+   *
+   * Margin trims both ends together, so it cannot line the first mark up with
+   * the paint without also cutting the run short at the far end. This shifts
+   * only where the marks begin, which is what aligning a run to existing paint
+   * actually needs.
+   */
+  start: number
+  /**
    * Perpendicular offset from the guide line, in image px.
    *
    * 0 centres each mark on the line. Negative shifts to the left of the
@@ -123,6 +132,7 @@ export const DEFAULT_STAMP_OPTIONS: StampOptions = {
   armB: 31,
   apex: 60,
   margin: 20,
+  start: 0,
   offset: 0,
   scale: 1,
   evenSpacing: true,
@@ -250,11 +260,13 @@ export function flattenPath(
  * @param points the path's vertices
  * @param period distance between samples, in image px
  * @param margin path length skipped at each end, in image px
+ * @param start extra path skipped at the start only, in image px
  */
 export function samplePath(
   points: readonly SimplePathPoint2DType[],
   period: number,
-  margin: number
+  margin: number,
+  start: number = 0
 ): PathSample[] {
   const samples: PathSample[] = []
   if (points.length < 2 || period <= 0) {
@@ -276,7 +288,10 @@ export function samplePath(
     return samples
   }
 
-  for (let d = margin; d <= total - margin; d += period) {
+  // The start offset moves only the first mark; the run still ends at the far
+  // margin, so aligning the start does not shorten the tail.
+  const from = margin + Math.max(0, start)
+  for (let d = from; d <= total - margin; d += period) {
     let remaining = d
     for (const span of spans) {
       if (remaining <= span.length || span === spans[spans.length - 1]) {
@@ -543,7 +558,7 @@ export function stampAlongPath(
   // drawn curve, not the control polygon.
   const path = flattenPath(points)
   const samples = options.evenSpacing
-    ? samplePath(path, options.period, options.margin)
+    ? samplePath(path, options.period, options.margin, options.start)
     : options.positions
         .map((d) => sampleAt(path, d))
         .filter((s): s is PathSample => s !== null)

@@ -34,6 +34,37 @@ DEFAULT_TOLERANCE = 15.0
 # by default so the first runs are pure-distance and easy to reason about.
 DEFAULT_MIN_ANGLE = 0.0
 
+# Category pairs that describe the SAME physical feature and may therefore be
+# merged across the class boundary.
+#
+# A road edge changes curb status partway along constantly, which splits one
+# continuous edge into two labels of different classes whose ends touch. Across
+# a 145-frame batch this accounted for 209 of the 266 near-touching pairs the
+# same-category rule refused.
+#
+# Paint markings are deliberately NOT in here: a yellow line meeting a white one
+# is usually a real class boundary, and merging would silently rewrite one of
+# their classes.
+DEFAULT_MERGEABLE_CATEGORIES: Tuple[frozenset, ...] = (
+    frozenset({"curb_road_edge", "without_curb_road_edge"}),
+)
+
+
+def _categories_compatible(
+    category_a: str,
+    category_b: str,
+    mergeable: Sequence[frozenset],
+) -> bool:
+    """Whether two categories may be joined.
+
+    Identical categories always may. Different ones may only when the pair is
+    listed as describing one physical feature.
+    """
+    if category_a == category_b:
+        return True
+    pair = {category_a, category_b}
+    return any(pair == allowed for allowed in mergeable)
+
 
 @dataclass
 class Connection:
@@ -175,6 +206,7 @@ def connect_labels(
     labels: List[dict],
     tolerance: float = DEFAULT_TOLERANCE,
     min_angle: float = DEFAULT_MIN_ANGLE,
+    mergeable_categories: Sequence[frozenset] = DEFAULT_MERGEABLE_CATEGORIES,
 ) -> Tuple[List[dict], ConnectResult]:
     """Merge same-category polylines whose endpoints nearly touch.
 
@@ -209,7 +241,11 @@ def connect_labels(
                 if idx_a == idx_b:
                     continue  # Self-closing is an editor gesture, not a batch one.
                 label_b = working[idx_b]
-                if label_a.get("category") != label_b.get("category"):
+                if not _categories_compatible(
+                    str(label_a.get("category", "")),
+                    str(label_b.get("category", "")),
+                    mergeable_categories,
+                ):
                     continue
 
                 gap = float(np.hypot(point_a[0] - point_b[0], point_a[1] - point_b[1]))

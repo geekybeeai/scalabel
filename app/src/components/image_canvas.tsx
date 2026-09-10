@@ -10,8 +10,7 @@ import { ImageViewerConfigType, State } from "../types/state"
 import {
   clearCanvas,
   drawImageOnCanvas,
-  MAX_SCALE,
-  MIN_SCALE,
+  isScaleRenderable,
   updateCanvasScale
 } from "../view_config/image"
 import {
@@ -146,6 +145,7 @@ export class ImageCanvas extends DrawableCanvas<Props> {
               this.imageContext !== null
             ) {
               this.updateScale(this.imageCanvas, this.imageContext, true)
+              this._scaledForItem = item
               // Draw synchronously in the same commit so the freshly-resized
               // (and therefore cleared) canvas is never shown blank. The
               // deferred RAF redraw in componentDidUpdate would otherwise leave
@@ -168,6 +168,30 @@ export class ImageCanvas extends DrawableCanvas<Props> {
     return imageCanvas
   }
 
+  /** item index the cached canvas scale was computed for */
+  private _scaledForItem: number = -1
+
+  /**
+   * Recompute the canvas scale when the displayed frame has changed.
+   */
+  private rescaleIfItemChanged(): void {
+    const item = this.state.user.select.item
+    if (item === this._scaledForItem || this.display === null) {
+      return
+    }
+    const sensor = this.state.user.viewerConfigs[this.props.id].sensor
+    if (!isFrameLoaded(this.state, item, sensor)) {
+      return
+    }
+    const rect = this.display.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) {
+      return
+    }
+    if (this.imageCanvas !== null && this.imageContext !== null) {
+      this.updateScale(this.imageCanvas, this.imageContext, true)
+    }
+  }
+
   /**
    * Function to redraw all canvases
    * Includes dirty checking to skip redundant redraws.
@@ -175,6 +199,11 @@ export class ImageCanvas extends DrawableCanvas<Props> {
    * @return {boolean}
    */
   public redraw(): boolean {
+    // Frame sizes vary widely within a task, and the ref callback that computes
+    // the canvas scale does not fire on a frame change. The image itself is
+    // drawn to the canvas's own dimensions so it self-corrects, but the cached
+    // scale is shared with the overlay maths, so refresh it here too.
+    this.rescaleIfItemChanged()
     if (this.imageCanvas !== null && this.imageContext !== null) {
       const item = this.state.user.select.item
       const sensor = this.state.user.viewerConfigs[this.props.id].sensor
@@ -238,7 +267,7 @@ export class ImageCanvas extends DrawableCanvas<Props> {
       this.state,
       this.props.id
     ) as ImageViewerConfigType
-    if (imgConfig.viewScale >= MIN_SCALE && imgConfig.viewScale < MAX_SCALE) {
+    if (isScaleRenderable(this.props.id, imgConfig.viewScale)) {
       const newParams = updateCanvasScale(
         this.state,
         this.display,
