@@ -33,8 +33,59 @@ clamping afterwards could pull an already-merged junction apart.
 
 ## Requirements
 
-    pip install pillow numpy scipy        # core
-    pip install fastapi uvicorn           # only for the HTTP service
+    pip install -r tools/requirements.txt   # core: pillow, numpy, scipy
+    pip install fastapi uvicorn             # only for the HTTP service
+
+These are NOT installed by `npm install`. Without them the correction skips and
+projects are created with UNCORRECTED annotations (see Failure behaviour).
+
+### Setting up a new machine
+
+Auto-correction needs more than the repo: an interpreter the server can spawn,
+the three packages above, and `tools/` plus `local-data/` resolvable from the
+server's working directory. Check all of it at once:
+
+    python3 tools/annotation_fix/preflight.py
+
+It reports which dependency or path is broken and how to fix it, and exits
+non-zero when correction would silently skip. Run it on any machine where a
+project comes out uncorrected.
+
+### Docker (the recommended way to run this elsewhere)
+
+The image bundles python3 and the three packages, so auto-correction works with
+no host setup — on Windows, macOS or Linux alike, since the container is Linux
+inside either way:
+
+    docker compose up --build
+
+The build runs `preflight.py --build` and FAILS if the interpreter or a package
+is missing, so a broken image cannot ship. Verify a running container with:
+
+    docker compose exec frontend python3 tools/annotation_fix/preflight.py
+
+### Running natively on Windows
+
+The server spawns the interpreter by name, and that name defaults to `python3`,
+which a native Windows install does not provide (`python.exe` and `py.exe` are
+the real ones; `python3` is usually a Store alias that is not an interpreter).
+Set it explicitly:
+
+    set SCALABEL_PYTHON=python
+
+Docker avoids this entirely and is the better option unless there is a reason
+not to use it.
+
+Overrides, when the defaults do not fit:
+
+| variable | purpose |
+| --- | --- |
+| `SCALABEL_PYTHON` | interpreter to spawn (default `python3` on PATH) |
+| `SCALABEL_ANNOTATION_FIX_DIR` | directory holding `annotation_fix` (default `<cwd>/tools`) |
+| `SCALABEL_ANNOTATION_FIX_IMAGE_ROOT` | image root (default `<cwd>/local-data`) |
+
+The last two default to paths under the CURRENT WORKING DIRECTORY, so starting
+the server from anywhere but the repo root breaks them.
 
 ## Use as a library
 

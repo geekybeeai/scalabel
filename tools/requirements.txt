@@ -1,0 +1,14 @@
+# Runtime dependencies for the annotation auto-correction helper
+# (tools/annotation_fix). These are NOT installed by `npm install`, and when
+# they are absent the correction skips silently and projects are created with
+# uncorrected annotations.
+#
+#   pip install -r tools/requirements.txt
+#
+# Check a machine with:
+#
+#   python3 tools/annotation_fix/preflight.py
+
+pillow>=9.0      # reading the orthomosaic to build the ROI mask
+numpy>=1.21      # mask and geometry maths
+scipy>=1.7       # hole filling, connected components, nearest-inside lookup

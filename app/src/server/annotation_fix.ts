@@ -23,14 +23,28 @@
  * the wrong trade.
  */
 
-import { spawn } from "child_process"
+import { spawn, spawnSync } from "child_process"
 import * as path from "path"
 
 import { ItemExport } from "../types/export"
 import Logger from "./logger"
 
-/** Interpreter used to run the corrections. */
-const DEFAULT_PYTHON = "python3"
+/**
+ * Interpreter names to try, in order, when SCALABEL_PYTHON is not set.
+ *
+ * "python3" is right on Linux and macOS but is normally absent on a native
+ * Windows install, where the interpreter is "python" (and "python3" may exist
+ * only as a Store alias that is not a real interpreter). "py" is the Windows
+ * launcher, present when python itself is not on PATH.
+ *
+ * Trying in order means the same checkout works on all three platforms with no
+ * configuration, which matters because a wrong name here does not raise: the
+ * correction skips and projects are created with uncorrected annotations.
+ */
+const PYTHON_CANDIDATES = ["python3", "python", "py"]
+
+/** Cached result of probing PYTHON_CANDIDATES. */
+let resolvedPython: string | null = null
 
 /** How long the child gets before it is killed. */
 const DEFAULT_TIMEOUT_MS = 1800000
@@ -78,7 +92,25 @@ export function getPythonExecutable(): string {
   if (configured !== undefined && configured !== "") {
     return configured
   }
-  return DEFAULT_PYTHON
+  if (resolvedPython !== null) {
+    return resolvedPython
+  }
+  for (const candidate of PYTHON_CANDIDATES) {
+    // A Store alias exits non-zero (or fails to spawn) rather than printing a
+    // version, so requiring a clean --version rules it out.
+    const probe = spawnSync(candidate, ["--version"], {
+      stdio: "ignore",
+      timeout: 10000,
+      windowsHide: true
+    })
+    if (probe.error === undefined && probe.status === 0) {
+      resolvedPython = candidate
+      return candidate
+    }
+  }
+  // Nothing found: return the first name so the failure message is meaningful.
+  resolvedPython = PYTHON_CANDIDATES[0]
+  return resolvedPython
 }
 
 /**
@@ -253,14 +285,20 @@ export async function correctAnnotations(
 
     if (response.ok !== true) {
       const reason = response.error ?? "unknown error"
-      Logger.info(`Annotation auto-correct skipped: ${reason}`)
+      Logger.warning(`Annotation auto-correct skipped: ${reason}`)
+      Logger.warning(
+        "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: python3 tools/annotation_fix/preflight.py"
+      )
       return items
     }
 
     const corrected = response.document
     if (!Array.isArray(corrected) || corrected.length !== items.length) {
-      Logger.info(
+      Logger.warning(
         "Annotation auto-correct skipped: unexpected response from the corrector"
+      )
+      Logger.warning(
+        "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: python3 tools/annotation_fix/preflight.py"
       )
       return items
     }
@@ -278,17 +316,29 @@ export async function correctAnnotations(
         )
       }
       if (summary.missingImages.length > 0) {
-        Logger.info(
+        const all = summary.missingImages.length === items.length
+        const message =
           `Annotation auto-correct: ${summary.missingImages.length} image(s) ` +
-            "not found; those frames were not clamped"
-        )
+          "not found; those frames were not clamped"
+        if (all) {
+          // Not one image resolved, so the ROI clamp did nothing while
+          // auto-connect still ran — a half-correction that looks like success.
+          Logger.warning(
+            `${message} (NO image resolved — check the image root)`
+          )
+        } else {
+          Logger.info(message)
+        }
       }
     }
 
     return corrected
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    Logger.info(`Annotation auto-correct skipped: ${reason}`)
+    Logger.warning(`Annotation auto-correct skipped: ${reason}`)
+    Logger.warning(
+      "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: python3 tools/annotation_fix/preflight.py"
+    )
     return items
   }
 }
