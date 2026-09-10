@@ -181,11 +181,8 @@ export class Polygon2D extends Label2D {
 
   /**
    * Draw snap indicator (glowing halo, enlarged endpoint, center dot).
-   * Solid green halo + white center = release MERGES the lines into one.
-   * Dashed white halo + dark center = release only CONNECTS the endpoint to
-   * the other line's endpoint (different category; two labels remain).
-   * White + dashed is used so it cannot be confused with any category
-   * colour (the palette has yellows/oranges/greens) or the cyan curve points.
+   * Solid green halo + white center = release MERGES the lines into one
+   * (restricted to same-category polylines or self-close).
    *
    * @param context
    * @param ratio
@@ -804,9 +801,7 @@ export class Polygon2D extends Label2D {
       }
     } else if (this.editing && this._state === Polygon2DState.RESHAPE) {
       // Finish dragging point. Same-category (or self) snap => merge the two
-      // lines into one label. Different-category snap => the vertex already
-      // sits exactly on the other endpoint (connected, no gap) and the two
-      // lines stay distinct labels; it commits as an ordinary reshape edit.
+      // lines into one label.
       if (
         this._snapTargetPolyline !== null &&
         this._snapTargetPointIndex !== -1 &&

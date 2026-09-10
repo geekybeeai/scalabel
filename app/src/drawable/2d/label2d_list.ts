@@ -424,10 +424,9 @@ export class Label2DList {
   /**
    * Find nearest endpoint of another polyline within screen-space radius.
    * Returns the polyline, whether it is the start endpoint, and whether the
-   * two lines may be MERGED into one label (same primary category). Endpoints
-   * of a different category are still returned so the dragged vertex can be
-   * snapped exactly onto them (a "connect": no gap, but the lines stay two
-   * distinct labels with their own categories). Returns null if none.
+   * two lines may be MERGED into one label. Only polylines of the same
+   * primary category (or self-close) are candidate snap targets; different
+   * class categories are ignored. Returns null if none.
    *
    * @param source The polyline being dragged
    * @param coord Mouse coordinate in image space
@@ -483,9 +482,11 @@ export class Label2DList {
         continue
       }
 
-      // Same primary category => the lines merge into one on release.
-      // Different category => snap only (connect without merging).
-      const mergeable = source.category[0] === polyline.category[0]
+      // Only polylines of the same primary category are allowed to snap/join
+      if (source.category[0] !== polyline.category[0]) {
+        continue
+      }
+      const mergeable = true
 
       const points = polyline.points
       if (points.length === 0) {
