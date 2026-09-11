@@ -50,7 +50,10 @@
     },
     "testEnvironment": "jest-environment-jsdom-fourteen",
     "moduleNameMapper": {
-      "\\.(css|less)$": "identity-obj-proxy"
+      "\\.(css|less)$": "identity-obj-proxy",
+      "^node:(.*)$": "<rootDir>/app/test/setup/node_shims/$1.js",
+      "^@img/sharp-(.*)/sharp\\.node$": "<rootDir>/node_modules/@img/sharp-$1/index.cjs",
+      "^@img/sharp-(.*)/(package|versions)$": "<rootDir>/node_modules/@img/sharp-$1/$2.json"
     }
   },
   "husky": {
@@ -191,5 +194,8 @@
     "winston": "^3.3.3",
     "xss": "^1.0.8",
     "yargs": "^17.0.0"
+  },
+  "dependencies": {
+    "sharp": "^0.35.4"
   }
 }
