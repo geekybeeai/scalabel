@@ -36,6 +36,15 @@ const DEFAULT_TIMEOUT_MS = 1800000
 /** Stdout cap. Corrected documents for a large batch run to tens of MB. */
 const MAX_OUTPUT_BYTES = 1024 * 1024 * 1024
 
+/**
+ * Endpoint gap, in image pixels, within which two polylines are joined.
+ *
+ * The engine's own default (15 px) mirrors the editor's snap radius, but on
+ * real batches many genuine continuations sit 15-30 px apart, so the server
+ * asks for a little more. SCALABEL_ANNOTATION_FIX_TOLERANCE overrides it.
+ */
+export const DEFAULT_CONNECT_TOLERANCE = 25
+
 /** Log hint appended to every skip. */
 const DIAGNOSE_HINT =
   "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: node app/dist/annotation_fix_worker.js --preflight"
@@ -66,6 +75,27 @@ export interface AnnotationFixOptions {
   imageRoot?: string
   /** how long to allow before killing the child */
   timeoutMs?: number
+  /** endpoint gap within which polylines are joined, in image pixels */
+  tolerance?: number
+}
+
+/**
+ * Connect tolerance to request, from SCALABEL_ANNOTATION_FIX_TOLERANCE when
+ * it holds a positive number and DEFAULT_CONNECT_TOLERANCE otherwise.
+ */
+export function getConnectTolerance(): number {
+  const configured = process.env.SCALABEL_ANNOTATION_FIX_TOLERANCE
+  if (configured !== undefined && configured !== "") {
+    const value = Number(configured)
+    if (Number.isFinite(value) && value > 0) {
+      return value
+    }
+    Logger.warning(
+      `Annotation auto-correct: ignoring SCALABEL_ANNOTATION_FIX_TOLERANCE=` +
+        `"${configured}" (not a positive number); using ${DEFAULT_CONNECT_TOLERANCE}`
+    )
+  }
+  return DEFAULT_CONNECT_TOLERANCE
 }
 
 /**
@@ -215,7 +245,7 @@ async function runCorrector(
  * correction failure must not fail project creation.
  *
  * @param items parsed frames from the uploaded item file
- * @param options worker script, image root and timeout
+ * @param options worker script, image root, tolerance and timeout
  */
 export async function correctAnnotations(
   items: Array<Partial<ItemExport>>,
@@ -229,7 +259,8 @@ export async function correctAnnotations(
     document: items,
     image_root: options.imageRoot ?? getImageRoot(),
     clamp: true,
-    connect: true
+    connect: true,
+    tolerance: options.tolerance ?? getConnectTolerance()
   })
 
   try {
