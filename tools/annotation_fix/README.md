@@ -1,5 +1,17 @@
 # annotation_fix
 
+> **Scalabel no longer calls this package.** The corrections were ported to
+> TypeScript and now live in `app/src/server/annotation_fix`, where they run in
+> a worker thread inside the Node server. The **Auto-correct annotations**
+> checkbox drives that implementation; nothing in the server spawns Python any
+> more, and the Docker image no longer installs it.
+>
+> This package is kept as a reference implementation and a standalone CLI for
+> correcting an export file by hand. It still works, but it needs
+> pillow/numpy/scipy installed yourself, and changes made here have no effect on
+> the running application. The sections below describing how the server spawns
+> `annotation_fix.stdio` describe the OLD architecture.
+
 Corrects imported polyline annotations before they reach Scalabel. Two fixes,
 one pass, driven by the **Auto-correct annotations** checkbox on the create
 project form.
@@ -187,6 +199,11 @@ actually falls outside.
 candidates after every merge so chains (A–B–C) resolve across passes. Closed
 rings and multi-polygon labels never participate, matching the editor.
 
-**Cross-category pairs are left alone.** The editor also snaps endpoints across
-categories, but that relies on a visible indicator and one-step undo, neither of
-which exists at import time.
+**Cross-category pairs are left alone, with one listed exception.** The editor
+also snaps endpoints across categories, but that relies on a visible indicator
+and one-step undo, neither of which exists at import time. The exception is
+`curb_road_edge` / `without_curb_road_edge`, which describe one physical feature
+whose curb status changes partway along: across a 145-frame batch that pair
+accounted for 209 of the 266 near-touching pairs a strict same-category rule
+refused. Paint markings are deliberately not listed — a yellow line meeting a
+white one is usually a real class boundary. See `DEFAULT_MERGEABLE_CATEGORIES`.

@@ -1,8 +1,8 @@
 /**
  * Corrects a project's annotations in the background, one task at a time.
  *
- * Correction is slow — roughly 6 seconds per frame at full resolution, so a
- * 221-frame project runs about 22 minutes. That is well past the 10-minute
+ * Correction is slow — several seconds per frame at full resolution, so a
+ * 221-frame project runs for many minutes. That is well past the 10-minute
  * browser submission timeout, so it cannot happen inline during project
  * creation: the request would abort and no project would be created at all.
  *
@@ -17,9 +17,14 @@
  * internal round trip, which risks losing whatever the conversion does not
  * round-trip cleanly.
  *
- * Sequential on purpose: a single full-resolution frame can hold several GB
- * while its mask is built, so correcting tasks concurrently risks exhausting
- * memory on exactly the largest, slowest images.
+ * Sequential on purpose, though the reason has weakened. Under the Python
+ * implementation a single full-resolution frame could hold several GB while its
+ * mask was built, and concurrency risked exhausting memory on exactly the
+ * largest images. The TypeScript implementation streams the image and peaks at
+ * roughly one byte per pixel — about 340 MB for the largest frame in the corpus
+ * — so memory no longer forbids running tasks in parallel. What still argues
+ * for sequential is that the work is CPU-bound in a worker thread and finishing
+ * the first task soonest is more useful than finishing all of them together.
  */
 
 import { Project } from "../types/project"

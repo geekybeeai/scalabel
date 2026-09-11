@@ -1,13 +1,19 @@
-# Runtime dependencies for the annotation auto-correction helper
-# (tools/annotation_fix). These are NOT installed by `npm install`, and when
-# they are absent the correction skips silently and projects are created with
-# uncorrected annotations.
+# Dependencies for the standalone annotation-fix CLI (tools/annotation_fix).
+#
+# The Scalabel server NO LONGER NEEDS THESE. The corrections were ported to
+# TypeScript and run in a worker thread inside the Node server
+# (app/src/server/annotation_fix); nothing spawns Python any more and the Docker
+# image does not install it. Auto-correction works without anything here.
+#
+# Install these only to run the Python package directly, as a reference
+# implementation or to correct an export file by hand:
 #
 #   pip install -r tools/requirements.txt
+#   python -m annotation_fix input.json -o corrected.json --image-root local-data/
 #
-# Check a machine with:
+# To check the auto-correction the server actually uses:
 #
-#   python3 tools/annotation_fix/preflight.py
+#   node app/dist/annotation_fix_preflight.js
 
 pillow>=9.0      # reading the orthomosaic to build the ROI mask
 numpy>=1.21      # mask and geometry maths

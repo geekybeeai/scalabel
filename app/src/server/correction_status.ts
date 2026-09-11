@@ -1,8 +1,8 @@
 /**
  * Tracks per-task annotation-correction progress.
  *
- * Correcting a whole project is slow — roughly 6 seconds per frame at full
- * resolution, so a 221-frame project runs about 22 minutes. That is far beyond
+ * Correcting a whole project is slow — several seconds per frame at full
+ * resolution, so a large project runs for many minutes. That is far beyond
  * the 10-minute browser submission timeout, so correction cannot happen inline
  * during project creation: the request would abort and no project would be
  * created at all.

@@ -379,8 +379,8 @@ export async function createProject(
   // Ensure that all video names are set to default if empty
   let projectItems = formFileData.items
 
-  // Auto-correction does NOT happen here. At roughly 6 seconds per frame it
-  // runs for ~22 minutes on a 221-frame project, far past the 10-minute browser
+  // Auto-correction does NOT happen here. At several seconds per frame it runs
+  // for many minutes on a large project, far past the 10-minute browser
   // submission timeout — correcting inline meant the request aborted and no
   // project was created at all. The project is now created immediately with its
   // original annotations and corrected task-by-task in the background; see

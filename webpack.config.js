@@ -93,6 +93,15 @@ let serverConfig = {
   devtool: false,
   entry: {
     main: __dirname + '/app/src/server/main.ts',
+    // Annotation auto-correction runs in a worker thread so that decoding
+    // 200-megapixel orthomosaics does not block the event loop for the whole
+    // job. worker_threads needs a real file, so it gets its own bundle next to
+    // main.js; app/src/server/annotation_fix looks for it there.
+    annotation_fix_worker:
+      __dirname + '/app/src/server/annotation_fix/worker.ts',
+    // Diagnoses a machine where auto-correction is silently skipping.
+    annotation_fix_preflight:
+      __dirname + '/app/src/server/annotation_fix/preflight.ts',
   },
   output: {
     filename: '[name].js',

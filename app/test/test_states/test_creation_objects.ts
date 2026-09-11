@@ -196,6 +196,7 @@ export const sampleProjectImage: Project = {
     attributes: sampleAttributes as Attribute[],
     taskId: "",
     demoMode: false,
+    autoCorrect: false,
     autosave: true,
     bots: false
   },
@@ -274,6 +275,7 @@ export const sampleProjectVideo: Project = {
     attributes: sampleAttributes as Attribute[],
     taskId: "",
     demoMode: true,
+    autoCorrect: false,
     autosave: true,
     bots: false
   },
@@ -300,6 +302,7 @@ export const sampleProjectAutolabel: Project = {
     attributes: sampleAttributes as Attribute[],
     taskId: "",
     demoMode: false,
+    autoCorrect: false,
     autosave: true,
     bots: false
   },
@@ -326,6 +329,7 @@ export const sampleProjectAutolabelPolygon: Project = {
     attributes: sampleAttributes as Attribute[],
     taskId: "",
     demoMode: false,
+    autoCorrect: false,
     autosave: true,
     bots: false
   },
@@ -352,6 +356,7 @@ export const sampleProjectAutolabel3dBox: Project = {
     attributes: sampleAttributes as Attribute[],
     taskId: "",
     demoMode: false,
+    autoCorrect: false,
     autosave: true,
     bots: false
   },
@@ -378,6 +383,7 @@ export const sampleProjectSensors: Project = {
     attributes: sampleAttributes as Attribute[],
     taskId: "",
     demoMode: false,
+    autoCorrect: false,
     autosave: true,
     bots: false
   },
@@ -420,6 +426,7 @@ export const sampleTasksImage: TaskType[] = [
       attributes: sampleAttributes as Attribute[],
       taskId: "000000",
       demoMode: false,
+      autoCorrect: false,
       autosave: true,
       bots: false
     },
@@ -531,6 +538,7 @@ export const sampleTasksImage: TaskType[] = [
       attributes: sampleAttributes as Attribute[],
       taskId: "000001",
       demoMode: false,
+      autoCorrect: false,
       autosave: true,
       bots: false
     },
@@ -645,6 +653,7 @@ export const sampleTasksVideo: TaskType[] = [
       attributes: sampleAttributes as Attribute[],
       taskId: "000000",
       demoMode: true,
+      autoCorrect: false,
       autosave: true,
       bots: false
     },
@@ -808,6 +817,7 @@ export const sampleTasksVideo: TaskType[] = [
       attributes: sampleAttributes as Attribute[],
       taskId: "000001",
       demoMode: true,
+      autoCorrect: false,
       autosave: true,
       bots: false
     },
