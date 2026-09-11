@@ -93,6 +93,8 @@ let serverConfig = {
   devtool: false,
   entry: {
     main: __dirname + '/app/src/server/main.ts',
+    // Annotation auto-correct child process, spawned by annotation_fix.ts.
+    annotation_fix_worker: __dirname + '/app/src/server/annotation_fix/stdio.ts',
   },
   output: {
     filename: '[name].js',
