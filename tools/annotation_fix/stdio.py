@@ -1,10 +1,9 @@
 """Run one correction over a pipe: request JSON on stdin, response on stdout.
 
-This is what the Scalabel server actually uses. Spawning a short-lived process
-per import beats a long-running HTTP service here: nothing to start by hand,
-nothing to keep alive, no port to collide, and no way to end up with a stale
-daemon running old code. The process exists only for the duration of one
-project creation.
+NOTE: the Scalabel server no longer spawns this. It runs the TypeScript port
+in app/src/server/annotation_fix (compiled to app/dist/annotation_fix_worker.js).
+This module remains as the reference implementation and as a standalone tool;
+the request/response protocol below is shared with the JS worker.
 
 Request (stdin), matching the HTTP service's body::
 

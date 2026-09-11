@@ -1,11 +1,11 @@
-# Runtime dependencies for the annotation auto-correction helper
-# (tools/annotation_fix). These are NOT installed by `npm install`, and when
-# they are absent the correction skips silently and projects are created with
-# uncorrected annotations.
+# Dependencies for the STANDALONE Python annotation-fix tool
+# (tools/annotation_fix). The Scalabel server does NOT use this package any
+# more: it runs a TypeScript port in a Node child process, so nothing here is
+# needed to make the "Auto-correct annotations" checkbox work.
 #
 #   pip install -r tools/requirements.txt
 #
-# Check a machine with:
+# Check the Python tool with:
 #
 #   python3 tools/annotation_fix/preflight.py
 

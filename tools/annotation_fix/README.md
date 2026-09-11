@@ -1,5 +1,10 @@
 # annotation_fix
 
+> **Note:** the Scalabel server uses a TypeScript port of this engine
+> (`app/src/server/annotation_fix`), compiled to
+> `app/dist/annotation_fix_worker.js`. This Python package is the reference
+> implementation and a standalone CLI; keep both in sync when changing rules.
+
 Corrects imported polyline annotations before they reach Scalabel. Two fixes,
 one pass, driven by the **Auto-correct annotations** checkbox on the create
 project form.

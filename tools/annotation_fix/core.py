@@ -1,8 +1,8 @@
 """The public API: correct a Scalabel annotation document.
 
 One call applies both fixes to a parsed export document and hands back a
-corrected copy plus a report. The CLI and the HTTP service are thin wrappers
-over ``process_document`` -- there is no file I/O or global state here, so the
+corrected copy plus a report. The CLI, the stdio module and the HTTP service
+are thin wrappers over ``process_document`` -- there is no file I/O or global state here, so the
 same function serves a batch of 221 frames and a single-frame API request.
 
 Stage order is deliberate: CLAMP FIRST, THEN CONNECT.

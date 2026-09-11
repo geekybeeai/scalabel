@@ -1,56 +1,44 @@
 /**
- * Runs the annotation-fix corrections (tools/annotation_fix) at project
- * creation, when the "Auto-correct annotations" box is ticked.
+ * Runs the annotation-fix corrections at project creation, when the
+ * "Auto-correct annotations" box is ticked.
  *
  * ROI clamp: the orthomosaic images pad a narrow captured footprint into a
  * large rectangle with black. Vertices that drift into the padding are pulled
  * back to the nearest valid pixel.
  *
- * Auto-connect: same-category polyline endpoints that nearly touch are spliced
- * into one label, the batch equivalent of the editor's
+ * Auto-connect: polyline endpoints of compatible categories that nearly touch
+ * are spliced into one label, the batch equivalent of the editor's
  * drag-endpoint-onto-endpoint gesture.
  *
- * Both need image pixels and cross-label geometry, so the work happens in
- * Python. It is spawned as a SHORT-LIVED CHILD PROCESS for the duration of one
- * import rather than run as a standing service: nothing has to be started by
- * hand, there is no port to collide with, and no stale daemon can survive
- * holding old code. The request goes in on stdin and the corrected document
+ * The engine lives in ./annotation_fix and is compiled by webpack into
+ * app/dist/annotation_fix_worker.js. It runs as a SHORT-LIVED CHILD PROCESS
+ * of the same Node binary for the duration of one task rather than as a
+ * standing service: nothing to start by hand, no port to collide with, no
+ * stale daemon holding old code, and a crash or OOM in the child cannot take
+ * the server down. The request goes in on stdin and the corrected document
  * comes back on stdout.
  *
- * Correction is best-effort. If Python is missing, a dependency is absent, or
- * the child fails for any reason, the ORIGINAL annotations are returned and the
- * reason is logged. Failing an entire import because a helper broke would be
- * the wrong trade.
+ * Correction is best-effort. If the worker script is missing, sharp fails to
+ * load, or the child fails for any reason, the ORIGINAL annotations are
+ * returned and the reason is logged. Failing an entire import because a
+ * helper broke would be the wrong trade.
  */
 
-import { spawn, spawnSync } from "child_process"
+import { spawn } from "child_process"
 import * as path from "path"
 
 import { ItemExport } from "../types/export"
 import Logger from "./logger"
-
-/**
- * Interpreter names to try, in order, when SCALABEL_PYTHON is not set.
- *
- * "python3" is right on Linux and macOS but is normally absent on a native
- * Windows install, where the interpreter is "python" (and "python3" may exist
- * only as a Store alias that is not a real interpreter). "py" is the Windows
- * launcher, present when python itself is not on PATH.
- *
- * Trying in order means the same checkout works on all three platforms with no
- * configuration, which matters because a wrong name here does not raise: the
- * correction skips and projects are created with uncorrected annotations.
- */
-const PYTHON_CANDIDATES = ["python3", "python", "py"]
-
-/** Cached result of probing PYTHON_CANDIDATES. */
-let resolvedPython: string | null = null
 
 /** How long the child gets before it is killed. */
 const DEFAULT_TIMEOUT_MS = 1800000
 
 /** Stdout cap. Corrected documents for a large batch run to tens of MB. */
 const MAX_OUTPUT_BYTES = 1024 * 1024 * 1024
+
+/** Log hint appended to every skip. */
+const DIAGNOSE_HINT =
+  "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: node app/dist/annotation_fix_worker.js --preflight"
 
 /**
  * Summary of what the corrections changed, for the server log.
@@ -72,59 +60,25 @@ export interface AnnotationFixSummary {
  * Options for one correction run.
  */
 export interface AnnotationFixOptions {
-  /** python interpreter to use */
-  python?: string
-  /** directory containing the annotation_fix package */
-  toolsDir?: string
+  /** path to the compiled worker script */
+  workerScript?: string
   /** prefix used to resolve the relative image paths in frame names */
   imageRoot?: string
-  /** directory used to memoise ROI masks between runs */
-  cacheDir?: string
   /** how long to allow before killing the child */
   timeoutMs?: number
 }
 
 /**
- * Interpreter to run, overridable for unusual environments.
+ * The compiled worker script. Webpack emits it beside main.js, so it is found
+ * relative to this bundle; SCALABEL_ANNOTATION_FIX_WORKER overrides that for
+ * unusual layouts.
  */
-export function getPythonExecutable(): string {
-  const configured = process.env.SCALABEL_PYTHON
+export function getWorkerScript(): string {
+  const configured = process.env.SCALABEL_ANNOTATION_FIX_WORKER
   if (configured !== undefined && configured !== "") {
-    return configured
+    return path.resolve(configured)
   }
-  if (resolvedPython !== null) {
-    return resolvedPython
-  }
-  for (const candidate of PYTHON_CANDIDATES) {
-    // A Store alias exits non-zero (or fails to spawn) rather than printing a
-    // version, so requiring a clean --version rules it out.
-    const probe = spawnSync(candidate, ["--version"], {
-      stdio: "ignore",
-      timeout: 10000,
-      windowsHide: true
-    })
-    if (probe.error === undefined && probe.status === 0) {
-      resolvedPython = candidate
-      return candidate
-    }
-  }
-  // Nothing found: return the first name so the failure message is meaningful.
-  resolvedPython = PYTHON_CANDIDATES[0]
-  return resolvedPython
-}
-
-/**
- * Directory holding the annotation_fix package.
- *
- * Defaults to `<repo>/tools`, resolved from this file's location so it works
- * from both the source tree and the bundled server.
- */
-export function getToolsDir(): string {
-  const configured = process.env.SCALABEL_ANNOTATION_FIX_DIR
-  if (configured !== undefined && configured !== "") {
-    return configured
-  }
-  return path.join(process.cwd(), "tools")
+  return path.join(__dirname, "annotation_fix_worker.js")
 }
 
 /**
@@ -144,7 +98,7 @@ export function getImageRoot(): string {
 }
 
 /**
- * Response shape from the Python child.
+ * Response shape from the worker child.
  */
 interface FixResponse {
   /** whether the correction succeeded */
@@ -164,21 +118,20 @@ interface FixResponse {
  * Spawn the corrector, feed it the request, and collect its response.
  *
  * @param request the payload to send on stdin
- * @param options interpreter, tools directory and timeout
+ * @param options worker script and timeout
  */
 async function runCorrector(
   request: string,
   options: AnnotationFixOptions
 ): Promise<FixResponse> {
-  const python = options.python ?? getPythonExecutable()
-  const toolsDir = options.toolsDir ?? getToolsDir()
+  const workerScript = options.workerScript ?? getWorkerScript()
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
   return await new Promise<FixResponse>((resolve, reject) => {
-    const child = spawn(python, ["-m", "annotation_fix.stdio"], {
-      cwd: toolsDir,
-      // The package lives in toolsDir, so make it importable from there.
-      env: { ...process.env, PYTHONPATH: toolsDir }
+    // Same binary as the server, so whatever ran main.js can run the worker.
+    const child = spawn(process.execPath, [workerScript], {
+      env: process.env,
+      windowsHide: true
     })
 
     const stdout: Buffer[] = []
@@ -262,7 +215,7 @@ async function runCorrector(
  * correction failure must not fail project creation.
  *
  * @param items parsed frames from the uploaded item file
- * @param options interpreter, image root, cache directory and timeout
+ * @param options worker script, image root and timeout
  */
 export async function correctAnnotations(
   items: Array<Partial<ItemExport>>,
@@ -275,7 +228,6 @@ export async function correctAnnotations(
   const request = JSON.stringify({
     document: items,
     image_root: options.imageRoot ?? getImageRoot(),
-    cache_dir: options.cacheDir ?? null,
     clamp: true,
     connect: true
   })
@@ -286,9 +238,7 @@ export async function correctAnnotations(
     if (response.ok !== true) {
       const reason = response.error ?? "unknown error"
       Logger.warning(`Annotation auto-correct skipped: ${reason}`)
-      Logger.warning(
-        "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: python3 tools/annotation_fix/preflight.py"
-      )
+      Logger.warning(DIAGNOSE_HINT)
       return items
     }
 
@@ -297,9 +247,7 @@ export async function correctAnnotations(
       Logger.warning(
         "Annotation auto-correct skipped: unexpected response from the corrector"
       )
-      Logger.warning(
-        "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: python3 tools/annotation_fix/preflight.py"
-      )
+      Logger.warning(DIAGNOSE_HINT)
       return items
     }
 
@@ -336,9 +284,7 @@ export async function correctAnnotations(
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     Logger.warning(`Annotation auto-correct skipped: ${reason}`)
-    Logger.warning(
-      "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: python3 tools/annotation_fix/preflight.py"
-    )
+    Logger.warning(DIAGNOSE_HINT)
     return items
   }
 }

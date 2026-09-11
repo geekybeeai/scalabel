@@ -1,10 +1,9 @@
-"""HTTP service wrapper.
+"""Optional HTTP service wrapper.
 
     uvicorn annotation_fix.api:app --port 8687
 
-Exists so the Scalabel server can call the correction step at project creation
-without hosting Python image processing itself: the ``auto_correct`` checkbox
-posts the parsed item file here and imports whatever comes back.
+Not used by the Scalabel server, which runs its own TypeScript port of this
+engine in a child process. Kept for ad-hoc or external use.
 
 The endpoint is a thin shell over ``process_document`` -- all behaviour lives in
 ``core``, so the CLI and this service cannot drift apart.
