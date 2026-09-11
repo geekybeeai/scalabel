@@ -175,10 +175,10 @@ frame's `error` field and the run continues.
   `python3 tools/annotation_fix/preflight.py` to `node app/dist/annotation_fix_worker.js --preflight`.
 - Connect tolerance: the server passes `tolerance` in the request, read from
   `SCALABEL_ANNOTATION_FIX_TOLERANCE` (positive number, image pixels) with a
-  server-side default of **25 px**. The engine's own default stays 15 px so
+  server-side default of **40 px**. The engine's own default stays 15 px so
   the parity harness, which sends no tolerance, compares like with like.
   Measured on a 50-frame batch: 15 px → 1,100 merges, 25 px → 1,277,
-  30 px → 1,352, 50 px → 1,547.
+  30 px → 1,352, 40 px → 1,428, 50 px → 1,547.
 - `stdio.ts` accepts `--preflight`: loads sharp, decodes a 4×4 in-memory PNG,
   runs the two-touching-road-edges round trip, prints OK/FAIL, exits 0/1.
 - `webpack.config.js`: add the `annotation_fix_worker` entry to

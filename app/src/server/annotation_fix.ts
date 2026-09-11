@@ -40,10 +40,10 @@ const MAX_OUTPUT_BYTES = 1024 * 1024 * 1024
  * Endpoint gap, in image pixels, within which two polylines are joined.
  *
  * The engine's own default (15 px) mirrors the editor's snap radius, but on
- * real batches many genuine continuations sit 15-30 px apart, so the server
- * asks for a little more. SCALABEL_ANNOTATION_FIX_TOLERANCE overrides it.
+ * real batches many genuine continuations sit 15-40 px apart, so the server
+ * asks for more. SCALABEL_ANNOTATION_FIX_TOLERANCE overrides it.
  */
-export const DEFAULT_CONNECT_TOLERANCE = 25
+export const DEFAULT_CONNECT_TOLERANCE = 40
 
 /** Log hint appended to every skip. */
 const DIAGNOSE_HINT =
