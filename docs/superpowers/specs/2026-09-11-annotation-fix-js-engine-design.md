@@ -110,14 +110,15 @@ Stdout is reserved for the response; all diagnostics go to stderr. Exit 0 on
    raster order; the BFS scans in raster order and keeps the first maximum,
    so this matches.
 5. `contains(x, y)`: round, bounds-check, look up — identical to Python.
-6. `nearestInside(x, y)`: clip the rounded point to the canvas; if inside,
-   return it with distance 0. Otherwise search square rings of radius
-   r = 1, 2, … around the clipped point. On the first ring containing an
-   inside pixel, record the best Euclidean distance `d` measured from the
-   **unrounded** point, then continue scanning rings up to radius
-   `ceil(d) + 1` to catch a closer pixel on a later ring (a ring's Chebyshev
-   radius under-bounds Euclidean distance). Return the best pixel and `d`.
-   A hard cap of `max(width, height)` rings guarantees termination.
+6. `nearestInside(x, y)`: round (half-to-even) and clip the point to the
+   canvas; if that pixel is inside, return it with distance 0. Otherwise
+   search square rings of radius r = 1, 2, … around the clipped pixel for
+   the inside pixel nearest to **that pixel** — exactly what scipy's
+   distance-transform index lookup returns for the reference implementation.
+   After a hit, keep scanning while `r <= best` (a ring's Chebyshev radius
+   under-bounds Euclidean distance). Report the distance from the chosen
+   pixel to the **unrounded** point, as the Python code does. A hard cap of
+   `max(width, height)` rings guarantees termination.
 
 Peak memory for a 240 MP frame: ~720 MB RGB (transient) + 240 MB mask +
 ~1 GB labelling scratch, versus ~5 GB in Python. No full-canvas distance

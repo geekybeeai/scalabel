@@ -98,9 +98,12 @@ export class RoiMask {
    * the true (unrounded) point. For a point already inside, the point itself
    * with distance 0.
    *
-   * Scans square rings around the clipped point. A ring's Chebyshev radius
-   * under-bounds Euclidean distance, so after a hit the scan continues until
-   * the ring's lower bound exceeds the best distance found.
+   * Mirrors the reference implementation's distance-transform lookup: the
+   * point is rounded and clipped to the canvas, the nearest inside pixel to
+   * THAT pixel is taken, and the reported distance is then measured from the
+   * true point. Scans square rings around the clipped pixel; a ring's
+   * Chebyshev radius under-bounds Euclidean distance, so after a hit the
+   * scan continues until the ring radius exceeds the best distance found.
    *
    * @param x x coordinate
    * @param y y coordinate
@@ -114,9 +117,6 @@ export class RoiMask {
       return [ix, iy, 0]
     }
 
-    // Distance from the true point to the ring centre: ring r pixels are at
-    // least r - offset from the true point.
-    const offset = Math.hypot(x - ix, y - iy)
     let bestX = ix
     let bestY = iy
     let bestDist = Infinity
@@ -129,7 +129,7 @@ export class RoiMask {
       if (this.data[py * w + px] !== 1) {
         return
       }
-      const d = Math.hypot(px - x, py - y)
+      const d = Math.hypot(px - ix, py - iy)
       if (d < bestDist) {
         bestDist = d
         bestX = px
@@ -138,7 +138,7 @@ export class RoiMask {
     }
 
     for (let r = 1; r <= maxRadius; r++) {
-      if (bestDist !== Infinity && r - offset > bestDist) {
+      if (r > bestDist) {
         break
       }
       for (let px = ix - r; px <= ix + r; px++) {
@@ -151,11 +151,8 @@ export class RoiMask {
       }
     }
 
-    if (bestDist === Infinity) {
-      // Empty mask: nothing to clamp to. Report the clipped point.
-      return [ix, iy, offset]
-    }
-    return [bestX, bestY, bestDist]
+    // Measure from the true point so sub-pixel spill is not quantised away.
+    return [bestX, bestY, Math.hypot(bestX - x, bestY - y)]
   }
 }
 
