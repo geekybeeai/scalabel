@@ -191,6 +191,29 @@ frame's `error` field and the run continues.
   that the server uses the JS engine; the Python package is a standalone
   CLI/reference.
 
+## 5a. Embedded sessions (tmi-tcp-ui) — added 2026-09-15
+
+Embedding apps open one image at a time through `POST /openEditSession`
+with the annotations inline, and the frame's image lives on *their* backend
+behind a signed http(s) `url`, not under `local-data`. Two additions keep a
+single engine serving both entry points:
+
+- **Synchronous, opt-in correction.** The body accepts `autoCorrect?: boolean`
+  (validated; default `false`). When true the handler runs
+  `correctAnnotations(frames)` before `createTasks`, then returns `labelUrl`.
+  One frame takes ~2 s, so there is no background state, no status polling
+  and no window in which the editor could show uncorrected lines. Failure
+  falls back to the original annotations, as on the project path.
+- **Remote images.** When `resolveImagePath` finds nothing and the frame's
+  `url` is http(s), the worker downloads it to a temp file for the mask
+  (60 s timeout, 1 GiB cap, ≤5 redirects, temp dir removed afterwards) and
+  reports `imageFound: true`. A failed download sets `imageFound: false`,
+  records `error: "image download failed: …"`, and the connect stage still
+  runs. `Options.fetchRemote` / request `fetch_remote` disables this.
+
+tmi-tcp-ui's `openEditSession(sessionId, annotations, { autoCorrect = true })`
+sends the flag; its background pre-warm hides the latency.
+
 ## 6. Testing
 
 Jest, under `app/test/server/annotation_fix/`, each file with

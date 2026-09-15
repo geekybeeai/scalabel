@@ -46,6 +46,8 @@ export interface StdioRequest {
   inset?: number
   /** review threshold */
   flag_distance?: number
+  /** download http(s) frame urls when the image is not on disk */
+  fetch_remote?: boolean
 }
 
 /** What the worker answers. */
@@ -84,7 +86,8 @@ export async function run(payload: StdioRequest): Promise<StdioResponse> {
     minAngle: Number(payload.min_angle ?? defaults.minAngle),
     inset: Number(payload.inset ?? defaults.inset),
     flagDistance: Number(payload.flag_distance ?? defaults.flagDistance),
-    imageRoot: String(payload.image_root ?? "")
+    imageRoot: String(payload.image_root ?? ""),
+    fetchRemote: payload.fetch_remote ?? defaults.fetchRemote
   }
   try {
     const [corrected, report] = await processDocument(

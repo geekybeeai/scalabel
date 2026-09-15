@@ -10,8 +10,12 @@ import { getSubmissionTime } from "../components/util"
 import { FormField } from "../const/project"
 import { DatasetExport, ItemExport } from "../types/export"
 import { Project } from "../types/project"
+import { correctAnnotations } from "./annotation_fix"
 import { getProjectStatuses } from "./correction_status"
-import { correctProjectInBackground, splitIntoTaskChunks } from "./correction_worker"
+import {
+  correctProjectInBackground,
+  splitIntoTaskChunks
+} from "./correction_worker"
 import {
   createProject,
   createTasks,
@@ -67,6 +71,13 @@ const UUID_RE =
 
 interface OpenEditSessionBody {
   sessionId?: string
+  /**
+   * Run the annotation auto-correct (ROI clamp + endpoint connect) on the
+   * payload before the session opens. Synchronous: a single frame takes a
+   * few seconds, so unlike project creation there is no background state and
+   * the editor only ever shows the corrected lines.
+   */
+  autoCorrect?: boolean
   annotations?: {
     frames?: Array<{
       url?: string
@@ -92,6 +103,9 @@ function validateOpenEditSessionBody(
   }
   if (typeof body.sessionId !== "string" || !UUID_RE.test(body.sessionId)) {
     return { ok: false, reason: "sessionId must be a valid UUID" }
+  }
+  if (body.autoCorrect !== undefined && typeof body.autoCorrect !== "boolean") {
+    return { ok: false, reason: "autoCorrect must be a boolean" }
   }
   const ann = body.annotations
   if (ann === undefined || ann === null) {
@@ -357,8 +371,15 @@ export class Listeners {
       // but we have the parsed DatasetExport in memory already.
       const annotations = (body as OpenEditSessionBody)
         .annotations as DatasetExport
+      let items = annotations.frames as Array<Partial<ItemExport>>
+      if ((body as OpenEditSessionBody).autoCorrect === true) {
+        // Inline, before the project exists: one frame is seconds of work,
+        // and the caller (an embedding app) has nothing to poll. Best-effort
+        // like the project path — on failure the originals are used.
+        items = await correctAnnotations(items)
+      }
       const formFileData = {
-        items: annotations.frames as Array<Partial<ItemExport>>,
+        items,
         itemGroups: annotations.frameGroups ?? [],
         sensors: annotations.config.sensors ?? [],
         templates: [],

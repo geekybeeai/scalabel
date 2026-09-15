@@ -1,5 +1,6 @@
 import { Request, Response } from "express"
 import * as fs from "fs-extra"
+import * as path from "path"
 
 import { serverConfig } from "../../src/server/defaults"
 import { FileStorage } from "../../src/server/file_storage"
@@ -11,6 +12,23 @@ import { RedisClient } from "../../src/server/redis_client"
 import { UserManager } from "../../src/server/user_manager"
 
 jest.mock("../../src/server/redis_client")
+
+// The corrector spawns the compiled worker bundle, which unit tests must not
+// depend on. Stand in with a merge of the first two labels, so the handler's
+// use of the result is observable.
+const correctAnnotationsMock = jest.fn(
+  async (items: Array<{ labels?: unknown[] }>) =>
+    items.map((item) => {
+      const labels = item.labels ?? []
+      return labels.length >= 2
+        ? { ...item, labels: [labels[0], ...labels.slice(2)] }
+        : item
+    })
+)
+jest.mock("../../src/server/annotation_fix", () => ({
+  correctAnnotations: async (items: Array<{ labels?: unknown[] }>) =>
+    await correctAnnotationsMock(items)
+}))
 
 interface TestResponse extends Response {
   /** captured status code */
@@ -243,6 +261,93 @@ describe("openEditSessionHandler creates the project", () => {
     const res2 = fakeRes()
     await listeners.openEditSessionHandler(fakeReq(body), res2)
     expect(res2.statusCode).toBe(409)
+  })
+
+  test("rejects a non-boolean autoCorrect with 400", async () => {
+    const res = fakeRes()
+    await listeners.openEditSessionHandler(
+      fakeReq({
+        sessionId: "550e8400-e29b-41d4-a716-446655440002",
+        autoCorrect: "yes",
+        annotations: {
+          frames: [{ name: "x.png", url: "x.png", labels: [] }],
+          config: { categories: [{ name: "lane" }], attributes: [] }
+        }
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(400)
+    expect(res.body).toContain("autoCorrect")
+  })
+
+  test("autoCorrect: true corrects the frames before the session opens", async () => {
+    const line = (id: string, x0: number, x1: number): unknown => ({
+      id,
+      category: "lane",
+      attributes: {},
+      manualShape: true,
+      box2d: null,
+      box3d: null,
+      poly2d: [
+        {
+          vertices: [
+            [x0, 0],
+            [x1, 0]
+          ],
+          types: "LL",
+          closed: false
+        }
+      ]
+    })
+    const frame = {
+      name: "x.png",
+      url: "x.png",
+      labels: [line("a", 0, 100), line("b", 104, 200)],
+      videoName: "",
+      timestamp: 0,
+      attributes: {},
+      sensor: -1
+    }
+    const config = { categories: [{ name: "lane" }], attributes: [] }
+    correctAnnotationsMock.mockClear()
+
+    const offRes = fakeRes()
+    await listeners.openEditSessionHandler(
+      fakeReq({
+        sessionId: "550e8400-e29b-41d4-a716-446655440003",
+        annotations: { frames: [frame], config }
+      }),
+      offRes
+    )
+    expect(offRes.statusCode).toBe(200)
+    expect(correctAnnotationsMock).not.toHaveBeenCalled()
+
+    const onRes = fakeRes()
+    await listeners.openEditSessionHandler(
+      fakeReq({
+        sessionId: "550e8400-e29b-41d4-a716-446655440004",
+        autoCorrect: true,
+        annotations: { frames: [frame], config }
+      }),
+      onRes
+    )
+    expect(onRes.statusCode).toBe(200)
+    expect(correctAnnotationsMock).toHaveBeenCalledTimes(1)
+
+    // The session's task was built from the corrector's output (one merged
+    // label), not from the two original lines. Read the task file directly:
+    // loadState goes through the automocked Redis client, which returns
+    // nothing useful here.
+    const task = fs.readJsonSync(
+      path.join(
+        dataDir,
+        "projects",
+        "embed_550e8400-e29b-41d4-a716-446655440004",
+        "tasks",
+        "000000.json"
+      )
+    ) as { items: Array<{ labels: Record<string, unknown> }> }
+    expect(Object.keys(task.items[0].labels)).toHaveLength(1)
   })
 })
 

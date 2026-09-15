@@ -10,6 +10,9 @@
  */
 
 import * as fs from "fs"
+import * as http from "http"
+import * as https from "https"
+import * as os from "os"
 import * as path from "path"
 
 import { ItemExport } from "../../types/export"
@@ -52,6 +55,11 @@ export interface Options {
   flagDistance: number
   /** root for relative image paths */
   imageRoot: string
+  /**
+   * When a frame's image is not on disk but its `url` is http(s), download
+   * it for the clamp stage. Embedded sessions pass images this way.
+   */
+  fetchRemote: boolean
 }
 
 /** The measured-sane defaults. */
@@ -64,8 +72,100 @@ export function defaultOptions(): Options {
     minAngle: DEFAULT_MIN_ANGLE,
     inset: DEFAULT_INSET,
     flagDistance: DEFAULT_FLAG_DISTANCE,
-    imageRoot: ""
+    imageRoot: "",
+    fetchRemote: true
   }
+}
+
+/** How long one image download may take. */
+export const REMOTE_FETCH_TIMEOUT_MS = 60000
+
+/** Largest image download accepted. */
+export const REMOTE_FETCH_MAX_BYTES = 1024 * 1024 * 1024
+
+/** Redirects followed before giving up. */
+const REMOTE_FETCH_MAX_REDIRECTS = 5
+
+/**
+ * Whether a frame url points at a web resource rather than a file.
+ *
+ * @param url the frame url
+ */
+export function isRemoteUrl(url: unknown): url is string {
+  return typeof url === "string" && /^https?:\/\//i.test(url)
+}
+
+/**
+ * Download an http(s) image to a temporary file.
+ *
+ * Streams to disk with a byte cap and a timeout, following a few redirects.
+ * Rejects on any failure; the caller reports it and skips the clamp stage.
+ *
+ * @param url the image url
+ * @param timeoutMs abort after this long
+ * @param maxBytes abort beyond this many bytes
+ */
+export async function fetchImageToTemp(
+  url: string,
+  timeoutMs: number = REMOTE_FETCH_TIMEOUT_MS,
+  maxBytes: number = REMOTE_FETCH_MAX_BYTES
+): Promise<string> {
+  const dir = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "annotation-fix-image-")
+  )
+  const pathExt = path.extname(new URL(url).pathname)
+  const ext = pathExt === "" ? ".img" : pathExt
+  const file = path.join(dir, `image${ext}`)
+
+  const download = async (target: string, redirects: number): Promise<void> =>
+    await new Promise((resolve, reject) => {
+      const client = target.startsWith("https") ? https : http
+      const request = client.get(target, (response) => {
+        const status = response.statusCode ?? 0
+        const location = response.headers.location
+        if (status >= 300 && status < 400 && location !== undefined) {
+          response.resume()
+          if (redirects >= REMOTE_FETCH_MAX_REDIRECTS) {
+            reject(new Error("too many redirects"))
+            return
+          }
+          download(new URL(location, target).toString(), redirects + 1).then(
+            resolve,
+            reject
+          )
+          return
+        }
+        if (status !== 200) {
+          response.resume()
+          reject(new Error(`HTTP ${status}`))
+          return
+        }
+        let received = 0
+        const out = fs.createWriteStream(file)
+        response.on("data", (chunk: Buffer) => {
+          received += chunk.length
+          if (received > maxBytes) {
+            request.destroy(new Error("image exceeds the size limit"))
+          }
+        })
+        response.on("error", reject)
+        out.on("error", reject)
+        out.on("finish", resolve)
+        response.pipe(out)
+      })
+      request.setTimeout(timeoutMs, () => {
+        request.destroy(new Error(`timed out after ${timeoutMs}ms`))
+      })
+      request.on("error", reject)
+    })
+
+  try {
+    await download(url, 0)
+  } catch (error) {
+    await fs.promises.rm(dir, { recursive: true, force: true })
+    throw error
+  }
+  return file
 }
 
 /** What happened to one frame. */
@@ -202,7 +302,19 @@ export async function processFrame(
   }
 
   if (options.clamp) {
-    const imagePath = resolveImagePath(name, options.imageRoot)
+    let imagePath = resolveImagePath(name, options.imageRoot)
+    let tempFile: string | null = null
+    if (imagePath === null && options.fetchRemote && isRemoteUrl(frame.url)) {
+      // Embedded sessions hand over a signed URL instead of a local file.
+      try {
+        tempFile = await fetchImageToTemp(frame.url)
+        imagePath = tempFile
+      } catch (error) {
+        report.error = `image download failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      }
+    }
     if (imagePath === null) {
       report.imageFound = false
     } else {
@@ -222,6 +334,12 @@ export async function processFrame(
             ? `${error.name}: ${error.message}`
             : String(error)
       }
+    }
+    if (tempFile !== null) {
+      await fs.promises.rm(path.dirname(tempFile), {
+        recursive: true,
+        force: true
+      })
     }
   }
 

@@ -1,5 +1,6 @@
 /** @jest-environment node */
 import * as fs from "fs"
+import * as http from "http"
 import * as os from "os"
 import * as path from "path"
 
@@ -185,6 +186,108 @@ test("a missing image skips clamping but still connects", async () => {
     roiCoverage: null,
     clamped: 0,
     merged: 1
+  })
+})
+
+describe("remote images", () => {
+  let server: http.Server
+  let base: string
+
+  beforeAll(async () => {
+    server = http.createServer((req, res) => {
+      // Signed URLs carry a query string; route on the path alone.
+      const pathname = new URL(req.url ?? "/", "http://x").pathname
+      if (pathname === "/frame.png") {
+        res.writeHead(200, { "Content-Type": "image/png" })
+        fs.createReadStream(path.join(dir, "items", "frame.png")).pipe(res)
+      } else if (pathname === "/moved.png") {
+        res.writeHead(302, { Location: "/frame.png" })
+        res.end()
+      } else {
+        res.writeHead(404)
+        res.end("nope")
+      }
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address() as { port: number }
+    base = `http://127.0.0.1:${address.port}`
+  })
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  test("downloads the frame url when the image is not on disk", async () => {
+    const frames: Frame[] = [
+      {
+        name: "not-here.png",
+        url: `${base}/moved.png?sig=abc`,
+        labels: [
+          line("a", "lane", [
+            [2, 5],
+            [24, 5]
+          ])
+        ]
+      }
+    ]
+    const [out, report] = await processDocument(frames, {
+      ...defaultOptions(),
+      imageRoot: dir
+    })
+    const dict = reportToDict(report)
+    expect(dict.frames[0]).toMatchObject({
+      imageFound: true,
+      clamped: 1,
+      error: null
+    })
+    expect(dict.frames[0].roiCoverage).toBeCloseTo(20 / 30, 5)
+    const v = (out as Frame[])[0].labels?.[0].poly2d?.[0].vertices ?? []
+    expect(v[1][0]).toBeCloseTo(17.5, 9)
+    expect(
+      fs
+        .readdirSync(os.tmpdir())
+        .filter((n) => n.startsWith("annotation-fix-image-"))
+    ).toHaveLength(0)
+  })
+
+  test("a failed download skips the clamp but still connects", async () => {
+    const frames: Frame[] = [
+      {
+        name: "not-here.png",
+        url: `${base}/missing.png`,
+        labels: [
+          line("a", "lane", [
+            [0, 0],
+            [100, 0]
+          ]),
+          line("b", "lane", [
+            [104, 0],
+            [200, 0]
+          ])
+        ]
+      }
+    ]
+    const [out, report] = await processDocument(frames, {
+      ...defaultOptions(),
+      imageRoot: dir
+    })
+    const dict = reportToDict(report)
+    expect(dict.frames[0].imageFound).toBe(false)
+    expect(dict.frames[0].error).toContain("HTTP 404")
+    expect(dict.frames[0].merged).toBe(1)
+    expect((out as Frame[])[0].labels).toHaveLength(1)
+  })
+
+  test("fetchRemote=false never touches the network", async () => {
+    const frames: Frame[] = [
+      { name: "not-here.png", url: `${base}/frame.png`, labels: [] }
+    ]
+    const [, report] = await processDocument(frames, {
+      ...defaultOptions(),
+      imageRoot: dir,
+      fetchRemote: false
+    })
+    expect(report.frames[0].imageFound).toBe(false)
+    expect(report.frames[0].error).toBeNull()
   })
 })
 
