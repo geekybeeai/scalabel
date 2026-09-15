@@ -1,9 +1,49 @@
-import AWS from "aws-sdk"
+import {
+  BucketLocationConstraint,
+  CreateBucketCommand,
+  DeleteBucketCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadBucketCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
+  ListObjectsV2CommandOutput,
+  PutObjectCommand,
+  S3Client,
+  waitUntilObjectNotExists
+} from "@aws-sdk/client-s3"
+import { fromEnv, fromIni, fromProcess } from "@aws-sdk/credential-providers"
+import { AwsCredentialIdentity, Provider } from "@aws-sdk/types"
 import _ from "lodash"
 import * as path from "path"
 
 import Logger from "./logger"
 import { Storage } from "./storage"
+
+/**
+ * Build a credential provider that only consults local sources
+ * (environment, shared ini files, credential process) so that requests do not
+ * hang on EC2/ECS metadata lookups when credentials are missing.
+ * Mirrors the explicit provider chain used with SDK v2.
+ */
+function localCredentialChain(): Provider<AwsCredentialIdentity> {
+  const providers: Array<Provider<AwsCredentialIdentity>> = [
+    fromEnv(),
+    fromIni(),
+    fromProcess()
+  ]
+  return async () => {
+    let lastError: unknown = new Error("No AWS credentials found")
+    for (const provider of providers) {
+      try {
+        return await provider()
+      } catch (error) {
+        lastError = error
+      }
+    }
+    throw lastError
+  }
+}
 
 /**
  * Implements local file storage
@@ -14,7 +54,7 @@ export class S3Storage extends Storage {
   /** the bucket name */
   protected bucketName: string
   /** the aws s3 client */
-  protected s3: AWS.S3
+  protected s3: S3Client
 
   /**
    * Constructor
@@ -41,25 +81,11 @@ export class S3Storage extends Storage {
     this.region = info[0]
     this.bucketName = bucketPath[0]
 
-    /**
-     * To prevent requests hanging from invalid credentials,
-     * Only check local credential services (not EC2/ECS ones)
-     * See here for the difference from default:
-     * https://docs.aws.amazon.com/AWSJavaScriptSDK/
-     * latest/AWS/CredentialProviderChain.html
-     */
-    const chain = new AWS.CredentialProviderChain()
-    chain.providers = [
-      new AWS.EnvironmentCredentials("AWS"),
-      new AWS.EnvironmentCredentials("AMAZON"),
-      new AWS.SharedIniFileCredentials(),
-      new AWS.ProcessCredentials()
-    ]
-
-    this.s3 = new AWS.S3({
-      credentialProvider: chain,
-      httpOptions: { connectTimeout: 10000 },
-      maxRetries: 5
+    this.s3 = new S3Client({
+      region: this.region,
+      credentials: localCredentialChain(),
+      requestHandler: { connectionTimeout: 10000 },
+      maxAttempts: 6
     })
   }
 
@@ -70,15 +96,20 @@ export class S3Storage extends Storage {
     // Create new bucket if there isn't one already (wait until it exists)
     const hasBucket = await this.hasBucket()
     if (!hasBucket) {
-      const bucketParams = {
-        Bucket: this.bucketName,
-        CreateBucketConfiguration: {
-          LocationConstraint: this.region
-        }
-      }
       Logger.info(`Creating Bucket ${this.bucketName}`)
       try {
-        await this.s3.createBucket(bucketParams).promise()
+        await this.s3.send(
+          new CreateBucketCommand({
+            Bucket: this.bucketName,
+            CreateBucketConfiguration: {
+              // us-east-1 must not be passed as a location constraint
+              LocationConstraint:
+                this.region === "us-east-1"
+                  ? undefined
+                  : (this.region as BucketLocationConstraint)
+            }
+          })
+        )
       } catch (error) {
         Logger.error(error as Error)
       }
@@ -89,11 +120,8 @@ export class S3Storage extends Storage {
    * Remove the bucket
    */
   public async removeBucket(): Promise<void> {
-    const params = {
-      Bucket: this.bucketName
-    }
     Logger.info(`Deleting Bucket ${this.bucketName}`)
-    await this.s3.deleteBucket(params).promise()
+    await this.s3.send(new DeleteBucketCommand({ Bucket: this.bucketName }))
   }
 
   /**
@@ -103,12 +131,13 @@ export class S3Storage extends Storage {
    * @param key
    */
   public async hasKey(key: string): Promise<boolean> {
-    const params = {
-      Bucket: this.bucketName,
-      Key: this.fullFile(key)
-    }
     try {
-      await this.s3.headObject(params).promise()
+      await this.s3.send(
+        new HeadObjectCommand({
+          Bucket: this.bucketName,
+          Key: this.fullFile(key)
+        })
+      )
       return true
     } catch (_error) {
       return false
@@ -126,26 +155,18 @@ export class S3Storage extends Storage {
     prefix: string
   ): Promise<[string[], string[]]> {
     const fullPrefix = this.fullDir(prefix)
-    let continuationToken = ""
+    let continuationToken: string | undefined
 
     let dirKeys = []
     let fileKeys = []
     for (;;) {
-      let data
-      if (continuationToken.length > 0) {
-        const params = {
+      const data: ListObjectsV2CommandOutput = await this.s3.send(
+        new ListObjectsV2Command({
           Bucket: this.bucketName,
           Prefix: fullPrefix,
           ContinuationToken: continuationToken
-        }
-        data = await this.s3.listObjectsV2(params).promise()
-      } else {
-        const params = {
-          Bucket: this.bucketName,
-          Prefix: fullPrefix
-        }
-        data = await this.s3.listObjectsV2(params).promise()
-      }
+        })
+      )
 
       if (data.Contents !== undefined) {
         for (const key of data.Contents) {
@@ -180,9 +201,7 @@ export class S3Storage extends Storage {
         break
       }
 
-      if (data.NextContinuationToken !== undefined) {
-        continuationToken = data.NextContinuationToken
-      }
+      continuationToken = data.NextContinuationToken
     }
 
     dirKeys = _.uniq(dirKeys)
@@ -223,12 +242,13 @@ export class S3Storage extends Storage {
    * @param json
    */
   public async save(key: string, json: string): Promise<void> {
-    const params = {
-      Body: json,
-      Bucket: this.bucketName,
-      Key: this.fullFile(key)
-    }
-    await this.s3.putObject(params).promise()
+    await this.s3.send(
+      new PutObjectCommand({
+        Body: json,
+        Bucket: this.bucketName,
+        Key: this.fullFile(key)
+      })
+    )
   }
 
   /**
@@ -238,21 +258,18 @@ export class S3Storage extends Storage {
    * @param key
    */
   public async load(key: string): Promise<string> {
-    const params: AWS.S3.GetObjectRequest = {
-      Bucket: this.bucketName,
-      Key: this.fullFile(key)
-    }
+    const fullKey = this.fullFile(key)
 
     if (!(await this.hasKey(key))) {
-      throw new Error(`Key '${params.Key}' does not exist`)
+      throw new Error(`Key '${fullKey}' does not exist`)
     }
-    const data = await this.s3.getObject(params).promise()
+    const data = await this.s3.send(
+      new GetObjectCommand({ Bucket: this.bucketName, Key: fullKey })
+    )
     if (data.Body === undefined) {
-      throw new Error(`No data at key '${params.Key}'`)
+      throw new Error(`No data at key '${fullKey}'`)
     } else {
-      // This eslint problem seems to be a type error in s3
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      return data.Body.toString()
+      return await data.Body.transformToString()
     }
   }
 
@@ -273,10 +290,12 @@ export class S3Storage extends Storage {
         Bucket: this.bucketName,
         Key: this.fullFile(subKey)
       }
-      const deletePromise = this.s3.deleteObject(params).promise()
       promises.push(
-        deletePromise.then(async () => {
-          await this.s3.waitFor("objectNotExists", params).promise()
+        this.s3.send(new DeleteObjectCommand(params)).then(async () => {
+          await waitUntilObjectNotExists(
+            { client: this.s3, maxWaitTime: 100 },
+            params
+          )
         })
       )
     }
@@ -295,23 +314,20 @@ export class S3Storage extends Storage {
    * @param key
    */
   public async mkdir(key: string): Promise<void> {
-    const params = {
-      Bucket: this.bucketName,
-      Key: this.fullDir(key) + "/"
-    }
-    await this.s3.putObject(params).promise()
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: this.fullDir(key) + "/"
+      })
+    )
   }
 
   /**
    * Checks if bucket exists
    */
   private async hasBucket(): Promise<boolean> {
-    const params = {
-      Bucket: this.bucketName
-    }
-
     try {
-      await this.s3.headBucket(params).promise()
+      await this.s3.send(new HeadBucketCommand({ Bucket: this.bucketName }))
       return true
     } catch (error) {
       return false

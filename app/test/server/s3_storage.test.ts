@@ -1,4 +1,8 @@
-import AWS from "aws-sdk"
+import {
+  DeleteObjectCommand,
+  HeadObjectCommand,
+  S3Client
+} from "@aws-sdk/client-s3"
 import * as path from "path"
 
 import { index2str } from "../../src/common/util"
@@ -6,10 +10,10 @@ import { STORAGE_FOLDERS, StorageStructure } from "../../src/const/storage"
 import { getProjectKey, getTaskKey, hostname, now } from "../../src/server/path"
 import { S3Storage } from "../../src/server/s3_storage"
 
-const s3 = new AWS.S3()
+const bucketRegion = "us-west-2"
+const s3 = new S3Client({ region: bucketRegion })
 const projectName = "test"
 const storageName = `${hostname()}_${now()}`
-const bucketRegion = "us-west-2"
 const bucketName = `scalabel-test-tmp-${Date.now()}`
 let storage: S3Storage
 
@@ -51,7 +55,7 @@ async function pathExists(key: string): Promise<boolean> {
     Key: key
   }
   try {
-    await s3.headObject(params).promise()
+    await s3.send(new HeadObjectCommand(params))
     return true
   } catch (_error) {
     return false
@@ -215,7 +219,7 @@ afterAll(async () => {
       Bucket: bucketName,
       Key: folder
     }
-    await s3.deleteObject(params).promise()
+    await s3.send(new DeleteObjectCommand(params))
   }
   await storage.removeBucket()
 }, 20000)

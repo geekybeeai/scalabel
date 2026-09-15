@@ -38,11 +38,11 @@ describe("Test sync middleware routes actions to synchronizer", () => {
     Session.dispatch(action.registerSession(state))
 
     // Frontend doesn't know session id until after registration ack
-    expect(connectSpy).toBeCalledTimes(1)
-    expect(connectSpy).toBeCalledWith("", expect.any(Function))
+    expect(connectSpy).toHaveBeenCalledTimes(1)
+    expect(connectSpy).toHaveBeenCalledWith("", expect.any(Function))
 
-    expect(registerSpy).toBeCalledTimes(1)
-    expect(registerSpy).toBeCalledWith(
+    expect(registerSpy).toHaveBeenCalledTimes(1)
+    expect(registerSpy).toHaveBeenCalledWith(
       state,
       autosave,
       sessionId,
@@ -59,8 +59,8 @@ describe("Test sync middleware routes actions to synchronizer", () => {
     Session.dispatch(action.registerSession(state))
     Session.dispatch(action.connect())
 
-    expect(registerSpy).toBeCalledTimes(1)
-    expect(registerSpy).toBeCalledWith(
+    expect(registerSpy).toHaveBeenCalledTimes(1)
+    expect(registerSpy).toHaveBeenCalledWith(
       state,
       autosave,
       sessionId,
@@ -69,8 +69,8 @@ describe("Test sync middleware routes actions to synchronizer", () => {
     )
 
     // After initial state is registered, sessionId is available
-    expect(connectSpy).toBeCalledTimes(1)
-    expect(connectSpy).toBeCalledWith(sessionId, expect.any(Function))
+    expect(connectSpy).toHaveBeenCalledTimes(1)
+    expect(connectSpy).toHaveBeenCalledWith(sessionId, expect.any(Function))
   })
 
   test("Handles disconnection", () => {
@@ -79,8 +79,8 @@ describe("Test sync middleware routes actions to synchronizer", () => {
 
     Session.dispatch(action.disconnect())
 
-    expect(disconnectSpy).toBeCalledTimes(1)
-    expect(disconnectSpy).toBeCalledWith(expect.any(Function))
+    expect(disconnectSpy).toHaveBeenCalledTimes(1)
+    expect(disconnectSpy).toHaveBeenCalledWith(expect.any(Function))
   })
 
   test("Handles save", () => {
@@ -89,8 +89,8 @@ describe("Test sync middleware routes actions to synchronizer", () => {
 
     Session.dispatch(action.save())
 
-    expect(saveSpy).toBeCalledTimes(1)
-    expect(saveSpy).toBeCalledWith(sessionId, bots, expect.any(Function))
+    expect(saveSpy).toHaveBeenCalledTimes(1)
+    expect(saveSpy).toHaveBeenCalledWith(sessionId, bots, expect.any(Function))
   })
 
   test("Handles action broadcast", () => {
@@ -109,8 +109,8 @@ describe("Test sync middleware routes actions to synchronizer", () => {
     }
     Session.dispatch(action.receiveBroadcast(message))
 
-    expect(broadcastSpy).toBeCalledTimes(1)
-    expect(broadcastSpy).toBeCalledWith(
+    expect(broadcastSpy).toHaveBeenCalledTimes(1)
+    expect(broadcastSpy).toHaveBeenCalledWith(
       message,
       sessionId,
       expect.any(Function)
@@ -125,8 +125,8 @@ describe("Test sync middleware routes actions to synchronizer", () => {
     Session.dispatch(addBoxAction)
 
     // 2 actions: addBox, and session status update
-    expect(logSpy).toBeCalledTimes(2)
-    expect(logSpy).toBeCalledWith(
+    expect(logSpy).toHaveBeenCalledTimes(2)
+    expect(logSpy).toHaveBeenCalledWith(
       addBoxAction,
       autosave,
       sessionId,

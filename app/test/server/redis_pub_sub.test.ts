@@ -22,15 +22,7 @@ afterAll(async () => {
 })
 
 describe("Test redis publish/subscribe functionality", () => {
-  test("Test register event", async (done) => {
-    await subscriber.subscribeRegisterEvent(
-      (_channel: string, message: string) => {
-        const receivedData = JSON.parse(message) as RegisterMessageType
-        expect(receivedData).toEqual(sentData)
-        done()
-      }
-    )
-
+  test("Test register event", async () => {
     const sentData: RegisterMessageType = {
       projectName: "projectName",
       taskIndex: 0,
@@ -39,6 +31,16 @@ describe("Test redis publish/subscribe functionality", () => {
       address: "address",
       bot: false
     }
+    const received = new Promise<RegisterMessageType>((resolve) => {
+      void subscriber.subscribeRegisterEvent(
+        (_channel: string, message: string) => {
+          resolve(JSON.parse(message) as RegisterMessageType)
+        }
+      )
+    })
+    // Wait for the subscription before publishing
+    await new Promise((resolve) => setTimeout(resolve, 200))
     publisher.publishRegisterEvent(sentData)
+    expect(await received).toEqual(sentData)
   })
 })

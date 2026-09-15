@@ -1,10 +1,5 @@
 import { ThemeProvider } from "@material-ui/core/styles"
-import {
-  cleanup,
-  fireEvent,
-  render,
-  waitForElement
-} from "@testing-library/react"
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react"
 import axios from "axios"
 import { createCanvas } from "canvas"
 import * as child from "child_process"
@@ -105,7 +100,7 @@ test("project creation", async () => {
   const submitButton = getByTestId("submit-button")
   fireEvent.click(submitButton)
   await Promise.race([
-    waitForElement(() => getByTestId("hidden-buttons")),
+    waitFor(() => getByTestId("hidden-buttons")),
     sleep(submissionTimeout)
   ])
 })
@@ -138,9 +133,13 @@ test(
     )
     const saveButton = getByTestId("Save")
     const labelCanvas = createCanvas(200, 200)
-    const labelContext = labelCanvas.getContext("2d")
+    const labelContext = labelCanvas.getContext(
+      "2d"
+    ) as unknown as CanvasRenderingContext2D
     const controlCanvas = createCanvas(200, 200)
-    const controlContext = controlCanvas.getContext("2d")
+    const controlContext = controlCanvas.getContext(
+      "2d"
+    ) as unknown as CanvasRenderingContext2D
     const handleIndex = 0
     const _labelIndex = -2
     let state = Session.getState()
@@ -253,7 +252,7 @@ test("import exported json from saved bounding boxes", async () => {
   const submitButton = getByTestId("submit-button")
   fireEvent.click(submitButton)
   await Promise.race([
-    waitForElement(() => getByTestId("hidden-buttons")),
+    waitFor(() => getByTestId("hidden-buttons")),
     sleep(submissionTimeout)
   ])
 })

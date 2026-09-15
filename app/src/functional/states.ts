@@ -1,4 +1,3 @@
-import { bool } from "aws-sdk/clients/signer"
 import _ from "lodash"
 
 import { uid } from "../common/uid"
@@ -113,12 +112,12 @@ export function makeTrack(
  * @param {string} shapeType type name of the shape
  * @param params
  * @param {boolean} newId create new id even if it is in params
- * @param {bool} new
+ * @param {boolean} new
  */
 export function makeShape(
   shapeType: string = "",
   params: Partial<ShapeType> = {},
-  newId: bool = true
+  newId: boolean = true
 ): ShapeType {
   const shape = {
     label: [],
@@ -140,7 +139,7 @@ export function makeShape(
  */
 export function makeRect(
   params: Partial<RectType> = {},
-  newId: bool = true
+  newId: boolean = true
 ): RectType {
   return {
     x1: -1,
@@ -730,7 +729,7 @@ export function makeState(params: Partial<State> = {}): State {
  *
  * @param {IdType} id
  */
-export function isValidId(id: IdType): bool {
+export function isValidId(id: IdType): boolean {
   return id !== INVALID_ID && id !== "-1"
 }
 

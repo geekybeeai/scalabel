@@ -36,7 +36,7 @@ describe("test middleware", () => {
  *
  * @param f - the parsed file(s)
  */
-function expectSingleFile(f: File | File[]): void {
+function expectSingleFile(f: File | File[] | undefined): void {
   expect(f).toBeInstanceOf(File)
 
   // formidable once changed its public API from using `path` to `filepath`.

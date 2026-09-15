@@ -1,5 +1,5 @@
 import axios from "axios"
-import io from "socket.io-client"
+import { io } from "socket.io-client"
 
 import { configureStore } from "../../src/common/configure_store"
 import { uid } from "../../src/common/uid"
@@ -28,6 +28,7 @@ import {
  * They should return the same number of prediction actions as request actions
  */
 jest.mock("axios")
+jest.mock("socket.io-client", () => ({ io: jest.fn() }))
 axios.post = jest
   .fn()
   .mockImplementation((_endpoint: string, data: ItemExport[]) => {
@@ -57,7 +58,7 @@ let projectName: string
 let initialState: State
 
 beforeAll(() => {
-  io.connect = jest.fn().mockImplementation(() => mockSocket)
+  ;(io as unknown as jest.Mock).mockImplementation(() => mockSocket)
   projectName = "testProject"
   botData = {
     taskIndex: 0,

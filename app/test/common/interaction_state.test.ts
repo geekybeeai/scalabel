@@ -35,9 +35,9 @@ describe("interaction_state", () => {
     const cb = jest.fn()
     onIdle(cb)
     notifyGesture()
-    expect(cb).not.toBeCalled()
+    expect(cb).not.toHaveBeenCalled()
     jest.advanceTimersByTime(IDLE_MS)
-    expect(cb).toBeCalledTimes(1)
+    expect(cb).toHaveBeenCalledTimes(1)
   })
 
   test("onIdle returns an unsubscribe", () => {
@@ -46,6 +46,6 @@ describe("interaction_state", () => {
     off()
     notifyGesture()
     jest.advanceTimersByTime(IDLE_MS)
-    expect(cb).not.toBeCalled()
+    expect(cb).not.toHaveBeenCalled()
   })
 })

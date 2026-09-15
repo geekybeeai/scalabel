@@ -2,7 +2,6 @@ import "source-map-support/register"
 
 import * as child from "child_process"
 import express, { Application, NextFunction, Request, Response } from "express"
-import formidable from "formidable"
 import { createServer } from "http"
 import { Server } from "socket.io"
 
@@ -18,7 +17,11 @@ import { Hub } from "./hub"
 import { Listeners } from "./listeners"
 import Logger from "./logger"
 import auth from "./middleware/cognitoAuth"
-import { multipartFormData as formDataMiddleware } from "./middleware/multipart"
+import {
+  Fields,
+  Files,
+  multipartFormData as formDataMiddleware
+} from "./middleware/multipart"
 import errorHandler from "./middleware/errorHandler"
 import { getAbsSrcPath, getRedisConf, HTML_DIRS } from "./path"
 import { ProjectStore } from "./project_store"
@@ -35,8 +38,8 @@ declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
-      fields?: formidable.Fields
-      files?: formidable.Files
+      fields?: Fields
+      files?: Files
     }
   }
 }

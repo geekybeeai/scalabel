@@ -1,5 +1,3 @@
-import { promisify } from "util"
-
 import { RedisConfig } from "../types/config"
 import Logger from "./logger"
 import * as path from "./path"
@@ -74,13 +72,12 @@ export class RedisCache {
     }
     setArgs.forEach((v) => {
       if (v[2] > 0) {
-        multi.psetex(v[0], v[2] * 1000, v[1])
+        multi.pSetEx(v[0], v[2] * 1000, v[1])
       } else {
         multi.set(v[0], v[1])
       }
     })
-    const multiExecAsync = promisify(multi.exec).bind(multi)
-    await multiExecAsync()
+    await multi.exec()
   }
 
   /**

@@ -18,18 +18,20 @@ export async function readConfig(): Promise<ServerConfig> {
    */
 
   // Read the config file name from argv
-  const argv = yargs.options({
-    config: {
-      type: "string",
-      demandOption: true,
-      describe: "Config file path."
-    },
-    dev: {
-      type: "boolean",
-      default: false,
-      describe: "Turn on developer mode"
-    }
-  }).argv
+  const argv = yargs
+    .options({
+      config: {
+        type: "string",
+        demandOption: true,
+        describe: "Config file path."
+      },
+      dev: {
+        type: "boolean",
+        default: false,
+        describe: "Turn on developer mode"
+      }
+    })
+    .parseSync()
   if (argv.dev) {
     Logger.setLogLevel("debug")
   }

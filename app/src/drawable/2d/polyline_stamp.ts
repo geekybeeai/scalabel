@@ -36,9 +36,9 @@ import {
   captureTemplate,
   CustomTemplate,
   DEFAULT_STAMP_OPTIONS,
-  StampOptions,
   stampAlongPath
 } from "./polyline_stamp_geometry"
+import type { StampOptions } from "./polyline_stamp_geometry"
 
 /** Outcome of a stamp attempt, mapped to user feedback by the caller. */
 export interface StampResult {

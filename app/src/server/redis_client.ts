@@ -1,8 +1,14 @@
-import * as redis from "redis"
-import { promisify } from "util"
+import { createClient } from "redis"
 
 import { RedisConfig } from "../types/config"
 import Logger from "./logger"
+
+/** The node-redis client type */
+type Client = ReturnType<typeof createClient>
+/** The node-redis multi (transaction) type */
+export type RedisMulti = ReturnType<Client["multi"]>
+/** Message handler signature: (channel, message) */
+type MessageHandler = (channel: string, value: string) => void
 
 /**
  * Exposes promisified versions of the necessary methods on a redis client
@@ -10,9 +16,15 @@ import Logger from "./logger"
  */
 export class RedisClient {
   /** The redis client for standard key value ops */
-  protected client: redis.RedisClient
+  protected client: Client
   /** The redis client for pub/sub of events */
-  protected pubSub: redis.RedisClient
+  protected pubSub: Client
+  /** Resolves once both clients have attempted to connect */
+  protected ready: Promise<void>
+  /** Handlers registered via on("message") */
+  protected messageHandlers: MessageHandler[]
+  /** Handlers registered via on("subscribe") */
+  protected subscribeHandlers: Array<() => void>
 
   /**
    * Constructor
@@ -21,19 +33,26 @@ export class RedisClient {
    * @param withLogging
    */
   constructor(config: RedisConfig, withLogging = false) {
-    this.client = redis.createClient(config.port)
-    this.pubSub = redis.createClient(config.port)
+    const options = { socket: { host: "127.0.0.1", port: config.port } }
+    this.client = createClient(options)
+    this.pubSub = createClient(options)
+    this.messageHandlers = []
+    this.subscribeHandlers = []
 
-    this.client.on("error", (err: Error) => {
+    const onError = (err: Error): void => {
       if (withLogging) {
         Logger.error(err)
       }
-    })
-    this.pubSub.on("error", (err: Error) => {
-      if (withLogging) {
-        Logger.error(err)
-      }
-    })
+    }
+    this.client.on("error", onError)
+    this.pubSub.on("error", onError)
+
+    // Connection failures are reported through the error handlers above;
+    // callers keep the same fire-and-forget semantics as before.
+    this.ready = Promise.all([
+      this.client.connect().catch(onError),
+      this.pubSub.connect().catch(onError)
+    ]).then(() => undefined)
   }
 
   /**
@@ -43,11 +62,14 @@ export class RedisClient {
    * @param event
    * @param callback
    */
-  public on(
-    event: string,
-    callback: (channel: string, value: string) => void
-  ): void {
-    this.pubSub.on(event, callback)
+  public on(event: string, callback: MessageHandler): void {
+    if (event === "message") {
+      this.messageHandlers.push(callback)
+    } else if (event === "subscribe") {
+      this.subscribeHandlers.push(callback as unknown as () => void)
+    } else {
+      this.pubSub.on(event, callback)
+    }
   }
 
   /**
@@ -56,7 +78,18 @@ export class RedisClient {
    * @param channel
    */
   public subscribe(channel: string): void {
-    this.pubSub.subscribe(channel)
+    void this.ready
+      .then(async () => {
+        await this.pubSub.subscribe(channel, (message: string, ch: string) => {
+          for (const handler of this.messageHandlers) {
+            handler(ch, message)
+          }
+        })
+        for (const handler of this.subscribeHandlers) {
+          handler()
+        }
+      })
+      .catch((err: Error) => Logger.error(err))
   }
 
   /**
@@ -66,7 +99,9 @@ export class RedisClient {
    * @param message
    */
   public publish(channel: string, message: string): void {
-    this.pubSub.publish(channel, message)
+    void this.ready
+      .then(async () => await this.client.publish(channel, message))
+      .catch((err: Error) => Logger.error(err))
   }
 
   /**
@@ -75,11 +110,12 @@ export class RedisClient {
    * @param key
    */
   public async del(key: string): Promise<void> {
-    this.client.del(key)
+    await this.ready
+    await this.client.del(key)
   }
 
   /** Start an atomic transaction */
-  public multi(): redis.Multi {
+  public multi(): RedisMulti {
     return this.client.multi()
   }
 
@@ -89,9 +125,8 @@ export class RedisClient {
    * @param key
    */
   public async get(key: string): Promise<string | null> {
-    const redisGetAsync = promisify(this.client.get).bind(this.client)
-    const redisValue: string | null = await redisGetAsync(key)
-    return redisValue
+    await this.ready
+    return await this.client.get(key)
   }
 
   /**
@@ -100,15 +135,8 @@ export class RedisClient {
    * @param key
    */
   public async exists(key: string): Promise<boolean> {
-    return await new Promise((resolve) => {
-      this.client.exists(key, (_err: Error | null, exists: number) => {
-        if (exists === 0) {
-          resolve(false)
-        } else {
-          resolve(true)
-        }
-      })
-    })
+    await this.ready
+    return (await this.client.exists(key)) !== 0
   }
 
   /**
@@ -118,7 +146,8 @@ export class RedisClient {
    * @param value
    */
   public async setAdd(key: string, value: string): Promise<void> {
-    this.client.sadd(key, value)
+    await this.ready
+    await this.client.sAdd(key, value)
   }
 
   /**
@@ -128,7 +157,8 @@ export class RedisClient {
    * @param value
    */
   public async setRemove(key: string, value: string): Promise<void> {
-    this.client.srem(key, value)
+    await this.ready
+    await this.client.sRem(key, value)
   }
 
   /**
@@ -137,10 +167,8 @@ export class RedisClient {
    * @param key
    */
   public async getSetMembers(key: string): Promise<string[]> {
-    const redisSetMembersAsync = promisify(this.client.smembers).bind(
-      this.client
-    )
-    return await redisSetMembersAsync(key)
+    await this.ready
+    return await this.client.sMembers(key)
   }
 
   /**
@@ -155,8 +183,8 @@ export class RedisClient {
     timeout: number,
     value: string
   ): Promise<void> {
-    const redisSetExAsync = promisify(this.client.psetex).bind(this.client)
-    await redisSetExAsync(key, timeout, value)
+    await this.ready
+    await this.client.pSetEx(key, timeout, value)
   }
 
   /**
@@ -166,8 +194,8 @@ export class RedisClient {
    * @param value
    */
   public async set(key: string, value: string): Promise<void> {
-    const redisSetAsync = promisify(this.client.set).bind(this.client)
-    await redisSetAsync(key, value)
+    await this.ready
+    await this.client.set(key, value)
   }
 
   /**
@@ -177,8 +205,8 @@ export class RedisClient {
    * @param prefix
    */
   public async getKeysWithPrefix(prefix: string): Promise<string[]> {
-    const redisGetKeysWithPrefix = promisify(this.client.keys).bind(this.client)
-    return await redisGetKeysWithPrefix(prefix + "*")
+    await this.ready
+    return await this.client.keys(prefix + "*")
   }
 
   /**
@@ -189,14 +217,25 @@ export class RedisClient {
    * @param value
    */
   public config(type: string, name: string, value: string): void {
-    this.client.on("ready", () => {
-      this.client.config(type, name, value)
-    })
+    void this.ready
+      .then(async () => {
+        if (type.toUpperCase() === "SET") {
+          await this.client.configSet(name, value)
+        }
+      })
+      .catch((err: Error) => Logger.error(err))
   }
 
   /** Close the connection to the server */
   public async close(): Promise<void> {
-    await promisify(this.client.quit).bind(this.client)()
-    await promisify(this.pubSub.quit).bind(this.pubSub)()
+    // Do not wait for `ready`: against an unreachable server the connect
+    // promise never settles, so tear the sockets down directly instead.
+    for (const c of [this.client, this.pubSub]) {
+      if (c.isOpen) {
+        await c.close()
+      } else {
+        c.destroy()
+      }
+    }
   }
 }

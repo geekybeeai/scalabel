@@ -1,8 +1,13 @@
 import { IncomingMessage } from "http"
 import { NextFunction, Request, Response } from "express"
-import formidable, { Fields, Files } from "formidable"
+import formidable, { File } from "formidable"
 
 const maxFileSize = 1000 * 1024 * 1024 // 1G
+
+/** Parsed text fields; single values are unwrapped from formidable's arrays */
+export type Fields = Record<string, string | string[] | undefined>
+/** Parsed files; single files are unwrapped from formidable's arrays */
+export type Files = Record<string, File | File[] | undefined>
 
 /**
  * A middleware to parse multipart/form-data request, after which two
@@ -26,6 +31,23 @@ export function multipartFormData(
 }
 
 /**
+ * Formidable v3 always returns arrays; collapse single-element arrays so
+ * downstream handlers keep receiving one value per field, as before.
+ *
+ * @param record
+ */
+function unwrapSingles<T>(
+  record: Record<string, T[] | undefined>
+): Record<string, T | T[] | undefined> {
+  const result: Record<string, T | T[] | undefined> = {}
+  for (const key of Object.keys(record)) {
+    const value = record[key]
+    result[key] = value !== undefined && value.length === 1 ? value[0] : value
+  }
+  return result
+}
+
+/**
  * Parse an incoming multipart/form-data request.
  *
  * @param req
@@ -33,16 +55,7 @@ export function multipartFormData(
 export async function parseMultipartFormData(
   req: IncomingMessage
 ): Promise<{ fields: Fields; files: Files }> {
-  return await new Promise((resolve, reject) => {
-    const form = new formidable.IncomingForm({ maxFileSize })
-    form.parse(req, (err, fields, files) => {
-      // `err` is defined as `any` by formidable.
-      // eslint-disable-next-line  @typescript-eslint/strict-boolean-expressions
-      if (err) {
-        reject(err)
-      } else {
-        resolve({ fields, files })
-      }
-    })
-  })
+  const form = formidable({ maxFileSize })
+  const [fields, files] = await form.parse(req)
+  return { fields: unwrapSingles(fields), files: unwrapSingles(files) }
 }

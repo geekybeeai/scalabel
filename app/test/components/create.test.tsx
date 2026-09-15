@@ -142,7 +142,7 @@ describe("Test element hiding", () => {
     const form = getByTestId("submit-button")
     expect(queryByTestId("hidden-buttons")).toBeNull()
     fireEvent.click(form)
-    expect(xhrMockClass.open).toBeCalled()
+    expect(xhrMockClass.open).toHaveBeenCalled()
   })
 })
 describe("Test user ability to change fields", () => {

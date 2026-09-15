@@ -1,5 +1,5 @@
 import axios, { AxiosRequestConfig } from "axios"
-import io from "socket.io-client"
+import { io, Socket } from "socket.io-client"
 
 import { configureStore } from "../common/configure_store"
 import { uid } from "../common/uid"
@@ -39,7 +39,7 @@ export class Bot {
   /** The store to save state */
   protected store: ReduxStore
   /** Socket connection */
-  protected socket: SocketIOClient.Socket
+  protected socket: Socket
   /** Timestamped log for completed actions */
   protected actionLog: BaseAction[]
   /** Log of packets that have been acked */
@@ -70,7 +70,7 @@ export class Bot {
     this.actionCount = 0
 
     // Create a socketio client
-    const socket = io.connect(this.address, {
+    const socket = io(this.address, {
       transports: ["websocket"],
       upgrade: false
     })

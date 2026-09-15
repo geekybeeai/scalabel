@@ -38,12 +38,13 @@ export class RedisPubSub {
     handler: (channel: string, message: string) => void
   ): Promise<void> {
     this.client.on("message", handler)
-    this.client.subscribe(this.registerEvent)
     // Make sure it's subscribed before any messages are published
-    return await new Promise((resolve) => {
+    const subscribed = new Promise<void>((resolve) => {
       this.client.on("subscribe", () => {
         resolve()
       })
     })
+    this.client.subscribe(this.registerEvent)
+    return await subscribed
   }
 }

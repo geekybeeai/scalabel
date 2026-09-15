@@ -1,5 +1,5 @@
 import FingerprintJS from "@fingerprintjs/fingerprintjs"
-import io from "socket.io-client"
+import { io, Socket } from "socket.io-client"
 
 import {
   connect,
@@ -71,7 +71,7 @@ export function initSessionForTask(
   devMode: boolean
 ): void {
   // Initialize socket connection to the backend
-  const socket = io.connect(location.origin, {
+  const socket = io(location.origin, {
     transports: ["websocket"],
     upgrade: false
   })
@@ -104,10 +104,7 @@ export function initSessionForTask(
  * @param store
  * @param socket
  */
-export function setSocketListeners(
-  store: FullStore,
-  socket: SocketIOClient.Socket
-): void {
+export function setSocketListeners(store: FullStore, socket: Socket): void {
   socket.on(EventName.CONNECT, () => {
     store.dispatch(connect())
   })

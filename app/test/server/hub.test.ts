@@ -102,14 +102,14 @@ describe("Test hub functionality", () => {
       bot: false
     }
     await hub.register(data, mockSocket)
-    expect(mockUserManager.registerUser).toBeCalledWith(
+    expect(mockUserManager.registerUser).toHaveBeenCalledWith(
       socketId,
       projectName,
       userId
     )
-    expect(mockPubSub.publishRegisterEvent).toBeCalledWith(data)
-    expect(mockSocket.join).toBeCalled()
-    expect(mockSocket.emit).toBeCalledWith(
+    expect(mockPubSub.publishRegisterEvent).toHaveBeenCalledWith(data)
+    expect(mockSocket.join).toHaveBeenCalled()
+    expect(mockSocket.emit).toHaveBeenCalledWith(
       EventName.REGISTER_ACK,
       getInitialState(sessionId)
     )
@@ -148,7 +148,7 @@ describe("Test hub functionality", () => {
       }
     }
     const newState = updateState(getInitialState(sessionId), [action])
-    expect(mockProjectStore.saveState).toBeCalledWith(
+    expect(mockProjectStore.saveState).toHaveBeenCalledWith(
       newState,
       projectName,
       taskId,
@@ -162,11 +162,11 @@ describe("Test hub functionality", () => {
       actions: [newAction],
       id: actionListId
     }
-    expect(broadcastFunc).toBeCalledWith(
+    expect(broadcastFunc).toHaveBeenCalledWith(
       EventName.ACTION_BROADCAST,
       packetToMessage(newPacket)
     )
-    expect(mockSocket.emit).toBeCalledWith(
+    expect(mockSocket.emit).toHaveBeenCalledWith(
       EventName.ACTION_BROADCAST,
       packetToMessage(newPacket)
     )
@@ -189,9 +189,12 @@ describe("Test hub functionality", () => {
       bot: false
     }
     await hub.actionUpdate(data, mockSocket)
-    expect(mockProjectStore.saveState).not.toBeCalled()
-    expect(broadcastFunc).not.toBeCalled()
-    expect(mockSocket.emit).toBeCalledWith(EventName.ACTION_BROADCAST, data)
+    expect(mockProjectStore.saveState).not.toHaveBeenCalled()
+    expect(broadcastFunc).not.toHaveBeenCalled()
+    expect(mockSocket.emit).toHaveBeenCalledWith(
+      EventName.ACTION_BROADCAST,
+      data
+    )
   })
 
   test("If saved, repeated message does not save again", async () => {

@@ -3,7 +3,6 @@
  * NOTE: All the functions should be pure
  * Pure Function: https://en.wikipedia.org/wiki/Pure_function
  */
-import { IdType } from "aws-sdk/clients/workdocs"
 import _ from "lodash"
 
 import { uid } from "../common/uid"
@@ -148,7 +147,7 @@ export function addLabel(
 export function deleteLabelsById(
   state: State,
   itemIndex: number,
-  labelIds: IdType[]
+  labelIds: string[]
 ): State {
   const deleteLabelsAction: actionTypes.DeleteLabelsAction = {
     type: actionConsts.DELETE_LABELS,
@@ -179,8 +178,8 @@ function addLabelsToItem(
   shapes: ShapeType[][]
 ): [ItemType, LabelType[], TaskStatus] {
   newLabels = [...newLabels]
-  const newLabelIds: IdType[] = []
-  const newShapeIds: IdType[] = []
+  const newLabelIds: string[] = []
+  const newShapeIds: string[] = []
   const newShapes: ShapeType[] = []
   newLabels.forEach((label, index) => {
     const shapeIds = shapes[index].map((shape) => shape.id)
@@ -274,7 +273,7 @@ export function addLabels(
       if (label.item === user.select.item) {
         if (label.children.length === 0) {
           // Skip virtual parent label
-          const selectedLabels: { [index: number]: IdType[] } = {}
+          const selectedLabels: { [index: number]: string[] } = {}
           selectedLabels[user.select.item] = [label.id]
           user = updateUserSelect(user, {
             labels: selectedLabels,
@@ -347,7 +346,7 @@ export function addTrack(
   if (action.sessionId === state.session.id) {
     for (const l of newLabels) {
       if (l.item === user.select.item) {
-        const selectedLabels: { [index: number]: IdType[] } = {}
+        const selectedLabels: { [index: number]: string[] } = {}
         selectedLabels[user.select.item] = [l.id]
         user = updateUserSelect(user, { labels: selectedLabels })
         break
@@ -372,7 +371,7 @@ function mergeTracksInItems(
   }
 
   tracks = [...tracks]
-  const labelIds: IdType[][] = _.range(items.length).map(() => [])
+  const labelIds: string[][] = _.range(items.length).map(() => [])
   const props: Array<Array<Partial<LabelType>>> = _.range(items.length).map(
     () => []
   )
@@ -440,13 +439,13 @@ export function mergeTracks(
 function splitTrackInItems(
   track: TrackType,
   splitIndex: number,
-  newTrackId: IdType,
+  newTrackId: string,
   items: ItemType[]
 ): [TrackType[], ItemType[]] {
   const splitedTrack0 = makeTrack({ type: track.type, id: track.id }, false)
   const splitedTrack1 = makeTrack({ type: track.type, id: newTrackId }, false)
 
-  const labelIds: IdType[][] = _.range(items.length).map(() => [])
+  const labelIds: string[][] = _.range(items.length).map(() => [])
   const props: Array<Array<Partial<LabelType>>> = _.range(items.length).map(
     () => []
   )
@@ -517,7 +516,7 @@ export function splitTrack(
  */
 function changeShapesInItem(
   item: ItemType,
-  shapeIds: IdType[],
+  shapeIds: string[],
   shapes: Array<Partial<ShapeType>>
 ): ItemType {
   const newShapes = { ...item.shapes }
@@ -537,7 +536,7 @@ function changeShapesInItem(
  */
 function changeShapesInItems(
   items: ItemType[],
-  shapeIds: IdType[][],
+  shapeIds: string[][],
   shapes: Array<Array<Partial<ShapeType>>>
 ): ItemType[] {
   items = [...items]
@@ -580,12 +579,12 @@ export function changeShapes(
  */
 function changeLabelsInItem(
   item: ItemType,
-  labelIds: IdType[],
+  labelIds: string[],
   props: Array<Partial<LabelType>>
 ): ItemType {
   const newLabels: { [key: string]: LabelType } = {}
   const allShapes = item.shapes
-  const allDeletedShapes: IdType[] = []
+  const allDeletedShapes: string[] = []
   const allChangedShapes: { [key: string]: ShapeType } = {}
   labelIds.forEach((labelId, index) => {
     const children = props[index].children
@@ -631,7 +630,7 @@ function changeLabelsInItem(
  */
 function changeLabelsInItems(
   items: ItemType[],
-  labelIds: IdType[][],
+  labelIds: string[][],
   props: Array<Array<Partial<LabelType>>>
 ): ItemType[] {
   items = [...items]
@@ -664,7 +663,7 @@ export function changeLabels(
  * @param item
  * @param labelId
  */
-export function getRootLabelId(item: ItemType, labelId: IdType): string {
+export function getRootLabelId(item: ItemType, labelId: string): string {
   let parent = item.labels[labelId].parent
 
   while (isValidId(parent)) {
@@ -684,7 +683,7 @@ export function getRootLabelId(item: ItemType, labelId: IdType): string {
  * @param item
  * @param labelId
  */
-export function getLinkedLabelIds(item: ItemType, labelId: IdType): string[] {
+export function getLinkedLabelIds(item: ItemType, labelId: string): string[] {
   return getChildLabelIds(item, getRootLabelId(item, labelId))
 }
 
@@ -697,10 +696,10 @@ export function getLinkedLabelIds(item: ItemType, labelId: IdType): string[] {
  */
 function getChildLabelIds(
   item: ItemType,
-  labelId: IdType,
+  labelId: string,
   includeRoot = false
 ): string[] {
-  const labelIds: IdType[] = []
+  const labelIds: string[] = []
   const label = item.labels[labelId]
   if (label.children.length === 0) {
     labelIds.push(labelId)
@@ -724,7 +723,7 @@ function getChildLabelIds(
  * @param item
  * @param labelId
  */
-export function getRootTrackId(item: ItemType, labelId: IdType): IdType {
+export function getRootTrackId(item: ItemType, labelId: string): string {
   let parent = item.labels[labelId].parent
   while (isValidId(parent)) {
     if (item.labels[parent] !== undefined) {
@@ -1119,7 +1118,7 @@ export function loadItem(
  */
 function deleteLabelsFromItem(
   item: ItemType,
-  labelIds: IdType[]
+  labelIds: string[]
 ): [ItemType, LabelType[]] {
   let labels = item.labels
 
@@ -1142,7 +1141,7 @@ function deleteLabelsFromItem(
       parentLabel.children = removeListItems(parentLabel.children, [label.id])
       updatedLabels[parentLabel.id] = parentLabel
     }
-    label.shapes.forEach((shapeId: IdType) => {
+    label.shapes.forEach((shapeId: string) => {
       if (!(shapeId in updatedShapes)) {
         updatedShapes[shapeId] = item.shapes[shapeId]
       }
@@ -1186,7 +1185,7 @@ function deleteLabelsFromItem(
  */
 function deleteLabelsFromItems(
   items: ItemType[],
-  labelIds: IdType[][]
+  labelIds: string[][]
 ): [ItemType[], LabelType[]] {
   items = [...items]
   const deletedLabels: LabelType[] = []

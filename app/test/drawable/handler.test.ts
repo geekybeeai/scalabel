@@ -20,9 +20,13 @@ import {
 
 test("Draw label2d list to canvas", () => {
   const labelCanvas = createCanvas(200, 200)
-  const labelContext = labelCanvas.getContext("2d")
+  const labelContext = labelCanvas.getContext(
+    "2d"
+  ) as unknown as CanvasRenderingContext2D
   const controlCanvas = createCanvas(200, 200)
-  const controlContext = controlCanvas.getContext("2d")
+  const controlContext = controlCanvas.getContext(
+    "2d"
+  ) as unknown as CanvasRenderingContext2D
   const labelIds: IdType[] = []
 
   const [label2dHandler] = initializeTestingObjects()
