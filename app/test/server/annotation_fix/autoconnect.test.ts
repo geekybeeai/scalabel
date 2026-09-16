@@ -32,6 +32,36 @@ function line(
   }
 }
 
+/**
+ * A deliberately vertical-tangent Bezier bridge between horizontal lines.
+ * The guarded pairwise algorithm rejects each 90-degree local junction.
+ *
+ * @param gap endpoint gap on both sides of the curve
+ */
+function bridge(gap: number): LabelExport[] {
+  return [
+    line("left", "lane", [
+      [0, 0],
+      [70 - gap, 0]
+    ]),
+    line(
+      "curve",
+      "lane",
+      [
+        [70, 0],
+        [70, 30],
+        [130, 30],
+        [130, 0]
+      ],
+      "LCCL"
+    ),
+    line("right", "lane", [
+      [130 + gap, 0],
+      [200, 0]
+    ])
+  ]
+}
+
 describe("splice", () => {
   const a: Array<[number, number]> = [
     [0, 0],
@@ -104,7 +134,7 @@ describe("connectLabels", () => {
         [200, 0]
       ])
     ]
-    const [out, result] = connectLabels(labels)
+    const [out, result] = connectLabels(labels, 15, 0)
     expect(out).toHaveLength(1)
     expect(out[0].id).toBe("a")
     expect(out[0].poly2d?.[0].vertices).toEqual([
@@ -132,7 +162,7 @@ describe("connectLabels", () => {
         [100, 0]
       ]),
       line("b", "lane", [
-        [116, 0],
+        [141, 0],
         [200, 0]
       ])
     ]
@@ -208,7 +238,7 @@ describe("connectLabels", () => {
         [-2, -100]
       ])
     ]
-    const [out, result] = connectLabels(labels)
+    const [out, result] = connectLabels(labels, 15, 0)
     // hub.start joins near.start (gap 2). far.end then has no free endpoint
     // within 15 px: the junction it was close to is consumed.
     expect(result.connections[0]).toMatchObject({
@@ -309,6 +339,352 @@ describe("connectLabels eligibility and guards", () => {
     ]
 
     expect(connectLabels(labels, 40, 150)[0]).toHaveLength(1)
+  })
+})
+
+describe("atomic curve bridges", () => {
+  test.each([0, 5, 10, 25, 40])(
+    "connects a complete line-curve-line component across a %d px gap",
+    (gap) => {
+      const [out, result] = connectLabels(bridge(gap), 40, 150)
+
+      expect(out).toHaveLength(1)
+      expect(out[0].id).toBe("left")
+      expect(result.connections).toHaveLength(2)
+    }
+  )
+
+  test("does not connect a bridge beyond the 40 px tolerance", () => {
+    expect(connectLabels(bridge(41), 40, 150)[0]).toHaveLength(3)
+  })
+
+  test("uses the production tolerance and angle guard by default", () => {
+    expect(connectLabels(bridge(40))[0]).toHaveLength(1)
+  })
+
+  test("connects a bridge regardless of every label's drawing direction", () => {
+    const labels = bridge(10).map((label) => {
+      const poly = label.poly2d?.[0]
+      if (poly !== undefined) {
+        poly.vertices.reverse()
+        poly.types = poly.types.split("").reverse().join("")
+      }
+      return label
+    })
+
+    const [out] = connectLabels(labels, 40, 150)
+
+    expect(out).toHaveLength(1)
+    expect(out[0].poly2d?.[0]).toMatchObject({
+      vertices: [
+        [200, 0],
+        [130, 0],
+        [130, 30],
+        [70, 30],
+        [60, 0],
+        [0, 0]
+      ],
+      types: "LLCCLL"
+    })
+  })
+
+  test("does not reverse a survivor that joins the bridge start-to-start", () => {
+    const labels = bridge(10)
+    const left = labels[0].poly2d?.[0]
+    if (left !== undefined) {
+      left.vertices.reverse()
+      left.types = left.types.split("").reverse().join("")
+    }
+
+    const [out] = connectLabels(labels, 40, 150)
+
+    expect(out).toHaveLength(1)
+    expect(out[0].poly2d?.[0].vertices).toEqual([
+      [200, 0],
+      [130, 0],
+      [130, 30],
+      [70, 30],
+      [60, 0],
+      [0, 0]
+    ])
+  })
+
+  test("finds curve controls and tangents past duplicate coordinates", () => {
+    const labels = [
+      line("left", "lane", [
+        [0, 0],
+        [60, 0],
+        [60, 0]
+      ]),
+      line(
+        "curve",
+        "lane",
+        [
+          [70, 0],
+          [70, 0],
+          [70, 30],
+          [130, 30],
+          [130, 0],
+          [130, 0]
+        ],
+        "LLCCLL"
+      ),
+      line("right", "lane", [
+        [140, 0],
+        [140, 0],
+        [200, 0]
+      ])
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(1)
+  })
+})
+
+describe("atomic curve bridge graph", () => {
+  test("connects a maximal line-curve-line-curve-line component", () => {
+    const labels = [
+      ...bridge(10),
+      line(
+        "curve-2",
+        "lane",
+        [
+          [210, 0],
+          [210, 30],
+          [270, 30],
+          [270, 0]
+        ],
+        "LCCL"
+      ),
+      line("far-right", "lane", [
+        [280, 0],
+        [340, 0]
+      ])
+    ]
+    const right = labels[2].poly2d?.[0]
+    if (right !== undefined) {
+      right.vertices[1] = [200, 0]
+    }
+
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(out).toHaveLength(1)
+    expect(result.connections.map(({ absorbedId }) => absorbedId)).toEqual([
+      "curve",
+      "right",
+      "curve-2",
+      "far-right"
+    ])
+    expect(out[0].poly2d?.[0].types).toBe("LLCCLLCCLL")
+  })
+
+  test("leaves an incomplete bridge untouched", () => {
+    expect(connectLabels(bridge(10).slice(0, 2), 40, 150)[0]).toHaveLength(2)
+  })
+
+  test("requires reciprocal-nearest endpoint matches", () => {
+    const labels = bridge(10)
+    labels.splice(
+      1,
+      0,
+      line(
+        "closer-curve",
+        "lane",
+        [
+          [65, 2.5],
+          [65, 32.5],
+          [300, 30],
+          [300, 0]
+        ],
+        "LCCL"
+      )
+    )
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(4)
+  })
+
+  test("breaks exact endpoint ties by original label index", () => {
+    const labels = [
+      line("chosen", "lane", [
+        [0, 0],
+        [60, 0]
+      ]),
+      line("unchosen", "lane", [
+        [0, 20],
+        [60, 0]
+      ]),
+      ...bridge(10).slice(1)
+    ]
+
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(out.map(({ id }) => id)).toEqual(["chosen", "unchosen"])
+    expect(result.connections.map(({ absorbedId }) => absorbedId)).toEqual([
+      "curve",
+      "right"
+    ])
+  })
+})
+
+describe("atomic curve bridge topology and output", () => {
+  test("rejects a two-label self-cycle", () => {
+    const labels = [
+      line(
+        "curve",
+        "lane",
+        [
+          [70, 0],
+          [70, 30],
+          [130, 30],
+          [130, 0]
+        ],
+        "LCCL"
+      ),
+      line("loop", "lane", [
+        [60, 0],
+        [0, 0],
+        [0, 100],
+        [200, 100],
+        [200, 0],
+        [140, 0]
+      ])
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(2)
+  })
+
+  test("rejects a cyclic curve-bridge component", () => {
+    const labels = [
+      line(
+        "curve-a",
+        "lane",
+        [
+          [100, 100],
+          [100, 70],
+          [100, 30],
+          [100, 0]
+        ],
+        "LCCL"
+      ),
+      line("bottom", "lane", [
+        [110, 0],
+        [190, 0]
+      ]),
+      line(
+        "curve-b",
+        "lane",
+        [
+          [200, 0],
+          [200, 30],
+          [200, 70],
+          [200, 100]
+        ],
+        "LCCL"
+      ),
+      line("top", "lane", [
+        [190, 100],
+        [110, 100]
+      ])
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(4)
+  })
+
+  test("requires both sides of a bridge to be category-compatible", () => {
+    const labels = bridge(10)
+    labels[2].category = "other"
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(3)
+  })
+
+  test("rejects offset and forked external approaches", () => {
+    const parallel = bridge(10)
+    const parallelLeft = parallel[0].poly2d?.[0]
+    if (parallelLeft !== undefined) {
+      parallelLeft.vertices = [
+        [0, 20],
+        [60, 20]
+      ]
+    }
+    const fork = bridge(10)
+    const forkLeft = fork[0].poly2d?.[0]
+    if (forkLeft !== undefined) {
+      forkLeft.vertices = [
+        [0, -60],
+        [60, 0]
+      ]
+    }
+
+    expect(connectLabels(parallel, 40, 150)[0]).toHaveLength(3)
+    expect(connectLabels(fork, 40, 150)[0]).toHaveLength(3)
+  })
+
+  test("preserves the lowest-index survivor's metadata, orientation and reports", () => {
+    const [left, curve, right] = bridge(10)
+    curve.attributes = { source: "curve-survivor" }
+    curve.manualShape = false
+    const originalPoly = curve.poly2d?.[0]
+
+    const [out, result] = connectLabels([curve, right, left], 40, 150)
+
+    expect(out).toEqual([curve])
+    expect(out[0]).toMatchObject({
+      id: "curve",
+      attributes: { source: "curve-survivor" },
+      manualShape: false
+    })
+    expect(originalPoly?.types).toBe("LLCCLL")
+    expect(originalPoly?.vertices).toEqual([
+      [0, 0],
+      [70, 0],
+      [70, 30],
+      [130, 30],
+      [130, 0],
+      [200, 0]
+    ])
+    expect(result).toMatchObject({ labelsBefore: 3, labelsAfter: 1 })
+    expect(result.connections).toHaveLength(2)
+    expect(result.connections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          keptId: "curve",
+          absorbedId: "left",
+          category: "lane",
+          junction: [70, 0],
+          gap: 10
+        }),
+        expect.objectContaining({
+          keptId: "curve",
+          absorbedId: "right",
+          category: "lane",
+          junction: [130, 0],
+          gap: 10
+        })
+      ])
+    )
+  })
+
+  test("minAngle zero bypasses atomic matching for legacy distance order", () => {
+    const labels = bridge(10)
+    labels.splice(
+      1,
+      0,
+      line("closer", "lane", [
+        [64, 0],
+        [64, 50]
+      ])
+    )
+
+    const [out, result] = connectLabels(labels, 40, 0)
+
+    expect(out.map(({ id }) => id)).toEqual(["left", "curve"])
+    expect(result.connections[0]).toMatchObject({
+      keptId: "left",
+      absorbedId: "closer",
+      gap: 4
+    })
+    expect(result.connections.every(({ angle }) => angle === undefined)).toBe(
+      true
+    )
   })
 })
 

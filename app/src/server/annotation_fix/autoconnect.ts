@@ -14,11 +14,11 @@
 
 import { LabelExport, PolygonExportType } from "../../types/export"
 
-/** Matches the editor's 15 px snap radius, reinterpreted in image space. */
-export const DEFAULT_TOLERANCE = 15.0
+/** Maximum endpoint gap in image pixels. */
+export const DEFAULT_TOLERANCE = 40.0
 
 /** Straightness guard in degrees; 0 disables it. */
-export const DEFAULT_MIN_ANGLE = 0.0
+export const DEFAULT_MIN_ANGLE = 150.0
 
 /**
  * Bezier anchors exported from adjacent model fragments can differ by a few
@@ -424,6 +424,455 @@ interface Candidate {
   angle: number | null
 }
 
+/** A guarded curve endpoint paired with an external straight endpoint. */
+interface BridgePair {
+  /** endpoint gap */
+  gap: number
+  /** curve label index */
+  curveIndex: number
+  /** curve endpoint side */
+  curveStart: boolean
+  /** external label index */
+  externalIndex: number
+  /** external endpoint side */
+  externalStart: boolean
+  /** local angle, retained only for the existing report shape */
+  angle: number | null
+}
+
+/** Result of the guarded atomic bridge pass. */
+interface AtomicBridgeResult {
+  /** labels absorbed by accepted components */
+  absorbed: Set<LabelExport>
+  /** reports emitted by accepted components */
+  connections: Connection[]
+}
+
+/** An accepted maximal path in the endpoint graph. */
+interface BridgeComponent {
+  /** component edges */
+  edges: BridgePair[]
+  /** original label indices */
+  nodes: number[]
+}
+
+/**
+ * Stable identity for one original endpoint.
+ *
+ * @param index original label index
+ * @param isStart endpoint side
+ */
+function endpointKey(index: number, isStart: boolean): string {
+  return `${index}:${isStart ? 0 : 1}`
+}
+
+/**
+ * Endpoint side used by an edge at the given label.
+ *
+ * @param pair graph edge
+ * @param index label index on the edge
+ */
+function bridgeSide(pair: BridgePair, index: number): boolean {
+  return pair.curveIndex === index ? pair.curveStart : pair.externalStart
+}
+
+/**
+ * Label at the other end of an edge.
+ *
+ * @param pair graph edge
+ * @param index label index on the edge
+ */
+function bridgeOther(pair: BridgePair, index: number): number {
+  return pair.curveIndex === index ? pair.externalIndex : pair.curveIndex
+}
+
+/**
+ * Compare candidates from one endpoint by gap, then the other endpoint's
+ * original label index and endpoint side.
+ *
+ * @param a first pair
+ * @param b second pair
+ * @param ownIndex endpoint whose preference is being compared
+ */
+function compareBridgePreference(
+  a: BridgePair,
+  b: BridgePair,
+  ownIndex: number
+): number {
+  if (a.gap !== b.gap) {
+    return a.gap - b.gap
+  }
+  const otherA = bridgeOther(a, ownIndex)
+  const otherB = bridgeOther(b, ownIndex)
+  if (otherA !== otherB) {
+    return otherA - otherB
+  }
+  return Number(bridgeSide(a, otherA)) - Number(bridgeSide(b, otherB))
+}
+
+/**
+ * Whether the external straight endpoint aims at the curve endpoint.
+ * Sampling-size gaps need no reliable tangent.
+ *
+ * @param curve curve endpoint
+ * @param external external straight endpoint
+ * @param gap endpoint distance
+ * @param minAngle configured continuity angle
+ */
+function bridgeApproachAllowed(
+  curve: Endpoint,
+  external: Endpoint,
+  gap: number,
+  minAngle: number
+): boolean {
+  if (gap <= CURVE_SAMPLING_GAP) {
+    return true
+  }
+  const externalDirection = direction(external.poly, external.isStart)
+  if (externalDirection === null) {
+    return false
+  }
+  const connector: [number, number] = [
+    (curve.point[0] - external.point[0]) / gap,
+    (curve.point[1] - external.point[1]) / gap
+  ]
+  return angleBetween(externalDirection, connector) <= 180 - minAngle
+}
+
+/**
+ * Build reciprocal bridge edges and activate only complete curves.
+ *
+ * @param labels original frame labels
+ * @param tolerance maximum endpoint gap
+ * @param minAngle configured continuity angle
+ * @param mergeable compatible cross-category pairs
+ */
+function activeBridgeEdges(
+  labels: LabelExport[],
+  tolerance: number,
+  minAngle: number,
+  mergeable: ReadonlyArray<ReadonlySet<string>>
+): BridgePair[] {
+  const endpoints: Endpoint[] = []
+  const endpointsByKey = new Map<string, Endpoint>()
+  const curveIndices = new Set<number>()
+  labels.forEach((label, index) => {
+    const poly = openPolyline(label)
+    if (poly === null) {
+      return
+    }
+    if (endpointTouchesCurve(poly, true) && endpointTouchesCurve(poly, false)) {
+      curveIndices.add(index)
+    }
+    for (const isStart of [true, false]) {
+      const entry: Endpoint = {
+        index,
+        isStart,
+        poly,
+        point: endpoint(poly, isStart)
+      }
+      endpoints.push(entry)
+      endpointsByKey.set(endpointKey(index, isStart), entry)
+    }
+  })
+
+  const candidates: BridgePair[] = []
+  curveIndices.forEach((curveIndex) => {
+    for (const curveStart of [true, false]) {
+      const curve = endpointsByKey.get(endpointKey(curveIndex, curveStart))
+      if (curve === undefined) {
+        continue
+      }
+      for (const external of endpoints) {
+        if (
+          external.index === curveIndex ||
+          endpointTouchesCurve(external.poly, external.isStart) ||
+          !categoriesCompatible(
+            String(labels[curveIndex].category ?? ""),
+            String(labels[external.index].category ?? ""),
+            mergeable
+          )
+        ) {
+          continue
+        }
+        const gap = Math.hypot(
+          curve.point[0] - external.point[0],
+          curve.point[1] - external.point[1]
+        )
+        if (
+          gap > tolerance ||
+          !bridgeApproachAllowed(curve, external, gap, minAngle)
+        ) {
+          continue
+        }
+        candidates.push({
+          gap,
+          curveIndex,
+          curveStart,
+          externalIndex: external.index,
+          externalStart: external.isStart,
+          angle: junctionAngle(
+            curve.poly,
+            curve.isStart,
+            external.poly,
+            external.isStart
+          )
+        })
+      }
+    }
+  })
+
+  const byEndpoint = new Map<string, BridgePair[]>()
+  const addCandidate = (key: string, pair: BridgePair): void => {
+    const entries = byEndpoint.get(key) ?? []
+    entries.push(pair)
+    byEndpoint.set(key, entries)
+  }
+  candidates.forEach((pair) => {
+    addCandidate(endpointKey(pair.curveIndex, pair.curveStart), pair)
+    addCandidate(endpointKey(pair.externalIndex, pair.externalStart), pair)
+  })
+  const nearest = new Map<string, BridgePair>()
+  byEndpoint.forEach((pairs, key) => {
+    const ownIndex = Number(key.split(":")[0])
+    pairs.sort((a, b) => compareBridgePreference(a, b, ownIndex))
+    nearest.set(key, pairs[0])
+  })
+  const reciprocal = new Map<string, BridgePair>()
+  candidates.forEach((pair) => {
+    const curveKey = endpointKey(pair.curveIndex, pair.curveStart)
+    const externalKey = endpointKey(pair.externalIndex, pair.externalStart)
+    if (nearest.get(curveKey) === pair && nearest.get(externalKey) === pair) {
+      reciprocal.set(curveKey, pair)
+    }
+  })
+
+  const active: BridgePair[] = []
+  curveIndices.forEach((curveIndex) => {
+    const start = reciprocal.get(endpointKey(curveIndex, true))
+    const end = reciprocal.get(endpointKey(curveIndex, false))
+    if (
+      start !== undefined &&
+      end !== undefined &&
+      endpointKey(start.externalIndex, start.externalStart) !==
+        endpointKey(end.externalIndex, end.externalStart)
+    ) {
+      active.push(start, end)
+    }
+  })
+  return active
+}
+
+/**
+ * Splice onto a survivor without reversing its existing vertex run.
+ *
+ * The editor's start-to-start case reverses A. Atomic components instead
+ * preserve A as the chosen survivor, so B is reversed and prepended.
+ *
+ * @param verticesA survivor vertices
+ * @param typesA survivor types
+ * @param startA survivor endpoint side
+ * @param verticesB absorbed vertices
+ * @param typesB absorbed types
+ * @param startB absorbed endpoint side
+ */
+function splicePreservingFirst(
+  verticesA: Array<[number, number]>,
+  typesA: string,
+  startA: boolean,
+  verticesB: Array<[number, number]>,
+  typesB: string,
+  startB: boolean
+): [Array<[number, number]>, string] {
+  if (!startA || !startB) {
+    return splice(verticesA, typesA, startA, verticesB, typesB, startB)
+  }
+  const reversedVertices = verticesB.slice().reverse()
+  const reversedTypes = typesB.split("").reverse().join("")
+  return [
+    reversedVertices.slice(0, -1).concat(verticesA.slice()),
+    reversedTypes.slice(0, -1) + typesA
+  ]
+}
+
+/**
+ * Splice accepted path components into their lowest-index labels.
+ *
+ * @param labels original frame labels
+ * @param components accepted graph paths
+ * @param result atomic pass result to populate
+ */
+function spliceBridgeComponents(
+  labels: LabelExport[],
+  components: BridgeComponent[],
+  result: AtomicBridgeResult
+): void {
+  components
+    .sort((a, b) => Math.min(...a.nodes) - Math.min(...b.nodes))
+    .forEach((component) => {
+      const survivorIndex = Math.min(...component.nodes)
+      const survivor = labels[survivorIndex]
+      const adjacency = new Map<number, BridgePair[]>()
+      component.edges.forEach((edge) => {
+        for (const index of [edge.curveIndex, edge.externalIndex]) {
+          const edges = adjacency.get(index) ?? []
+          edges.push(edge)
+          adjacency.set(index, edges)
+        }
+      })
+      const firstEdges = (adjacency.get(survivorIndex) ?? []).sort((a, b) => {
+        const sideOrder =
+          Number(bridgeSide(a, survivorIndex)) -
+          Number(bridgeSide(b, survivorIndex))
+        return sideOrder !== 0
+          ? sideOrder
+          : bridgeOther(a, survivorIndex) - bridgeOther(b, survivorIndex)
+      })
+      const usedEdges = new Set<BridgePair>()
+
+      for (const firstEdge of firstEdges) {
+        if (usedEdges.has(firstEdge)) {
+          continue
+        }
+        const survivorStart = bridgeSide(firstEdge, survivorIndex)
+        let currentIndex = survivorIndex
+        let edge: BridgePair | undefined = firstEdge
+        while (edge !== undefined && !usedEdges.has(edge)) {
+          usedEdges.add(edge)
+          const absorbedIndex = bridgeOther(edge, currentIndex)
+          const absorbedLabel = labels[absorbedIndex]
+          const survivorPoly = openPolyline(survivor)
+          const absorbedPoly = openPolyline(absorbedLabel)
+          if (survivorPoly === null || absorbedPoly === null) {
+            break
+          }
+          const junction = endpoint(survivorPoly, survivorStart)
+          const [vertices, types] = splicePreservingFirst(
+            survivorPoly.vertices,
+            String(survivorPoly.types ?? ""),
+            survivorStart,
+            absorbedPoly.vertices,
+            String(absorbedPoly.types ?? ""),
+            bridgeSide(edge, absorbedIndex)
+          )
+          survivorPoly.vertices = vertices
+          survivorPoly.types = types
+          result.absorbed.add(absorbedLabel)
+          const connection: Connection = {
+            keptId: String(survivor.id ?? ""),
+            absorbedId: String(absorbedLabel.id ?? ""),
+            category: String(survivor.category ?? ""),
+            junction,
+            gap: edge.gap
+          }
+          if (edge.angle !== null) {
+            connection.angle = edge.angle
+          }
+          result.connections.push(connection)
+          const next = (adjacency.get(absorbedIndex) ?? []).find(
+            (candidate) => candidate !== edge
+          )
+          currentIndex = absorbedIndex
+          edge = next
+        }
+      }
+    })
+}
+
+/**
+ * Atomically connect complete curve-bridge path components.
+ *
+ * The graph is derived from original endpoints before any splice. Only
+ * reciprocal-nearest curve/straight endpoint pairs participate, and a curve
+ * contributes edges only when both of its endpoints have distinct matches.
+ *
+ * @param labels original frame labels
+ * @param tolerance maximum endpoint gap
+ * @param minAngle configured continuity angle
+ * @param mergeable compatible cross-category pairs
+ */
+function connectAtomicCurveBridges(
+  labels: LabelExport[],
+  tolerance: number,
+  minAngle: number,
+  mergeable: ReadonlyArray<ReadonlySet<string>>
+): AtomicBridgeResult {
+  const result: AtomicBridgeResult = {
+    absorbed: new Set<LabelExport>(),
+    connections: []
+  }
+  if (minAngle <= 0) {
+    return result
+  }
+
+  const edges = activeBridgeEdges(labels, tolerance, minAngle, mergeable)
+
+  const adjacency = new Map<number, BridgePair[]>()
+  const addEdge = (index: number, pair: BridgePair): void => {
+    const edges = adjacency.get(index) ?? []
+    edges.push(pair)
+    adjacency.set(index, edges)
+  }
+  edges.forEach((pair) => {
+    addEdge(pair.curveIndex, pair)
+    addEdge(pair.externalIndex, pair)
+  })
+
+  const visitedNodes = new Set<number>()
+  const accepted: BridgeComponent[] = []
+  Array.from(adjacency.keys())
+    .sort((a, b) => a - b)
+    .forEach((seed) => {
+      if (visitedNodes.has(seed)) {
+        return
+      }
+      const nodes: number[] = []
+      const edges = new Set<BridgePair>()
+      const pending = [seed]
+      while (pending.length > 0) {
+        const index = pending.pop()
+        if (index === undefined || visitedNodes.has(index)) {
+          continue
+        }
+        visitedNodes.add(index)
+        nodes.push(index)
+        for (const edge of adjacency.get(index) ?? []) {
+          edges.add(edge)
+          pending.push(bridgeOther(edge, index))
+        }
+      }
+
+      const endpointUse = new Set<string>()
+      let valid = nodes.length >= 3 && edges.size === nodes.length - 1
+      let ends = 0
+      for (const index of nodes) {
+        const degree = adjacency.get(index)?.length ?? 0
+        if (degree === 1) {
+          ends += 1
+        } else if (degree !== 2) {
+          valid = false
+        }
+      }
+      for (const edge of edges) {
+        const keys = [
+          endpointKey(edge.curveIndex, edge.curveStart),
+          endpointKey(edge.externalIndex, edge.externalStart)
+        ]
+        if (keys.some((key) => endpointUse.has(key))) {
+          valid = false
+        }
+        keys.forEach((key) => endpointUse.add(key))
+      }
+      if (valid && ends === 2) {
+        accepted.push({ edges: Array.from(edges), nodes })
+      }
+    })
+
+  spliceBridgeComponents(labels, accepted, result)
+
+  return result
+}
+
 /**
  * Merge polylines whose endpoints nearly touch.
  *
@@ -449,7 +898,14 @@ export function connectLabels(
     labelsAfter: labels.length
   }
   const working = labels.slice()
-  const absorbed = new Set<LabelExport>()
+  const atomic = connectAtomicCurveBridges(
+    working,
+    tolerance,
+    minAngle,
+    mergeable
+  )
+  const absorbed = atomic.absorbed
+  result.connections.push(...atomic.connections)
 
   for (;;) {
     const endpoints: Endpoint[] = []
