@@ -14,11 +14,11 @@
 
 import { LabelExport, PolygonExportType } from "../../types/export"
 
-/** Maximum endpoint gap in image pixels. */
-export const DEFAULT_TOLERANCE = 40.0
+/** Matches the editor's 15 px snap radius, reinterpreted in image space. */
+export const DEFAULT_TOLERANCE = 15.0
 
 /** Straightness guard in degrees; 0 disables it. */
-export const DEFAULT_MIN_ANGLE = 150.0
+export const DEFAULT_MIN_ANGLE = 0.0
 
 /**
  * Bezier anchors exported from adjacent model fragments can differ by a few
@@ -507,7 +507,12 @@ function compareBridgePreference(
   if (otherA !== otherB) {
     return otherA - otherB
   }
-  return Number(bridgeSide(a, otherA)) - Number(bridgeSide(b, otherB))
+  const sideA = bridgeSide(a, otherA)
+  const sideB = bridgeSide(b, otherB)
+  if (sideA === sideB) {
+    return 0
+  }
+  return sideA ? -1 : 1
 }
 
 /**

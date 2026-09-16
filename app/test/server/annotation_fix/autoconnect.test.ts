@@ -248,6 +248,32 @@ describe("connectLabels", () => {
     })
     expect(out.map((l) => l.id)).toEqual(["far", "hub"])
   })
+
+  test("standalone defaults retain the 15 px distance-only behavior", () => {
+    const sharp = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [110, 0],
+        [110, 100]
+      ])
+    ]
+    const beyondTolerance = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [116, 0],
+        [200, 0]
+      ])
+    ]
+
+    expect(connectLabels(sharp)[0]).toHaveLength(1)
+    expect(connectLabels(beyondTolerance)[0]).toHaveLength(2)
+  })
 })
 
 describe("connectLabels eligibility and guards", () => {
@@ -356,10 +382,6 @@ describe("atomic curve bridges", () => {
 
   test("does not connect a bridge beyond the 40 px tolerance", () => {
     expect(connectLabels(bridge(41), 40, 150)[0]).toHaveLength(3)
-  })
-
-  test("uses the production tolerance and angle guard by default", () => {
-    expect(connectLabels(bridge(40))[0]).toHaveLength(1)
   })
 
   test("connects a bridge regardless of every label's drawing direction", () => {
@@ -521,6 +543,30 @@ describe("atomic curve bridge graph", () => {
     expect(result.connections.map(({ absorbedId }) => absorbedId)).toEqual([
       "curve",
       "right"
+    ])
+  })
+
+  test("breaks a same-label distance tie by endpoint side", () => {
+    const labels = [
+      line("double-ended", "lane", [
+        [60, 0],
+        [-100, 0],
+        [60, 0]
+      ]),
+      ...bridge(10).slice(1)
+    ]
+
+    const [out] = connectLabels(labels, 40, 150)
+
+    expect(out).toHaveLength(1)
+    expect(out[0].poly2d?.[0].vertices).toEqual([
+      [200, 0],
+      [130, 0],
+      [130, 30],
+      [70, 30],
+      [60, 0],
+      [-100, 0],
+      [60, 0]
     ])
   })
 })

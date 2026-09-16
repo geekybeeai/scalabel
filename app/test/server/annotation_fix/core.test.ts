@@ -107,8 +107,7 @@ test("clamps then connects, deep-copies the input and keeps the bare-list shape"
   const snapshot = JSON.stringify(frames)
   const [out, report] = await processDocument(frames, {
     ...defaultOptions(),
-    imageRoot: dir,
-    minAngle: 0
+    imageRoot: dir
   })
   expect(JSON.stringify(frames)).toBe(snapshot)
   expect(Array.isArray(out)).toBe(true)
