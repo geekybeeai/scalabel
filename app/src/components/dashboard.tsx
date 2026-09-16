@@ -5,11 +5,13 @@ import {
   Grid,
   IconButton,
   List,
+  Snackbar,
   Table,
   TableCell,
   TableHead,
   TableRow
 } from "@material-ui/core"
+import Alert from "@material-ui/lab/Alert"
 import Chip from "@material-ui/core/Chip"
 import ListItemText from "@material-ui/core/ListItemText"
 import TableBody from "@material-ui/core/TableBody"
@@ -30,6 +32,9 @@ import { SubmitData } from "../types/state"
 import DividedPage from "./divided_page"
 import { formatDate, getSubmissionTime } from "./util"
 import { getAuth } from "../common/service"
+
+const CORRECTION_WAIT_MESSAGE =
+  "Auto-correction is still in progress. Please wait before opening this task."
 
 export interface ProjectOptions {
   /** project name */
@@ -179,6 +184,8 @@ export interface DashboardState {
   taskKeys: string[]
   /** correction status per task id, empty when nothing is outstanding */
   correctionStatuses: { [taskId: string]: TaskCorrectionStatus }
+  /** whether the wait-for-correction notice is visible */
+  correctionNoticeOpen: boolean
 }
 
 /**
@@ -187,7 +194,7 @@ export interface DashboardState {
  * @param {object} props
  * @return component
  */
-class Dashboard extends React.Component<DashboardProps, DashboardState> {
+export class Dashboard extends React.Component<DashboardProps, DashboardState> {
   /**
    * Constructor
    *
@@ -200,7 +207,12 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
       taskMetaDatas: props.dashboardContents.taskMetaDatas,
       numUsers: props.dashboardContents.numUsers,
       taskKeys: props.dashboardContents.taskKeys as string[],
-      correctionStatuses: props.dashboardContents.correctionStatuses ?? {}
+      correctionStatuses: props.dashboardContents.correctionStatuses ?? {},
+      correctionNoticeOpen:
+        typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).get(
+          QueryArg.CORRECTION_PENDING
+        ) === "1"
     }
   }
 
@@ -288,6 +300,31 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
         this.pollCorrectionStatus()
       }, 5000)
     }
+  }
+
+  /** Render the transient explanation shown when a busy task is selected. */
+  private renderCorrectionNotice(): JSX.Element {
+    return (
+      <Snackbar
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        open={this.state.correctionNoticeOpen}
+        autoHideDuration={8000}
+        onClose={() => {
+          this.setState({ correctionNoticeOpen: false })
+        }}
+      >
+        <Alert
+          elevation={6}
+          variant="filled"
+          severity="info"
+          onClose={() => {
+            this.setState({ correctionNoticeOpen: false })
+          }}
+        >
+          {CORRECTION_WAIT_MESSAGE}
+        </Alert>
+      </Snackbar>
+    )
   }
 
   /**
@@ -398,29 +435,41 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
                           ? this.state.correctionStatuses[taskId]
                           : undefined
                       const busy =
-                        status?.state === "pending" || status?.state === "running"
+                        status?.state === "pending" ||
+                        status?.state === "running"
                       const failed = status?.state === "failed"
                       const title = busy
                         ? status?.state === "running"
                           ? "Correcting annotations…"
                           : "Queued for correction"
                         : failed
-                        ? `Correction failed (${status?.error ?? "unknown"}) — ` +
-                          "opening the original annotations"
+                        ? `Correction failed (${
+                            status?.error ?? "unknown"
+                          }) — ` + "opening the original annotations"
                         : "Open task"
                       return (
                         <span title={title}>
                           <IconButton
                             className={classes.linkButton}
                             color="inherit"
-                            disabled={busy}
-                            href={
+                            aria-disabled={busy}
+                            onClick={
                               busy
-                                ? ""
-                                : `./${value.handlerUrl}` +
-                                  `?${QueryArg.PROJECT_NAME}=${this.state.projectMetaData.name}` +
-                                  `&${QueryArg.TASK_INDEX}=${index}`
+                                ? () => {
+                                    this.setState({
+                                      correctionNoticeOpen: true
+                                    })
+                                  }
+                                : undefined
                             }
+                            {...(busy
+                              ? {}
+                              : {
+                                  href:
+                                    `./${value.handlerUrl}` +
+                                    `?${QueryArg.PROJECT_NAME}=${this.state.projectMetaData.name}` +
+                                    `&${QueryArg.TASK_INDEX}=${index}`
+                                })}
                             data-testid={"task-link-" + index.toString()}
                           >
                             <FontAwesomeIcon
@@ -457,11 +506,14 @@ class Dashboard extends React.Component<DashboardProps, DashboardState> {
     )
 
     return (
-      <DividedPage
-        header={headerContent}
-        sidebar={sidebarContent}
-        main={mainContent}
-      />
+      <>
+        <DividedPage
+          header={headerContent}
+          sidebar={sidebarContent}
+          main={mainContent}
+        />
+        {this.renderCorrectionNotice()}
+      </>
     )
   }
 

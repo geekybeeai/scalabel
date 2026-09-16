@@ -165,6 +165,7 @@ export enum QueryArg {
   PROJECT_NAME = "project_name",
   TASK_INDEX = "task_index",
   TASK_ID = "task_id",
+  CORRECTION_PENDING = "correction_pending",
   DEV_MODE = "dev",
   EMBEDDED = "embedded"
 }

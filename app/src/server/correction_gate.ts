@@ -46,6 +46,7 @@ export function correctionGateHandler(
 
   res.redirect(
     303,
-    `/dashboard?${QueryArg.PROJECT_NAME}=${encodeURIComponent(projectName)}`
+    `/dashboard?${QueryArg.PROJECT_NAME}=${encodeURIComponent(projectName)}` +
+      `&${QueryArg.CORRECTION_PENDING}=1`
   )
 }

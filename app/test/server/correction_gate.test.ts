@@ -34,7 +34,9 @@ test.each([CorrectionState.PENDING, CorrectionState.RUNNING])(
     )
 
     expect(response.status).toBe(303)
-    expect(response.headers.location).toBe("/dashboard?project_name=ANGLE%203")
+    expect(response.headers.location).toBe(
+      "/dashboard?project_name=ANGLE%203&correction_pending=1"
+    )
   }
 )
 
@@ -46,7 +48,9 @@ test("also blocks the explicit label.html path", async () => {
   )
 
   expect(response.status).toBe(303)
-  expect(response.headers.location).toBe("/dashboard?project_name=ANGLE%203")
+  expect(response.headers.location).toBe(
+    "/dashboard?project_name=ANGLE%203&correction_pending=1"
+  )
 })
 
 test.each([CorrectionState.READY, CorrectionState.FAILED, undefined])(
