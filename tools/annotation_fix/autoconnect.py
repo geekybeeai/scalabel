@@ -139,18 +139,24 @@ def _direction(poly: dict, is_start: bool) -> Optional[np.ndarray]:
     vertices = poly["vertices"]
     if len(vertices) < 2:
         return None
-    if is_start:
-        tip, neighbour = vertices[0], vertices[1]
-    else:
-        tip, neighbour = vertices[-1], vertices[-2]
-    vector = np.array(
-        [float(tip[0]) - float(neighbour[0]), float(tip[1]) - float(neighbour[1])],
-        dtype=float,
-    )
-    norm = float(np.linalg.norm(vector))
-    if norm < 1e-9:
-        return None
-    return vector / norm
+    tip = vertices[0] if is_start else vertices[-1]
+    indices = range(1, len(vertices)) if is_start else range(len(vertices) - 2, -1, -1)
+    for index in indices:
+        neighbour = vertices[index]
+        vector = np.array(
+            [float(tip[0]) - float(neighbour[0]), float(tip[1]) - float(neighbour[1])],
+            dtype=float,
+        )
+        norm = float(np.linalg.norm(vector))
+        if norm >= 1e-9:
+            return vector / norm
+    return None
+
+
+def _angle_between(a: np.ndarray, b: np.ndarray) -> float:
+    """Return the angle in degrees between two unit vectors."""
+    cosine = float(np.clip(np.dot(a, b), -1.0, 1.0))
+    return float(np.degrees(np.arccos(cosine)))
 
 
 def _junction_angle(
@@ -167,8 +173,96 @@ def _junction_angle(
         return None
     # Each direction points outward from its own tip, so continuation shows up
     # as the vectors being opposed.
-    cosine = float(np.clip(np.dot(dir_a, -dir_b), -1.0, 1.0))
-    return 180.0 - float(np.degrees(np.arccos(cosine)))
+    return 180.0 - _angle_between(dir_a, -dir_b)
+
+
+def _gap_follows_tangents(
+    point_a: Tuple[float, float],
+    dir_a: np.ndarray,
+    point_b: Tuple[float, float],
+    dir_b: np.ndarray,
+    min_angle: float,
+) -> bool:
+    """Return whether the gap lies within both lines' continuation cones."""
+    vector = np.array([point_b[0] - point_a[0], point_b[1] - point_a[1]], dtype=float)
+    gap = float(np.linalg.norm(vector))
+    if gap < 1e-9:
+        return True
+    connector = vector / gap
+    max_deviation = 180.0 - min_angle
+    return (
+        _angle_between(dir_a, connector) <= max_deviation
+        and _angle_between(dir_b, -connector) <= max_deviation
+    )
+
+
+def _endpoint_touches_curve(poly: dict, is_start: bool) -> bool:
+    """Return whether the endpoint's usable neighbour is a Bezier control."""
+    vertices = poly["vertices"]
+    tip = vertices[0] if is_start else vertices[-1]
+    indices = range(1, len(vertices)) if is_start else range(len(vertices) - 2, -1, -1)
+    types = str(poly.get("types", ""))
+    for index in indices:
+        neighbour = vertices[index]
+        if np.hypot(float(tip[0]) - float(neighbour[0]), float(tip[1]) - float(neighbour[1])) >= 1e-9:
+            return types[index : index + 1] == "C"
+    return False
+
+
+def _vector_to_neighbour(
+    vertices: List[List[float]], index: int, step: int
+) -> Optional[np.ndarray]:
+    """Return a unit vector from one vertex to its first distinct neighbour."""
+    tip = vertices[index]
+    neighbour_index = index + step
+    while 0 <= neighbour_index < len(vertices):
+        neighbour = vertices[neighbour_index]
+        vector = np.array(
+            [float(neighbour[0]) - float(tip[0]), float(neighbour[1]) - float(tip[1])],
+            dtype=float,
+        )
+        norm = float(np.linalg.norm(vector))
+        if norm >= 1e-9:
+            return vector / norm
+        neighbour_index += step
+    return None
+
+
+def _spliced_seam_follows_tangents(
+    poly_a: dict,
+    is_start_a: bool,
+    poly_b: dict,
+    is_start_b: bool,
+    min_angle: float,
+) -> bool:
+    """Check the rendered seam created by a curve-adjacent splice.
+
+    The editor merge drops B's endpoint and retains the rest of B. A curve
+    therefore continues through its control point rather than the raw gap
+    between A and B. The resulting seam must be continuous and must not turn
+    B's surviving side beyond the configured deviation.
+    """
+    vertices, _ = _splice(
+        poly_a["vertices"],
+        str(poly_a.get("types", "")),
+        is_start_a,
+        poly_b["vertices"],
+        str(poly_b.get("types", "")),
+        is_start_b,
+    )
+    junction_index = len(poly_b["vertices"]) - 1 if is_start_a and not is_start_b else len(poly_a["vertices"]) - 1
+    before = _vector_to_neighbour(vertices, junction_index, -1)
+    after = _vector_to_neighbour(vertices, junction_index, 1)
+    dir_b = _direction(poly_b, is_start_b)
+    if before is None or after is None or dir_b is None:
+        return False
+
+    seam_angle = 180.0 - _angle_between(before, -after)
+    if seam_angle < min_angle:
+        return False
+
+    b_side = before if is_start_a and not is_start_b else after
+    return _angle_between(b_side, -dir_b) <= 180.0 - min_angle
 
 
 def _splice(
@@ -254,8 +348,26 @@ def connect_labels(
 
                 angle = None
                 if min_angle > 0.0:
+                    dir_a = _direction(poly_a, start_a)
+                    dir_b = _direction(poly_b, start_b)
+                    if dir_a is None or dir_b is None:
+                        continue
                     angle = _junction_angle(poly_a, start_a, poly_b, start_b)
-                    if angle is not None and angle < min_angle:
+                    follows_tangents = (
+                        _spliced_seam_follows_tangents(
+                            poly_a, start_a, poly_b, start_b, min_angle
+                        )
+                        if _endpoint_touches_curve(poly_a, start_a)
+                        or _endpoint_touches_curve(poly_b, start_b)
+                        else _gap_follows_tangents(
+                            point_a, dir_a, point_b, dir_b, min_angle
+                        )
+                    )
+                    if (
+                        angle is None
+                        or angle < min_angle
+                        or not follows_tangents
+                    ):
                         continue
 
                 if best is None or gap < best[0]:

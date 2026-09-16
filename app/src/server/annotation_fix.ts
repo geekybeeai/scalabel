@@ -45,6 +45,15 @@ const MAX_OUTPUT_BYTES = 1024 * 1024 * 1024
  */
 export const DEFAULT_CONNECT_TOLERANCE = 40
 
+/**
+ * Minimum angle, in degrees, for a production auto-connect candidate.
+ *
+ * 180 is perfectly straight; 150 permits a 30 degree continuation while
+ * rejecting forks and offset parallel lines. Set the environment override to
+ * 0 to retain the engine's legacy distance-only behavior.
+ */
+export const DEFAULT_CONNECT_MIN_ANGLE = 150
+
 /** Log hint appended to every skip. */
 const DIAGNOSE_HINT =
   "Annotation auto-correct SKIPPED — the project was created with UNCORRECTED annotations. Diagnose with: node app/dist/annotation_fix_worker.js --preflight"
@@ -77,6 +86,8 @@ export interface AnnotationFixOptions {
   timeoutMs?: number
   /** endpoint gap within which polylines are joined, in image pixels */
   tolerance?: number
+  /** minimum continuation angle in degrees; 0 disables the geometry guard */
+  minAngle?: number
 }
 
 /**
@@ -96,6 +107,26 @@ export function getConnectTolerance(): number {
     )
   }
   return DEFAULT_CONNECT_TOLERANCE
+}
+
+/**
+ * Minimum continuation angle to request, from
+ * SCALABEL_ANNOTATION_FIX_MIN_ANGLE when it is in the inclusive range 0..180,
+ * and DEFAULT_CONNECT_MIN_ANGLE otherwise.
+ */
+export function getConnectMinAngle(): number {
+  const configured = process.env.SCALABEL_ANNOTATION_FIX_MIN_ANGLE
+  if (configured !== undefined && configured !== "") {
+    const value = Number(configured)
+    if (Number.isFinite(value) && value >= 0 && value <= 180) {
+      return value
+    }
+    Logger.warning(
+      `Annotation auto-correct: ignoring SCALABEL_ANNOTATION_FIX_MIN_ANGLE=` +
+        `"${configured}" (not a number from 0 through 180); using ${DEFAULT_CONNECT_MIN_ANGLE}`
+    )
+  }
+  return DEFAULT_CONNECT_MIN_ANGLE
 }
 
 /**
@@ -245,7 +276,7 @@ async function runCorrector(
  * correction failure must not fail project creation.
  *
  * @param items parsed frames from the uploaded item file
- * @param options worker script, image root, tolerance and timeout
+ * @param options worker script, image root, connect geometry and timeout
  */
 export async function correctAnnotations(
   items: Array<Partial<ItemExport>>,
@@ -260,7 +291,8 @@ export async function correctAnnotations(
     image_root: options.imageRoot ?? getImageRoot(),
     clamp: true,
     connect: true,
-    tolerance: options.tolerance ?? getConnectTolerance()
+    tolerance: options.tolerance ?? getConnectTolerance(),
+    min_angle: options.minAngle ?? getConnectMinAngle()
   })
 
   try {

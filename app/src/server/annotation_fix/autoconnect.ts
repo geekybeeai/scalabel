@@ -152,14 +152,32 @@ function direction(
     return null
   }
   const tip = isStart ? vs[0] : vs[vs.length - 1]
-  const neighbour = isStart ? vs[1] : vs[vs.length - 2]
-  const dx = Number(tip[0]) - Number(neighbour[0])
-  const dy = Number(tip[1]) - Number(neighbour[1])
-  const norm = Math.hypot(dx, dy)
-  if (norm < 1e-9) {
-    return null
+  const step = isStart ? 1 : -1
+  for (
+    let index = isStart ? 1 : vs.length - 2;
+    index >= 0 && index < vs.length;
+    index += step
+  ) {
+    const neighbour = vs[index]
+    const dx = Number(tip[0]) - Number(neighbour[0])
+    const dy = Number(tip[1]) - Number(neighbour[1])
+    const norm = Math.hypot(dx, dy)
+    if (norm >= 1e-9) {
+      return [dx / norm, dy / norm]
+    }
   }
-  return [dx / norm, dy / norm]
+  return null
+}
+
+/**
+ * Angle between two unit vectors in degrees.
+ *
+ * @param a first unit vector
+ * @param b second unit vector
+ */
+function angleBetween(a: [number, number], b: [number, number]): number {
+  const cosine = Math.min(1, Math.max(-1, a[0] * b[0] + a[1] * b[1]))
+  return (Math.acos(cosine) * 180) / Math.PI
 }
 
 /**
@@ -183,11 +201,156 @@ function junctionAngle(
     return null
   }
   // Both point outward from their tips, so continuation shows as opposition.
-  const cosine = Math.min(
-    1,
-    Math.max(-1, -(dirA[0] * dirB[0] + dirA[1] * dirB[1]))
+  return 180 - angleBetween(dirA, [-dirB[0], -dirB[1]])
+}
+
+/**
+ * Whether the endpoint-to-endpoint gap follows both outward tangents.
+ *
+ * This rejects offset parallel lines even when their endpoint orientation makes
+ * them look like a straight continuation. Coincident endpoints have no gap
+ * direction, so their junction angle alone decides the candidate.
+ *
+ * @param pointA first endpoint
+ * @param dirA outward tangent at the first endpoint
+ * @param pointB second endpoint
+ * @param dirB outward tangent at the second endpoint
+ * @param minAngle minimum junction angle in degrees
+ */
+function gapFollowsTangents(
+  pointA: [number, number],
+  dirA: [number, number],
+  pointB: [number, number],
+  dirB: [number, number],
+  minAngle: number
+): boolean {
+  const dx = pointB[0] - pointA[0]
+  const dy = pointB[1] - pointA[1]
+  const gap = Math.hypot(dx, dy)
+  if (gap < 1e-9) {
+    return true
+  }
+  const connector: [number, number] = [dx / gap, dy / gap]
+  const maxDeviation = 180 - minAngle
+  return (
+    angleBetween(dirA, connector) <= maxDeviation &&
+    angleBetween(dirB, [-connector[0], -connector[1]]) <= maxDeviation
   )
-  return 180 - (Math.acos(cosine) * 180) / Math.PI
+}
+
+/**
+ * Whether the endpoint's first usable inward vertex is a Bezier control
+ * point. Curve controls, rather than their anchor endpoints, determine the
+ * tangent of a rendered Bezier span.
+ *
+ * @param poly polyline to inspect
+ * @param isStart whether to inspect its start endpoint
+ */
+function endpointTouchesCurve(
+  poly: PolygonExportType,
+  isStart: boolean
+): boolean {
+  const vs = poly.vertices
+  const tip = isStart ? vs[0] : vs[vs.length - 1]
+  const step = isStart ? 1 : -1
+  const types = String(poly.types ?? "")
+  for (
+    let index = isStart ? 1 : vs.length - 2;
+    index >= 0 && index < vs.length;
+    index += step
+  ) {
+    const neighbour = vs[index]
+    if (
+      Math.hypot(
+        Number(tip[0]) - Number(neighbour[0]),
+        Number(tip[1]) - Number(neighbour[1])
+      ) >= 1e-9
+    ) {
+      return types[index] === "C"
+    }
+  }
+  return false
+}
+
+/**
+ * Unit vector from one vertex to its first distinct neighbour in a direction.
+ *
+ * @param vertices vertex run to inspect
+ * @param index vertex index
+ * @param step direction to search
+ */
+function vectorToNeighbour(
+  vertices: Array<[number, number]>,
+  index: number,
+  step: number
+): [number, number] | null {
+  const tip = vertices[index]
+  for (
+    let neighbourIndex = index + step;
+    neighbourIndex >= 0 && neighbourIndex < vertices.length;
+    neighbourIndex += step
+  ) {
+    const neighbour = vertices[neighbourIndex]
+    const dx = Number(neighbour[0]) - Number(tip[0])
+    const dy = Number(neighbour[1]) - Number(tip[1])
+    const norm = Math.hypot(dx, dy)
+    if (norm >= 1e-9) {
+      return [dx / norm, dy / norm]
+    }
+  }
+  return null
+}
+
+/**
+ * Whether a curve-adjacent candidate stays continuous after it is spliced.
+ *
+ * The editor merge drops B's endpoint and keeps its following vertices. For a
+ * Bezier endpoint, the rendered seam therefore goes through B's control
+ * point, not through the raw A-to-B endpoint gap. Validate that resulting
+ * seam and ensure replacing B's endpoint does not turn B's own tangent by
+ * more than the configured deviation.
+ *
+ * @param polyA surviving polyline
+ * @param startA endpoint of A joined to B
+ * @param polyB absorbed polyline
+ * @param startB endpoint of B joined to A
+ * @param minAngle minimum continuity angle in degrees
+ */
+function splicedSeamFollowsTangents(
+  polyA: PolygonExportType,
+  startA: boolean,
+  polyB: PolygonExportType,
+  startB: boolean,
+  minAngle: number
+): boolean {
+  const [vertices] = splice(
+    polyA.vertices,
+    String(polyA.types ?? ""),
+    startA,
+    polyB.vertices,
+    String(polyB.types ?? ""),
+    startB
+  )
+  const junctionIndex =
+    startA && !startB ? polyB.vertices.length - 1 : polyA.vertices.length - 1
+  const before = vectorToNeighbour(vertices, junctionIndex, -1)
+  const after = vectorToNeighbour(vertices, junctionIndex, 1)
+  const dirB = direction(polyB, startB)
+  if (before === null || after === null || dirB === null) {
+    return false
+  }
+
+  const seamAngle = 180 - angleBetween(before, [-after[0], -after[1]])
+  if (seamAngle < minAngle) {
+    return false
+  }
+
+  // B's joined endpoint is removed by splice. Its remaining side must retain
+  // the original direction into B, or an offset neighbour could be bent into
+  // a false continuation.
+  const bSide = startA && !startB ? before : after
+  const maxDeviation = 180 - minAngle
+  return angleBetween(bSide, [-dirB[0], -dirB[1]]) <= maxDeviation
 }
 
 /**
@@ -329,8 +492,24 @@ export function connectLabels(
         }
         let angle: number | null = null
         if (minAngle > 0) {
+          const dirA = direction(ea.poly, ea.isStart)
+          const dirB = direction(eb.poly, eb.isStart)
+          if (dirA === null || dirB === null) {
+            continue
+          }
           angle = junctionAngle(ea.poly, ea.isStart, eb.poly, eb.isStart)
-          if (angle !== null && angle < minAngle) {
+          const followsTangents =
+            endpointTouchesCurve(ea.poly, ea.isStart) ||
+            endpointTouchesCurve(eb.poly, eb.isStart)
+              ? splicedSeamFollowsTangents(
+                  ea.poly,
+                  ea.isStart,
+                  eb.poly,
+                  eb.isStart,
+                  minAngle
+                )
+              : gapFollowsTangents(ea.point, dirA, eb.point, dirB, minAngle)
+          if (angle === null || angle < minAngle || !followsTangents) {
             continue
           }
         }

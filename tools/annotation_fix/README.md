@@ -69,28 +69,21 @@ is missing, so a broken image cannot ship. Verify a running container with:
 
     docker compose exec frontend python3 tools/annotation_fix/preflight.py
 
-### Running natively on Windows
+### Scalabel server overrides
 
-The server spawns the interpreter by name, and that name defaults to `python3`,
-which a native Windows install does not provide (`python.exe` and `py.exe` are
-the real ones; `python3` is usually a Store alias that is not an interpreter).
-Set it explicitly:
-
-    set SCALABEL_PYTHON=python
-
-Docker avoids this entirely and is the better option unless there is a reason
-not to use it.
-
-Overrides, when the defaults do not fit:
+The Scalabel Node server runs the compiled JavaScript worker with the same Node
+binary as `main.js`; it does not spawn this Python reference package. Its
+auto-connect settings are:
 
 | variable | purpose |
 | --- | --- |
-| `SCALABEL_PYTHON` | interpreter to spawn (default `python3` on PATH) |
-| `SCALABEL_ANNOTATION_FIX_DIR` | directory holding `annotation_fix` (default `<cwd>/tools`) |
 | `SCALABEL_ANNOTATION_FIX_IMAGE_ROOT` | image root (default `<cwd>/local-data`) |
+| `SCALABEL_ANNOTATION_FIX_WORKER` | compiled JavaScript worker path (default beside `main.js`) |
+| `SCALABEL_ANNOTATION_FIX_TOLERANCE` | positive endpoint gap in image pixels (default `40`) |
+| `SCALABEL_ANNOTATION_FIX_MIN_ANGLE` | continuation guard from `0` through `180` degrees (default `150`; `0` disables it) |
 
-The last two default to paths under the CURRENT WORKING DIRECTORY, so starting
-the server from anywhere but the repo root breaks them.
+`SCALABEL_ANNOTATION_FIX_IMAGE_ROOT` defaults beneath the current working
+directory, so start the server from the repository root or set it explicitly.
 
 ## Use as a library
 
@@ -168,7 +161,7 @@ warm, 264 KB of cache).
 |---|---|---|
 | `threshold` | 10 | Measured insensitive: the non-black fraction moves only 0.1415 → 0.1396 across 2..30. |
 | `tolerance` | 15.0 | Image px, matching the editor's screen-px snap radius. |
-| `min_angle` | 0.0 (off) | Rejects sharp junctions as genuine forks rather than continuations. Off so first runs are pure-distance. |
+| `min_angle` | 0.0 (off) | When enabled, requires a near-straight junction and requires the endpoint gap to follow both line tangents. This rejects offset parallel lines and forks; `0` disables both checks. The Scalabel server sends `150` by default. |
 | `inset` | 1.5 | Nudges clamped vertices off the exact boundary. |
 | `flag_distance` | 50.0 | Corrections beyond this are reported, not suppressed. |
 

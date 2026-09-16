@@ -296,6 +296,155 @@ describe("connectLabels eligibility and guards", () => {
     expect(connectLabels(fork, 15, 150)[0]).toHaveLength(2)
   })
 
+  test("minAngle accepts a gentle continuation whose gap follows both tangents", () => {
+    const labels = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [105, 2],
+        [199, 36]
+      ])
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(1)
+  })
+})
+
+describe("curve seam guard", () => {
+  test("minAngle accepts a line joining a curve when the resulting seam is smooth", () => {
+    const labels = [
+      line("line", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line(
+        "curve",
+        "lane",
+        [
+          [108, 12],
+          [140, 0],
+          [160, 0],
+          [200, 0]
+        ],
+        "LCCL"
+      )
+    ]
+
+    const [out] = connectLabels(labels, 40, 150)
+
+    expect(out).toHaveLength(1)
+    expect(out[0].poly2d?.[0]).toMatchObject({
+      vertices: [
+        [0, 0],
+        [100, 0],
+        [140, 0],
+        [160, 0],
+        [200, 0]
+      ],
+      types: "LLCCL"
+    })
+  })
+
+  test("minAngle rejects a curve join that creates a sharp resulting seam", () => {
+    const labels = [
+      line("line", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line(
+        "offset-curve",
+        "lane",
+        [
+          [105, 20],
+          [115, 20],
+          [130, 20],
+          [200, 20]
+        ],
+        "LCCL"
+      )
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(2)
+  })
+})
+
+describe("connectLabels eligibility and guards", () => {
+  test("minAngle rejects side-by-side parallel lines regardless of drawing direction", () => {
+    const forward = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [105, 20],
+        [205, 20]
+      ])
+    ]
+    const reverse = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [205, 20],
+        [105, 20]
+      ])
+    ]
+
+    expect(connectLabels(forward, 40, 150)[0]).toHaveLength(2)
+    expect(connectLabels(reverse, 40, 150)[0]).toHaveLength(2)
+  })
+
+  test("minAngle follows a distinct neighbour past duplicate endpoint vertices", () => {
+    const labels = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [105, 0],
+        [105, 0],
+        [200, 0]
+      ])
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(1)
+  })
+
+  test("duplicate endpoint vertices do not bypass parallel-line rejection", () => {
+    const labels = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [105, 20],
+        [105, 20],
+        [205, 20]
+      ])
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(2)
+  })
+
+  test("minAngle rejects a directionless endpoint but zero disables the guard", () => {
+    const labels = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [105, 0],
+        [105, 0]
+      ])
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(2)
+    expect(connectLabels(labels, 40, 0)[0]).toHaveLength(1)
+  })
+
   test("does not mutate labels that were not merged", () => {
     const untouched = line("solo", "lane", [
       [0, 0],
