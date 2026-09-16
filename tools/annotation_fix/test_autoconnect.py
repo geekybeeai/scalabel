@@ -54,6 +54,22 @@ class ContinuityGuardTest(unittest.TestCase):
             },
         )
 
+    def test_joins_a_curve_across_a_five_pixel_sampling_gap(self):
+        labels, _ = connect_labels(
+            [
+                line("line", [[0, 0], [100, 0]]),
+                line(
+                    "curve",
+                    [[103, 4], [108, 13], [125, 25], [160, 30]],
+                    "LCCL",
+                ),
+            ],
+            tolerance=40,
+            min_angle=150,
+        )
+
+        self.assertEqual(len(labels), 1)
+
     def test_rejects_a_curve_join_that_creates_a_sharp_resulting_seam(self):
         labels, _ = connect_labels(
             [

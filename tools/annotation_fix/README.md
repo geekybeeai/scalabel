@@ -161,7 +161,7 @@ warm, 264 KB of cache).
 |---|---|---|
 | `threshold` | 10 | Measured insensitive: the non-black fraction moves only 0.1415 → 0.1396 across 2..30. |
 | `tolerance` | 15.0 | Image px, matching the editor's screen-px snap radius. |
-| `min_angle` | 0.0 (off) | When enabled, requires a near-straight junction and requires the endpoint gap to follow both line tangents. This rejects offset parallel lines and forks; `0` disables both checks. The Scalabel server sends `150` by default. |
+| `min_angle` | 0.0 (off) | When enabled, requires a near-straight junction and requires the endpoint gap to follow both line tangents. This rejects offset parallel lines and forks; `0` disables both checks. A curve-adjacent gap of at most 5 image px is accepted as sampling jitter, so fragmented Bezier spans can reconnect without reopening larger parallel-line gaps. The Scalabel server sends `150` by default. |
 | `inset` | 1.5 | Nudges clamped vertices off the exact boundary. |
 | `flag_distance` | 50.0 | Corrections beyond this are reported, not suppressed. |
 

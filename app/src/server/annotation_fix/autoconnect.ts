@@ -21,6 +21,13 @@ export const DEFAULT_TOLERANCE = 15.0
 export const DEFAULT_MIN_ANGLE = 0.0
 
 /**
+ * Bezier anchors exported from adjacent model fragments can differ by a few
+ * image pixels even though they describe one continuous curve. Keep this far
+ * below the 40 px search radius so it cannot admit offset parallel lines.
+ */
+const CURVE_SAMPLING_GAP = 5.0
+
+/**
  * Category pairs describing the SAME physical feature, allowed to merge
  * across the class boundary. A road edge changes curb status partway along
  * constantly, splitting one edge into two labels whose ends touch. Paint
@@ -498,9 +505,13 @@ export function connectLabels(
             continue
           }
           angle = junctionAngle(ea.poly, ea.isStart, eb.poly, eb.isStart)
-          const followsTangents =
+          const curveAdjacent =
             endpointTouchesCurve(ea.poly, ea.isStart) ||
             endpointTouchesCurve(eb.poly, eb.isStart)
+          const curveSamplingGap = curveAdjacent && gap <= CURVE_SAMPLING_GAP
+          const followsTangents =
+            curveSamplingGap ||
+            (curveAdjacent
               ? splicedSeamFollowsTangents(
                   ea.poly,
                   ea.isStart,
@@ -508,8 +519,12 @@ export function connectLabels(
                   eb.isStart,
                   minAngle
                 )
-              : gapFollowsTangents(ea.point, dirA, eb.point, dirB, minAngle)
-          if (angle === null || angle < minAngle || !followsTangents) {
+              : gapFollowsTangents(ea.point, dirA, eb.point, dirB, minAngle))
+          if (
+            angle === null ||
+            (angle < minAngle && !curveSamplingGap) ||
+            !followsTangents
+          ) {
             continue
           }
         }

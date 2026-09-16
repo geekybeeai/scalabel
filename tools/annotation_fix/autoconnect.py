@@ -34,6 +34,11 @@ DEFAULT_TOLERANCE = 15.0
 # by default so the first runs are pure-distance and easy to reason about.
 DEFAULT_MIN_ANGLE = 0.0
 
+# Bezier anchors exported from adjacent model fragments can differ by a few
+# pixels while still describing one curve. This stays far below the 40 px
+# server search radius, so offset parallel lines remain guarded.
+CURVE_SAMPLING_GAP = 5.0
+
 # Category pairs that describe the SAME physical feature and may therefore be
 # merged across the class boundary.
 #
@@ -353,19 +358,25 @@ def connect_labels(
                     if dir_a is None or dir_b is None:
                         continue
                     angle = _junction_angle(poly_a, start_a, poly_b, start_b)
+                    curve_adjacent = _endpoint_touches_curve(
+                        poly_a, start_a
+                    ) or _endpoint_touches_curve(poly_b, start_b)
+                    curve_sampling_gap = curve_adjacent and gap <= CURVE_SAMPLING_GAP
                     follows_tangents = (
-                        _spliced_seam_follows_tangents(
-                            poly_a, start_a, poly_b, start_b, min_angle
-                        )
-                        if _endpoint_touches_curve(poly_a, start_a)
-                        or _endpoint_touches_curve(poly_b, start_b)
-                        else _gap_follows_tangents(
-                            point_a, dir_a, point_b, dir_b, min_angle
+                        curve_sampling_gap
+                        or (
+                            _spliced_seam_follows_tangents(
+                                poly_a, start_a, poly_b, start_b, min_angle
+                            )
+                            if curve_adjacent
+                            else _gap_follows_tangents(
+                                point_a, dir_a, point_b, dir_b, min_angle
+                            )
                         )
                     )
                     if (
                         angle is None
-                        or angle < min_angle
+                        or (angle < min_angle and not curve_sampling_gap)
                         or not follows_tangents
                     ):
                         continue

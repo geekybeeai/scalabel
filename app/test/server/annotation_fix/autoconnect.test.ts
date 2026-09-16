@@ -347,6 +347,28 @@ describe("curve seam guard", () => {
     })
   })
 
+  test("minAngle joins a curve across a five-pixel sampling gap", () => {
+    const labels = [
+      line("line", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line(
+        "curve",
+        "lane",
+        [
+          [103, 4],
+          [108, 13],
+          [125, 25],
+          [160, 30]
+        ],
+        "LCCL"
+      )
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(1)
+  })
+
   test("minAngle rejects a curve join that creates a sharp resulting seam", () => {
     const labels = [
       line("line", "lane", [
