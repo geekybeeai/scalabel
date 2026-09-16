@@ -8,6 +8,7 @@ import {
   defaultOptions,
   Frame,
   processDocument,
+  processFrame,
   reportToDict,
   resolveImagePath
 } from "../../../src/server/annotation_fix/core"
@@ -56,11 +57,13 @@ afterAll(() => {
  * @param id label id
  * @param category label category
  * @param vertices vertices
+ * @param types per-vertex types
  */
 function line(
   id: string,
   category: string,
-  vertices: Array<[number, number]>
+  vertices: Array<[number, number]>,
+  types?: string
 ): LabelExport {
   return {
     id,
@@ -69,7 +72,9 @@ function line(
     manualShape: true,
     box2d: null,
     box3d: null,
-    poly2d: [{ vertices, types: "L".repeat(vertices.length), closed: false }]
+    poly2d: [
+      { vertices, types: types ?? "L".repeat(vertices.length), closed: false }
+    ]
   }
 }
 
@@ -152,6 +157,76 @@ test("clamps then connects, deep-copies the input and keeps the bare-list shape"
       "totalVertices"
     ].sort()
   )
+})
+
+test("clamps an endpoint before accepting an atomic line-curve-line bridge", async () => {
+  const image = path.join(dir, "items", "bridge.png")
+  await sharp({
+    create: {
+      width: 300,
+      height: 100,
+      channels: 3,
+      background: { r: 0, g: 0, b: 0 }
+    }
+  })
+    .composite([
+      {
+        input: {
+          create: {
+            width: 200,
+            height: 100,
+            channels: 3,
+            background: { r: 120, g: 120, b: 120 }
+          }
+        },
+        left: 100,
+        top: 0
+      }
+    ])
+    .png()
+    .toFile(image)
+  const frame: Frame = {
+    name: "items/bridge.png",
+    labels: [
+      line("left", "lane", [
+        [40, 50],
+        [150, 50]
+      ]),
+      line(
+        "curve",
+        "lane",
+        [
+          [100, 50],
+          [100, 80],
+          [200, 80],
+          [200, 50]
+        ],
+        "LCCL"
+      ),
+      line("right", "lane", [
+        [210, 50],
+        [280, 50]
+      ])
+    ]
+  }
+
+  const report = await processFrame(frame, {
+    ...defaultOptions(),
+    imageRoot: dir,
+    tolerance: 40,
+    minAngle: 150
+  })
+
+  expect(frame.labels).toHaveLength(1)
+  expect(frame.labels?.[0].id).toBe("left")
+  expect(frame.labels?.[0].poly2d?.[0].types).toBe("LLCCLL")
+  expect(frame.labels?.[0].poly2d?.[0].vertices).toContainEqual([101.5, 50])
+  expect(report).toMatchObject({
+    clamped: 1,
+    merged: 2,
+    labelsBefore: 3,
+    labelsAfter: 1
+  })
 })
 
 test("a missing image skips clamping but still connects", async () => {
