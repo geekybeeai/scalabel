@@ -13,6 +13,7 @@ import { ServerConfig } from "../types/config"
 import { BotManager } from "./bot_manager"
 import { readConfig } from "./config"
 import Callback from "./controller/callback"
+import { correctionGateHandler } from "./correction_gate"
 import { startEmbedCleanup } from "./embed_cleanup"
 import { Hub } from "./hub"
 import { Listeners } from "./listeners"
@@ -59,6 +60,11 @@ function startHTTPServer(
 
   // Set up middleware
   app.use(listeners.loggingHandler)
+
+  // The dashboard disables tasks while background annotation correction is
+  // pending, but a copied/direct label URL bypasses that button. Gate both
+  // static label-page spellings before express.static can serve stale data.
+  app.get(["/label", "/label.html"], correctionGateHandler)
 
   // Set up static handlers for serving html
   // TODO: set up '/' endpoint
