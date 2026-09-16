@@ -161,7 +161,7 @@ warm, 264 KB of cache).
 |---|---|---|
 | `threshold` | 10 | Measured insensitive: the non-black fraction moves only 0.1415 → 0.1396 across 2..30. |
 | `tolerance` | 15.0 | Image px, matching the editor's screen-px snap radius. |
-| `min_angle` | 0.0 (off) | When enabled, requires a near-straight junction and requires the endpoint gap to follow both line tangents. This rejects offset parallel lines and forks; `0` disables both checks. A curve-adjacent gap of at most 5 image px is accepted as sampling jitter, so fragmented Bezier spans can reconnect without reopening larger parallel-line gaps. The Scalabel server sends `150` by default. |
+| `min_angle` | 0.0 (off) | When enabled, guarded curve bridges are matched by reciprocal endpoint topology and, beyond a 5 px sampling-jitter gap, require only the external straight side to align with the connector. Straight-to-straight joins retain the full junction-angle and two-sided connector guard, rejecting offset parallel lines and forks. This uses no new parameter: `0` disables every direction check and preserves legacy distance-only matching. The Scalabel server sends `150` by default. |
 | `inset` | 1.5 | Nudges clamped vertices off the exact boundary. |
 | `flag_distance` | 50.0 | Corrections beyond this are reported, not suppressed. |
 
@@ -181,9 +181,14 @@ gives, for every outside pixel, the nearest inside pixel — no contour tracing 
 no point-in-polygon test. The transform is built lazily, only when something
 actually falls outside.
 
-**Merging consumes each endpoint once,** shortest gap first, re-deriving
-candidates after every merge so chains (A–B–C) resolve across passes. Closed
-rings and multi-polygon labels never participate, matching the editor.
+**Guarded Bezier bridges are atomic.** With a positive `min_angle`, a complete
+line–curve–line (or longer) component first needs reciprocal-nearest endpoint
+pairs on both curve sides. Only non-branching paths with distinct endpoint use
+are spliced, preserving the lowest-index label's identity and ordering. The
+existing shortest-gap pairwise pass then consumes remaining endpoints and
+re-derives candidates after every merge so ordinary chains (A–B–C) still
+resolve across passes. Closed rings and multi-polygon labels never participate,
+matching the editor.
 
 **Cross-category pairs are left alone.** The editor also snaps endpoints across
 categories, but that relies on a visible indicator and one-step undo, neither of

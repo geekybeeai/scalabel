@@ -301,6 +301,273 @@ def _splice(
     return list_a + list_b[::-1][1:], "".join(seq_a + seq_b[::-1][1:])
 
 
+@dataclass(frozen=True)
+class _BridgePair:
+    """A guarded curve endpoint paired with an external straight endpoint."""
+
+    gap: float
+    curve_index: int
+    curve_start: bool
+    external_index: int
+    external_start: bool
+    angle: Optional[float]
+
+
+def _endpoint_key(index: int, is_start: bool) -> Tuple[int, bool]:
+    """Return a stable identity for an original endpoint."""
+    return index, is_start
+
+
+def _bridge_side(pair: _BridgePair, index: int) -> bool:
+    """Return the endpoint side used by ``pair`` at ``index``."""
+    return pair.curve_start if pair.curve_index == index else pair.external_start
+
+
+def _bridge_other(pair: _BridgePair, index: int) -> int:
+    """Return the label index at the other end of ``pair``."""
+    return pair.external_index if pair.curve_index == index else pair.curve_index
+
+
+def _bridge_preference(pair: _BridgePair, own_index: int) -> Tuple[float, int, int]:
+    """Sort candidates by gap, other label index, then other endpoint side."""
+    other = _bridge_other(pair, own_index)
+    # The TypeScript reference prefers a start endpoint before an end endpoint
+    # for an otherwise exact tie.
+    return pair.gap, other, 0 if _bridge_side(pair, other) else 1
+
+
+def _bridge_approach_allowed(
+    curve_point: Tuple[float, float],
+    external_poly: dict,
+    external_start: bool,
+    gap: float,
+    min_angle: float,
+) -> bool:
+    """Return whether a straight endpoint approaches a curve endpoint safely."""
+    if gap <= CURVE_SAMPLING_GAP:
+        return True
+    external_direction = _direction(external_poly, external_start)
+    if external_direction is None:
+        return False
+    external_point = _endpoint(external_poly, external_start)
+    connector = np.array(
+        [curve_point[0] - external_point[0], curve_point[1] - external_point[1]],
+        dtype=float,
+    ) / gap
+    return _angle_between(external_direction, connector) <= 180.0 - min_angle
+
+
+def _active_bridge_edges(
+    labels: List[dict],
+    tolerance: float,
+    min_angle: float,
+    mergeable_categories: Sequence[frozenset],
+) -> List[_BridgePair]:
+    """Build reciprocal curve/straight pairs and retain complete bridges."""
+    endpoints: List[Tuple[int, bool, dict, Tuple[float, float]]] = []
+    endpoint_by_key: Dict[Tuple[int, bool], Tuple[int, bool, dict, Tuple[float, float]]] = {}
+    curve_indices: List[int] = []
+    for index, label in enumerate(labels):
+        poly = _open_polyline(label)
+        if poly is None:
+            continue
+        if _endpoint_touches_curve(poly, True) and _endpoint_touches_curve(poly, False):
+            curve_indices.append(index)
+        for is_start in (True, False):
+            entry = (index, is_start, poly, _endpoint(poly, is_start))
+            endpoints.append(entry)
+            endpoint_by_key[_endpoint_key(index, is_start)] = entry
+
+    candidates: List[_BridgePair] = []
+    for curve_index in curve_indices:
+        for curve_start in (True, False):
+            _, _, curve_poly, curve_point = endpoint_by_key[_endpoint_key(curve_index, curve_start)]
+            for external_index, external_start, external_poly, external_point in endpoints:
+                if (
+                    external_index == curve_index
+                    or _endpoint_touches_curve(external_poly, external_start)
+                    or not _categories_compatible(
+                        str(labels[curve_index].get("category", "")),
+                        str(labels[external_index].get("category", "")),
+                        mergeable_categories,
+                    )
+                ):
+                    continue
+                gap = float(np.hypot(curve_point[0] - external_point[0], curve_point[1] - external_point[1]))
+                if gap > tolerance or not _bridge_approach_allowed(
+                    curve_point, external_poly, external_start, gap, min_angle
+                ):
+                    continue
+                candidates.append(
+                    _BridgePair(
+                        gap=gap,
+                        curve_index=curve_index,
+                        curve_start=curve_start,
+                        external_index=external_index,
+                        external_start=external_start,
+                        angle=_junction_angle(curve_poly, curve_start, external_poly, external_start),
+                    )
+                )
+
+    by_endpoint: Dict[Tuple[int, bool], List[_BridgePair]] = {}
+    for pair in candidates:
+        by_endpoint.setdefault(_endpoint_key(pair.curve_index, pair.curve_start), []).append(pair)
+        by_endpoint.setdefault(_endpoint_key(pair.external_index, pair.external_start), []).append(pair)
+    nearest = {
+        key: min(pairs, key=lambda pair: _bridge_preference(pair, key[0]))
+        for key, pairs in by_endpoint.items()
+    }
+    reciprocal: Dict[Tuple[int, bool], _BridgePair] = {}
+    for pair in candidates:
+        curve_key = _endpoint_key(pair.curve_index, pair.curve_start)
+        external_key = _endpoint_key(pair.external_index, pair.external_start)
+        if nearest[curve_key] == pair and nearest[external_key] == pair:
+            reciprocal[curve_key] = pair
+
+    active: List[_BridgePair] = []
+    for curve_index in curve_indices:
+        start = reciprocal.get(_endpoint_key(curve_index, True))
+        end = reciprocal.get(_endpoint_key(curve_index, False))
+        if start is not None and end is not None and _endpoint_key(
+            start.external_index, start.external_start
+        ) != _endpoint_key(end.external_index, end.external_start):
+            active.extend((start, end))
+    return active
+
+
+def _splice_preserving_first(
+    vertices_a: List[List[float]],
+    types_a: str,
+    is_start_a: bool,
+    vertices_b: List[List[float]],
+    types_b: str,
+    is_start_b: bool,
+) -> Tuple[List[List[float]], str]:
+    """Splice onto a survivor without reversing its original vertex run."""
+    if not is_start_a or not is_start_b:
+        return _splice(vertices_a, types_a, is_start_a, vertices_b, types_b, is_start_b)
+    return list(vertices_b)[::-1][:-1] + list(vertices_a), str(types_b)[::-1][:-1] + str(types_a)
+
+
+def _splice_bridge_components(
+    labels: List[dict],
+    components: List[Tuple[List[_BridgePair], List[int]]],
+    absorbed: set,
+    connections: List[Connection],
+) -> None:
+    """Atomically splice accepted path components into their lowest-index labels."""
+    for edges, nodes in sorted(components, key=lambda component: min(component[1])):
+        survivor_index = min(nodes)
+        survivor = labels[survivor_index]
+        adjacency: Dict[int, List[_BridgePair]] = {}
+        for edge in edges:
+            adjacency.setdefault(edge.curve_index, []).append(edge)
+            adjacency.setdefault(edge.external_index, []).append(edge)
+        first_edges = sorted(
+            adjacency[survivor_index],
+            key=lambda edge: (int(_bridge_side(edge, survivor_index)), _bridge_other(edge, survivor_index)),
+        )
+        used_edges: set = set()
+
+        for first_edge in first_edges:
+            if first_edge in used_edges:
+                continue
+            survivor_start = _bridge_side(first_edge, survivor_index)
+            current_index = survivor_index
+            edge: Optional[_BridgePair] = first_edge
+            while edge is not None and edge not in used_edges:
+                used_edges.add(edge)
+                absorbed_index = _bridge_other(edge, current_index)
+                absorbed_label = labels[absorbed_index]
+                survivor_poly = _open_polyline(survivor)
+                absorbed_poly = _open_polyline(absorbed_label)
+                if survivor_poly is None or absorbed_poly is None:
+                    break
+                junction = _endpoint(survivor_poly, survivor_start)
+                vertices, types = _splice_preserving_first(
+                    survivor_poly["vertices"],
+                    str(survivor_poly.get("types", "")),
+                    survivor_start,
+                    absorbed_poly["vertices"],
+                    str(absorbed_poly.get("types", "")),
+                    _bridge_side(edge, absorbed_index),
+                )
+                survivor_poly["vertices"] = vertices
+                survivor_poly["types"] = types
+                absorbed.add(id(absorbed_label))
+                connections.append(
+                    Connection(
+                        kept_id=str(survivor.get("id", "")),
+                        absorbed_id=str(absorbed_label.get("id", "")),
+                        category=str(survivor.get("category", "")),
+                        junction=junction,
+                        gap=edge.gap,
+                        angle=edge.angle,
+                    )
+                )
+                edge = next((candidate for candidate in adjacency[absorbed_index] if candidate != edge), None)
+                current_index = absorbed_index
+
+
+def _connect_atomic_curve_bridges(
+    labels: List[dict],
+    tolerance: float,
+    min_angle: float,
+    mergeable_categories: Sequence[frozenset],
+) -> Tuple[set, List[Connection]]:
+    """Connect complete non-branching curve-bridge paths before pairwise fallback."""
+    if min_angle <= 0.0:
+        return set(), []
+    edges = _active_bridge_edges(labels, tolerance, min_angle, mergeable_categories)
+    adjacency: Dict[int, List[_BridgePair]] = {}
+    for edge in edges:
+        adjacency.setdefault(edge.curve_index, []).append(edge)
+        adjacency.setdefault(edge.external_index, []).append(edge)
+
+    visited_nodes: set = set()
+    accepted: List[Tuple[List[_BridgePair], List[int]]] = []
+    for seed in sorted(adjacency):
+        if seed in visited_nodes:
+            continue
+        nodes: List[int] = []
+        component_edges: set = set()
+        pending = [seed]
+        while pending:
+            index = pending.pop()
+            if index in visited_nodes:
+                continue
+            visited_nodes.add(index)
+            nodes.append(index)
+            for edge in adjacency[index]:
+                component_edges.add(edge)
+                pending.append(_bridge_other(edge, index))
+
+        valid = len(nodes) >= 3 and len(component_edges) == len(nodes) - 1
+        ends = 0
+        for index in nodes:
+            degree = len(adjacency[index])
+            if degree == 1:
+                ends += 1
+            elif degree != 2:
+                valid = False
+        endpoint_use: set = set()
+        for edge in component_edges:
+            for key in (
+                _endpoint_key(edge.curve_index, edge.curve_start),
+                _endpoint_key(edge.external_index, edge.external_start),
+            ):
+                if key in endpoint_use:
+                    valid = False
+                endpoint_use.add(key)
+        if valid and ends == 2:
+            accepted.append((list(component_edges), nodes))
+
+    absorbed: set = set()
+    connections: List[Connection] = []
+    _splice_bridge_components(labels, accepted, absorbed, connections)
+    return absorbed, connections
+
+
 def connect_labels(
     labels: List[dict],
     tolerance: float = DEFAULT_TOLERANCE,
@@ -316,7 +583,10 @@ def connect_labels(
     """
     result = ConnectResult(labels_before=len(labels))
     working: List[dict] = list(labels)
-    absorbed: set = set()
+    absorbed, atomic_connections = _connect_atomic_curve_bridges(
+        working, tolerance, min_angle, mergeable_categories
+    )
+    result.connections.extend(atomic_connections)
 
     while True:
         # (label index, is_start) for every free endpoint of an eligible line.

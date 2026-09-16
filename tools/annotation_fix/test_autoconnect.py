@@ -129,5 +129,160 @@ class ContinuityGuardTest(unittest.TestCase):
         self.assertEqual(len(labels), 2)
 
 
+def bridge(gap=10):
+    """Build a vertical-tangent curve between two horizontal lines."""
+    return [
+        line("left", [[0, 0], [70 - gap, 0]]),
+        line("curve", [[70, 0], [70, 30], [130, 30], [130, 0]], "LCCL"),
+        line("right", [[130 + gap, 0], [200, 0]]),
+    ]
+
+
+class AtomicCurveBridgeTest(unittest.TestCase):
+    def test_recovers_a_complete_line_curve_line_bridge(self):
+        labels, result = connect_labels(bridge(10), tolerance=40, min_angle=150)
+
+        self.assertEqual([label["id"] for label in labels], ["left"])
+        self.assertEqual(len(result.connections), 2)
+        self.assertEqual(
+            labels[0]["poly2d"][0],
+            {
+                "vertices": [[0, 0], [60, 0], [70, 30], [130, 30], [130, 0], [200, 0]],
+                "types": "LLCCLL",
+                "closed": False,
+            },
+        )
+
+    def test_connects_an_entire_maximal_curve_bridge_chain(self):
+        labels = bridge(10) + [
+            line("curve-2", [[210, 0], [210, 30], [270, 30], [270, 0]], "LCCL"),
+            line("far-right", [[280, 0], [340, 0]]),
+        ]
+        labels[2]["poly2d"][0]["vertices"][1] = [200, 0]
+
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+
+        self.assertEqual([label["id"] for label in output], ["left"])
+        self.assertEqual(
+            [connection.absorbed_id for connection in result.connections],
+            ["curve", "right", "curve-2", "far-right"],
+        )
+        self.assertEqual(output[0]["poly2d"][0]["types"], "LLCCLLCCLL")
+
+    def test_requires_reciprocal_nearest_pairs_before_activating_a_bridge(self):
+        labels = bridge(10)
+        labels.insert(
+            1,
+            line("closer-curve", [[65, 2.5], [65, 32.5], [300, 30], [300, 0]], "LCCL"),
+        )
+
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+
+        self.assertEqual(len(output), 4)
+        self.assertEqual(result.connections, [])
+
+    def test_breaks_equal_matches_by_original_label_index(self):
+        labels = [
+            line("chosen", [[0, 0], [60, 0]]),
+            line("unchosen", [[0, 20], [60, 0]]),
+            *bridge(10)[1:],
+        ]
+
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+
+        self.assertEqual([label["id"] for label in output], ["chosen", "unchosen"])
+        self.assertEqual([connection.absorbed_id for connection in result.connections], ["curve", "right"])
+
+    def test_breaks_same_label_endpoint_ties_by_start_side(self):
+        labels = [
+            line("double-ended", [[60, 0], [-100, 0], [60, 0]]),
+            *bridge(10)[1:],
+        ]
+
+        output, _ = connect_labels(labels, tolerance=40, min_angle=150)
+
+        self.assertEqual(
+            output[0]["poly2d"][0]["vertices"],
+            [[200, 0], [130, 0], [130, 30], [70, 30], [60, 0], [-100, 0], [60, 0]],
+        )
+
+    def test_rejects_a_two_label_curve_bridge_self_cycle(self):
+        labels = [
+            line("curve", [[70, 0], [70, 30], [130, 30], [130, 0]], "LCCL"),
+            line("loop", [[60, 0], [0, 0], [0, 100], [200, 100], [200, 0], [140, 0]]),
+        ]
+
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+
+        self.assertEqual([label["id"] for label in output], ["curve", "loop"])
+        self.assertEqual(result.connections, [])
+
+    def test_preserves_lowest_survivor_metadata_orientation_types_and_reports(self):
+        left, curve, right = bridge(10)
+        curve["attributes"] = {"source": "curve-survivor"}
+        curve["manualShape"] = False
+
+        output, result = connect_labels([curve, right, left], tolerance=40, min_angle=150)
+
+        self.assertEqual(output, [curve])
+        self.assertEqual(output[0]["attributes"], {"source": "curve-survivor"})
+        self.assertFalse(output[0]["manualShape"])
+        self.assertEqual(
+            output[0]["poly2d"][0]["vertices"],
+            [[0, 0], [70, 0], [70, 30], [130, 30], [130, 0], [200, 0]],
+        )
+        self.assertEqual(output[0]["poly2d"][0]["types"], "LLCCLL")
+        self.assertEqual((result.labels_before, result.labels_after), (3, 1))
+        self.assertCountEqual(
+            [connection.to_dict() for connection in result.connections],
+            [
+                {
+                    "keptId": "curve",
+                    "absorbedId": "left",
+                    "category": "lane",
+                    "junction": [70.0, 0.0],
+                    "gap": 10.0,
+                    "angle": 90.0,
+                },
+                {
+                    "keptId": "curve",
+                    "absorbedId": "right",
+                    "category": "lane",
+                    "junction": [130.0, 0.0],
+                    "gap": 10.0,
+                    "angle": 90.0,
+                },
+            ],
+        )
+
+    def test_rejects_parallel_and_forked_external_bridge_approaches(self):
+        parallel = bridge(10)
+        parallel[0]["poly2d"][0]["vertices"] = [[0, 20], [60, 20]]
+        fork = bridge(10)
+        fork[0]["poly2d"][0]["vertices"] = [[0, -60], [60, 0]]
+
+        self.assertEqual(len(connect_labels(parallel, tolerance=40, min_angle=150)[0]), 3)
+        self.assertEqual(len(connect_labels(fork, tolerance=40, min_angle=150)[0]), 3)
+
+    def test_zero_angle_bypasses_atomic_matching_and_keeps_legacy_order(self):
+        labels = bridge(10)
+        labels.insert(1, line("closer", [[64, 0], [64, 50]]))
+
+        output, result = connect_labels(labels, tolerance=40, min_angle=0)
+
+        self.assertEqual([label["id"] for label in output], ["left", "curve"])
+        self.assertEqual(
+            result.connections[0].to_dict(),
+            {
+                "keptId": "left",
+                "absorbedId": "closer",
+                "category": "lane",
+                "junction": [60.0, 0.0],
+                "gap": 4.0,
+            },
+        )
+        self.assertTrue(all(connection.angle is None for connection in result.connections))
+
+
 if __name__ == "__main__":
     unittest.main()
