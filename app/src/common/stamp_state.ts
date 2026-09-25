@@ -17,6 +17,12 @@ import {
   StampOptions
 } from "../drawable/2d/polyline_stamp_geometry"
 import { IdType } from "../types/state"
+import { drawHistory } from "./draw_history"
+import {
+  getStampHistoryTarget,
+  runStampHistoryAction,
+  StampHistoryTarget
+} from "./stamp_history"
 
 let stampMode = false
 let options: StampOptions = { ...DEFAULT_STAMP_OPTIONS }
@@ -111,6 +117,74 @@ export function requestCommit(): void {
 /** Ask the canvas to close the preview, keeping what was applied. */
 export function requestFinish(): void {
   finishHandler?.()
+}
+
+/**
+ * Undo the most recent annotation, keeping manual stamp placement undo local
+ * while marks are still pending and closing an applied preview after the
+ * grouped stamp command is undone.
+ */
+export function undoStampOrHistory(): boolean {
+  if (
+    getStampHistoryTarget({
+      previewing: isPreviewing(),
+      evenSpacing: options.evenSpacing,
+      hasApplied: hasApplied()
+    }) === StampHistoryTarget.POSITIONS
+  ) {
+    return undoPositions()
+  }
+  return runStampHistoryAction(
+    () => drawHistory.undo(),
+    isPreviewing() && hasApplied(),
+    endPreview
+  )
+}
+
+/** Redo the most recent annotation or pending manual stamp placement. */
+export function redoStampOrHistory(): boolean {
+  if (
+    getStampHistoryTarget({
+      previewing: isPreviewing(),
+      evenSpacing: options.evenSpacing,
+      hasApplied: hasApplied()
+    }) === StampHistoryTarget.POSITIONS
+  ) {
+    return redoPositions()
+  }
+  return runStampHistoryAction(
+    () => drawHistory.redo(),
+    isPreviewing() && hasApplied(),
+    endPreview
+  )
+}
+
+/**
+ * Keyboard history entry point used by the canvas. It delegates to the normal
+ * polyline history but also clears an applied stamp preview after undo.
+ *
+ * @param e keyboard shortcut event
+ */
+export function handleStampHistoryKeyboard(e: KeyboardEvent): boolean {
+  const target = e.target as HTMLElement | null
+  if (
+    target !== null &&
+    (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+  ) {
+    return false
+  }
+  if (!(e.ctrlKey || e.metaKey)) {
+    return false
+  }
+  const key = e.key.toLowerCase()
+  if (key !== "z" && key !== "y") {
+    return false
+  }
+  return runStampHistoryAction(
+    () => drawHistory.handleKeyboard(e),
+    isPreviewing() && hasApplied(),
+    endPreview
+  )
 }
 
 /** Whether the stamp tool is armed, waiting for a guide line to be picked. */

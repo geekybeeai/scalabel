@@ -6,7 +6,6 @@ import { connect } from "react-redux"
 
 import { changeSelect, changeViewerConfig } from "../action/common"
 import { changeSelectedLabelsCategories } from "../action/select"
-import { drawHistory } from "../common/draw_history"
 import Session from "../common/session"
 import { isInteracting, onIdle } from "../common/interaction_state"
 import {
@@ -87,6 +86,7 @@ import {
   getPreviewGuide,
   getStampOptions,
   getTemplates,
+  handleStampHistoryKeyboard,
   hasApplied,
   isCaptureMode,
   isPreviewing,
@@ -102,6 +102,14 @@ import {
   startPreview,
   undoPositions
 } from "../common/stamp_state"
+import {
+  getStampCanvasClickAction,
+  StampCanvasClickAction
+} from "../common/stamp_interaction"
+import {
+  getStampHistoryTarget,
+  StampHistoryTarget
+} from "../common/stamp_history"
 import { performDisjoint } from "../drawable/2d/polyline_disjoint"
 import { disjointableAnchors } from "../drawable/2d/polyline_disjoint_geometry"
 import { isDisjointMode, setDisjointMode } from "../common/disjoint_state"
@@ -1705,7 +1713,13 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // While placing marks by hand, Ctrl+Z/Y act on the placements rather than
     // the annotation: they are not in redux yet, so DrawHistory cannot see
     // them, and a mis-click is exactly what undo is expected to fix.
-    if (isPreviewing() && !getStampOptions().evenSpacing) {
+    if (
+      getStampHistoryTarget({
+        previewing: isPreviewing(),
+        evenSpacing: getStampOptions().evenSpacing,
+        hasApplied: hasApplied()
+      }) === StampHistoryTarget.POSITIONS
+    ) {
       if (this.handlePlacementUndo(e)) {
         e.preventDefault()
         return
@@ -1714,7 +1728,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
 
     // Polyline-level undo/redo (Ctrl/Cmd+Z / Ctrl/Cmd+Y / Ctrl/Cmd+Shift+Z).
     // Only swallow the shortcut when it actually did something.
-    if (drawHistory.handleKeyboard(e)) {
+    if (handleStampHistoryKeyboard(e)) {
       e.preventDefault()
       return
     }
@@ -1880,17 +1894,20 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.handleSimplify(mousePos)
       return true
     }
-    if (isPreviewing()) {
-      const options = getStampOptions()
-      if (!options.evenSpacing) {
-        // Manual mode: each click drops a mark where it lands rather than
-        // committing, so a run can be built up one paint stripe at a time.
-        this.addManualMark(mousePos)
-        return true
-      }
-      // Even mode: a click applies the marks at the current settings; the
-      // panel stays open so they can still be adjusted.
-      this.commitStampPreview()
+    const stampAction = getStampCanvasClickAction({
+      previewing: isPreviewing(),
+      evenSpacing: getStampOptions().evenSpacing,
+      armed: isStampMode()
+    })
+    if (stampAction === StampCanvasClickAction.PLACE_MANUAL) {
+      // Manual mode: each click drops a mark where it lands rather than
+      // committing, so a run can be built up one paint stripe at a time.
+      this.addManualMark(mousePos)
+      return true
+    }
+    if (stampAction === StampCanvasClickAction.IGNORE_PREVIEW) {
+      // Even-spacing previews are panel-controlled. Clicking the image while
+      // tuning must never write labels or start another gesture.
       return true
     }
     if (isDisjointMode()) {
@@ -1905,7 +1922,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.handleCapture(mousePos)
       return true
     }
-    if (isStampMode()) {
+    if (stampAction === StampCanvasClickAction.PICK_GUIDE) {
       this.handleStamp(mousePos)
       return true
     }

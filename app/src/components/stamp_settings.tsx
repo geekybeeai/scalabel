@@ -12,12 +12,18 @@
  */
 
 import Button from "@material-ui/core/Button"
+import Input from "@material-ui/core/Input"
 import MenuItem from "@material-ui/core/MenuItem"
 import Select from "@material-ui/core/Select"
 import Slider from "@material-ui/core/Slider"
+import AddIcon from "@material-ui/icons/Add"
 import React from "react"
 
 import { getState } from "../common/session"
+import {
+  clampStampNumber,
+  parseStampNumber
+} from "../common/stamp_settings_utils"
 import { getColorByCategory, toCssColor } from "../drawable/util"
 
 import {
@@ -26,6 +32,7 @@ import {
   isPanelOpen,
   requestCommit,
   requestFinish,
+  setCaptureMode,
   setPanelOpen,
   getTemplates,
   hasApplied,
@@ -35,6 +42,7 @@ import {
   renameTemplate,
   setPositions,
   resetStampOptions,
+  setStampMode,
   setStampOptions
 } from "../common/stamp_state"
 import {
@@ -47,12 +55,16 @@ interface Props {
   onChange: () => void
 }
 
+const CAPTURE_TEMPLATE_VALUE = "__capture_stamp_template__"
+
 /**
  * Settings bar for the pending stamp.
  */
 export class StampSettings extends React.Component<Props> {
   /** unsubscribe from stamp state changes */
   private offChange: (() => void) | null = null
+  /** in-progress text for numeric inputs, keyed by the slider label */
+  private numericDrafts: { [label: string]: string } = {}
 
   /** Subscribe so the bar appears and updates with the preview. */
   public componentDidMount(): void {
@@ -67,6 +79,7 @@ export class StampSettings extends React.Component<Props> {
     }
   }
 
+  /* eslint-disable max-lines-per-function */
   /**
    * Render the bar, or nothing when no preview is active.
    */
@@ -120,6 +133,14 @@ export class StampSettings extends React.Component<Props> {
           }
           onChange={(e) => {
             const value = e.target.value as string
+            if (value === CAPTURE_TEMPLATE_VALUE) {
+              // Capture is a guide-line click owned by the canvas. Keep the
+              // panel open so the saved shape is immediately available here.
+              setStampMode(false)
+              setCaptureMode(true)
+              this.props.onChange()
+              return
+            }
             if (value.startsWith("custom:")) {
               const name = value.slice("custom:".length)
               const found = getTemplates().find(
@@ -160,6 +181,10 @@ export class StampSettings extends React.Component<Props> {
               {t.name}
             </MenuItem>
           ))}
+          <MenuItem value={CAPTURE_TEMPLATE_VALUE} disabled={previewing}>
+            <AddIcon fontSize="small" style={{ marginRight: 6 }} />
+            Save a mark as a shape
+          </MenuItem>
         </Select>
 
         {this.renderCategoryPicker()}
@@ -257,6 +282,7 @@ export class StampSettings extends React.Component<Props> {
       </div>
     )
   }
+  /* eslint-enable max-lines-per-function */
 
   /**
    * Render the rename/forget buttons for the selected saved shape.
@@ -465,6 +491,7 @@ export class StampSettings extends React.Component<Props> {
     unit: string,
     onChange: (value: number) => void
   ): React.ReactNode {
+    const draft = this.numericDrafts[label]
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ opacity: 0.75, whiteSpace: "nowrap", width: 54 }}>
@@ -475,21 +502,62 @@ export class StampSettings extends React.Component<Props> {
           min={min}
           max={max}
           onChange={(_event, next) => {
+            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+            delete this.numericDrafts[label]
             onChange(next as number)
             this.props.onChange()
           }}
           style={{ flex: 1 }}
         />
-        <span
+        <Input
+          value={draft !== undefined ? draft : String(Math.round(value))}
+          type="number"
+          inputProps={{
+            min,
+            max,
+            step: 1,
+            "aria-label": `${label} value`
+          }}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+            const nextDraft = event.target.value
+            this.numericDrafts[label] = nextDraft
+            const parsed = parseStampNumber(nextDraft)
+            if (parsed !== null) {
+              onChange(clampStampNumber(parsed, min, max))
+            }
+            this.props.onChange()
+          }}
+          onBlur={() => {
+            const currentDraft = this.numericDrafts[label]
+            if (currentDraft === undefined) {
+              return
+            }
+            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+            delete this.numericDrafts[label]
+            const parsed = parseStampNumber(currentDraft)
+            if (parsed !== null) {
+              onChange(clampStampNumber(parsed, min, max))
+            }
+            this.props.onChange()
+          }}
+          onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
+            event.stopPropagation()
+            if (event.key === "Enter") {
+              event.currentTarget.blur()
+            } else if (event.key === "Escape") {
+              event.preventDefault()
+              // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+              delete this.numericDrafts[label]
+              this.forceUpdate()
+            }
+          }}
           style={{
             width: 42,
-            textAlign: "right",
-            fontVariantNumeric: "tabular-nums"
+            color: "#fff",
+            fontSize: 11
           }}
-        >
-          {Math.round(value)}
-          {unit}
-        </span>
+        />
+        <span style={{ width: 18, opacity: 0.75 }}>{unit}</span>
       </div>
     )
   }

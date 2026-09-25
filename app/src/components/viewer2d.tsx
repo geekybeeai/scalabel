@@ -40,13 +40,13 @@ import {
   setSimplifyMode
 } from "../common/simplify_state"
 import {
-  isCaptureMode,
   isPanelOpen,
   isStampMode,
   onStampChange,
-  setCaptureMode,
+  redoStampOrHistory,
   setPanelOpen,
-  setStampMode
+  setStampMode,
+  undoStampOrHistory
 } from "../common/stamp_state"
 import {
   armSegmentDelete,
@@ -92,7 +92,6 @@ import {
 import {
   ContentCutCurveIcon,
   ContentCutIcon,
-  CaptureShapeIcon,
   ArcIcon,
   DisjointIcon,
   SimplifyIcon,
@@ -464,7 +463,6 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         this.getArcButton(),
         this.getDisjointButton(),
         this.getStampButton(),
-        this.getCaptureButton(),
         this.getSnapButton(),
         this.getDeleteSegmentButton(),
         this.getFreeformSelectButton()
@@ -493,7 +491,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         arrow
       >
         <IconButton
-          onClick={() => drawHistory.undo()}
+          onClick={() => undoStampOrHistory()}
           className={this.props.classes.viewer_button}
           style={{ opacity: drawHistory.canUndo() ? 1 : DIMMED }}
           edge={"start"}
@@ -512,7 +510,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         arrow
       >
         <IconButton
-          onClick={() => drawHistory.redo()}
+          onClick={() => redoStampOrHistory()}
           className={this.props.classes.viewer_button}
           style={{ opacity: drawHistory.canRedo() ? 1 : DIMMED }}
           edge={"start"}
@@ -953,52 +951,6 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           edge={"start"}
         >
           <StampIcon />
-        </IconButton>
-      </Tooltip>
-    )
-  }
-
-  /**
-   * Build the capture-shape toolbar button.
-   *
-   * Saves the clicked mark as a reusable stamp shape. The built-in dash and
-   * chevron do not cover everything — across this batch 422 marks have three
-   * vertices and 40 have four to six — so any drawn mark can become a template.
-   *
-   * @return {JSX.Element} the capture button
-   */
-  protected getCaptureButton(): JSX.Element {
-    const armed = isCaptureMode()
-    return (
-      <Tooltip
-        key={`capture2dButton${this.props.id}`}
-        title="Save a mark as a stamp shape"
-        enterDelay={500}
-        TransitionComponent={Fade}
-        TransitionProps={{ timeout: 600 }}
-        arrow
-      >
-        <IconButton
-          onClick={() => {
-            if (armed) {
-              setCaptureMode(false)
-            } else if (
-              !Session.label2dList.isDrawingInProgress() &&
-              !this.state.task.config.tracking
-            ) {
-              setCutMode(false)
-              setCurveCutMode(false)
-              setStraightenMode(false)
-              setSimplifyMode(false)
-              setStampMode(false)
-              setCaptureMode(true)
-            }
-          }}
-          className={this.props.classes.viewer_button}
-          style={{ color: armed ? "#4caf50" : undefined }}
-          edge={"start"}
-        >
-          <CaptureShapeIcon />
         </IconButton>
       </Tooltip>
     )

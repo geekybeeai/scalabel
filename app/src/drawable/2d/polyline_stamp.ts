@@ -205,14 +205,17 @@ export function commitStamp(
         label: [labelId]
       })
     )
-    const label: LabelType = makeLabel({
-      id: labelId,
-      type: LabelTypeName.POLYLINE_2D,
-      item: itemIndex,
-      category: [category],
-      shapes: shapes.map((s) => s.id),
-      manual: true
-    })
+    const label: LabelType = makeLabel(
+      {
+        id: labelId,
+        type: LabelTypeName.POLYLINE_2D,
+        item: itemIndex,
+        category: [category],
+        shapes: shapes.map((s) => s.id),
+        manual: true
+      },
+      false
+    )
     actions.push(addLabel(itemIndex, label, shapes))
     newIds.push(labelId)
   }
