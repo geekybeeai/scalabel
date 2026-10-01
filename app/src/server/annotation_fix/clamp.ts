@@ -114,35 +114,108 @@ function insetPoint(
   return [nx, ny]
 }
 
+/** Per-vertex type marking a bezier control point ("handle"). */
+const HANDLE = "C"
+
+/**
+ * The anchor a curve handle belongs to, or -1 if there is none.
+ *
+ * A curved segment is stored as anchor, handle, handle, anchor ("LCCL"): each
+ * handle steers the curve where it leaves the nearer anchor. The owner is
+ * therefore the closest anchor along the vertex list, the earlier one on a
+ * tie. Closed shapes wrap around the end of the list.
+ *
+ * @param index index of the handle
+ * @param types per-vertex types
+ * @param count number of vertices
+ * @param closed whether the shape wraps
+ */
+function handleOwner(
+  index: number,
+  types: string,
+  count: number,
+  closed: boolean
+): number {
+  const at = (i: number): number => (closed ? ((i % count) + count) % count : i)
+  let back = -1
+  let forward = -1
+  let backSteps = 0
+  let forwardSteps = 0
+  for (let step = 1; step < count; step++) {
+    const i = at(index - step)
+    if (i < 0) {
+      break
+    }
+    if (types[i] !== HANDLE) {
+      back = i
+      backSteps = step
+      break
+    }
+  }
+  for (let step = 1; step < count; step++) {
+    const i = at(index + step)
+    if (i >= count) {
+      break
+    }
+    if (types[i] !== HANDLE) {
+      forward = i
+      forwardSteps = step
+      break
+    }
+  }
+  if (back === -1) {
+    return forward
+  }
+  if (forward === -1) {
+    return back
+  }
+  return backSteps <= forwardSteps ? back : forward
+}
+
 /**
  * Clamp one polyline's vertices into the ROI. Vertices already inside are
  * returned untouched with their exact original values.
+ *
+ * Curve handles (type "C") are never clamped on their own: they do not lie on
+ * the line, so a handle out in the padding is normal for a curve that hugs
+ * the image edge, and dragging it inside would reshape the curve. Only
+ * anchors are tested. When an anchor does have to move, its handles move by
+ * the same offset, so the curve keeps its shape and simply shifts with the
+ * anchor rather than bending around a handle left behind.
  *
  * @param roi the mask
  * @param vertices the polyline's vertices
  * @param labelId owning label id, for the report
  * @param category owning label category, for the report
  * @param inset inward nudge in pixels
+ * @param types per-vertex types: "L" anchor, "C" handle; empty = all anchors
+ * @param closed whether the shape is closed, so handles wrap around
  */
 export function clampVertices(
   roi: RoiMask,
   vertices: Array<[number, number]>,
   labelId: string = "",
   category: string = "",
-  inset: number = DEFAULT_INSET
+  inset: number = DEFAULT_INSET,
+  types: string = "",
+  closed: boolean = false
 ): [Array<[number, number]>, VertexCorrection[]] {
-  const out: Array<[number, number]> = []
+  const out: Array<[number, number]> = vertices.map((vertex) => [
+    Number(vertex[0]),
+    Number(vertex[1])
+  ])
   const corrections: VertexCorrection[] = []
-  vertices.forEach((vertex, index) => {
-    const x = Number(vertex[0])
-    const y = Number(vertex[1])
-    if (roi.contains(x, y)) {
-      out.push([x, y])
+  // anchor index -> how far it moved
+  const moved = new Map<number, [number, number]>()
+
+  out.forEach(([x, y], index) => {
+    if (types[index] === HANDLE || roi.contains(x, y)) {
       return
     }
     const [nx, ny, distance] = roi.nearestInside(x, y)
     const corrected = insetPoint(roi, nx, ny, x, y, inset)
-    out.push(corrected)
+    out[index] = corrected
+    moved.set(index, [corrected[0] - x, corrected[1] - y])
     corrections.push({
       labelId,
       category,
@@ -152,6 +225,18 @@ export function clampVertices(
       distance
     })
   })
+
+  if (moved.size > 0) {
+    out.forEach(([x, y], index) => {
+      if (types[index] !== HANDLE) {
+        return
+      }
+      const offset = moved.get(handleOwner(index, types, out.length, closed))
+      if (offset !== undefined) {
+        out[index] = [x + offset[0], y + offset[1]]
+      }
+    })
+  }
   return [out, corrections]
 }
 
@@ -178,7 +263,9 @@ export function clampLabels(
         vertices,
         String(label.id ?? ""),
         String(label.category ?? ""),
-        inset
+        inset,
+        String(poly.types ?? ""),
+        poly.closed
       )
       if (corrections.length > 0) {
         poly.vertices = corrected

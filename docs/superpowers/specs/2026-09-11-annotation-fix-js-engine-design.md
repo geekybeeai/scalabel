@@ -141,6 +141,18 @@ boundary point if the inset lands outside). Only `vertices` is reassigned,
 and only when at least one correction occurred. `VertexCorrection` and
 `ClampResult.flagged(flagDistance)` keep the Python field names.
 
+**Curve handles (added 2026-10-01).** `types` marks each vertex as an anchor
+(`L`, on the line) or a bezier handle (`C`, off the line). Handles are never
+clamped on their own: a handle in the padding is normal for a curve hugging
+the image edge, and moving it reshapes the curve. When an anchor is clamped,
+the handles it owns (the nearest anchor along the vertex list, earlier on a
+tie, wrapping on closed shapes) are shifted by the same offset, so the curve
+keeps its shape. Only anchors count as `clamped`. Measured on 50 frames:
+handles moved alone 23 -> 0; 193 handles now follow their anchors across 189
+curved lines; anchor corrections unchanged (612). The Python reference has
+the same rule. Note on §4.2: equidistant nearest pixels can be a few px
+apart (e.g. a 3-4-5 tie), not just one.
+
 ### 4.4 Auto-connect (`autoconnect.ts`)
 
 Verbatim port of `autoconnect.py`:

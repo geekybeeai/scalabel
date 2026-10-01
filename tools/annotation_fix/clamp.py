@@ -97,30 +97,77 @@ def _inset_point(
     return float(nx), float(ny)
 
 
+HANDLE = "C"
+"""Per-vertex type marking a bezier control point ("handle")."""
+
+
+def _handle_owner(index: int, types: str, count: int, closed: bool) -> int:
+    """The anchor a curve handle belongs to, or -1 if there is none.
+
+    A curved segment is stored as anchor, handle, handle, anchor ("LCCL"): each
+    handle steers the curve where it leaves the nearer anchor, so the owner is
+    the closest anchor along the vertex list, the earlier one on a tie. Closed
+    shapes wrap around the end of the list.
+    """
+
+    def at(i: int) -> int:
+        return i % count if closed else i
+
+    back = forward = -1
+    back_steps = forward_steps = 0
+    for step in range(1, count):
+        i = at(index - step)
+        if i < 0:
+            break
+        if types[i : i + 1] != HANDLE:
+            back, back_steps = i, step
+            break
+    for step in range(1, count):
+        i = at(index + step)
+        if i >= count:
+            break
+        if types[i : i + 1] != HANDLE:
+            forward, forward_steps = i, step
+            break
+    if back == -1:
+        return forward
+    if forward == -1:
+        return back
+    return back if back_steps <= forward_steps else forward
+
+
 def clamp_vertices(
     roi: RoiMask,
     vertices: List[List[float]],
     label_id: str = "",
     category: str = "",
     inset: float = DEFAULT_INSET,
+    types: str = "",
+    closed: bool = False,
 ) -> Tuple[List[List[float]], List[VertexCorrection]]:
     """Clamp one polyline's vertices into the ROI.
 
     Returns new vertices and the corrections applied. Vertices already inside
     are returned untouched, preserving their exact original values.
-    """
-    out: List[List[float]] = []
-    corrections: List[VertexCorrection] = []
 
-    for index, vertex in enumerate(vertices):
-        x, y = float(vertex[0]), float(vertex[1])
-        if roi.contains(x, y):
-            out.append([x, y])
+    Curve handles (type "C") are never clamped on their own: they do not lie on
+    the line, so a handle out in the padding is normal for a curve that hugs
+    the image edge, and dragging it inside would reshape the curve. Only
+    anchors are tested. When an anchor does have to move, its handles move by
+    the same offset, so the curve keeps its shape and shifts with the anchor.
+    """
+    out: List[List[float]] = [[float(v[0]), float(v[1])] for v in vertices]
+    corrections: List[VertexCorrection] = []
+    moved = {}  # anchor index -> how far it moved
+
+    for index, (x, y) in enumerate(list(out)):
+        if types[index : index + 1] == HANDLE or roi.contains(x, y):
             continue
 
         nx, ny, distance = roi.nearest_inside(x, y)
         cx, cy = _inset_point(roi, nx, ny, x, y, inset)
-        out.append([cx, cy])
+        out[index] = [cx, cy]
+        moved[index] = (cx - x, cy - y)
         corrections.append(
             VertexCorrection(
                 label_id=label_id,
@@ -132,6 +179,14 @@ def clamp_vertices(
             )
         )
 
+    if moved:
+        for index, (x, y) in enumerate(list(out)):
+            if types[index : index + 1] != HANDLE:
+                continue
+            offset = moved.get(_handle_owner(index, types, len(out), closed))
+            if offset is not None:
+                out[index] = [x + offset[0], y + offset[1]]
+
     return out, corrections
 
 
@@ -140,10 +195,11 @@ def clamp_labels(
     labels: List[dict],
     inset: float = DEFAULT_INSET,
 ) -> ClampResult:
-    """Clamp every ``poly2d`` vertex across a frame's labels, in place.
+    """Clamp every ``poly2d`` anchor across a frame's labels, in place.
 
     Only coordinates change: vertex count, ``types``, ``closed``, category and
-    id are all preserved.
+    id are all preserved. Curve handles follow their anchors; see
+    ``clamp_vertices``.
     """
     result = ClampResult()
 
@@ -158,6 +214,8 @@ def clamp_labels(
                 label_id=str(label.get("id", "")),
                 category=str(label.get("category", "")),
                 inset=inset,
+                types=str(poly.get("types") or ""),
+                closed=bool(poly.get("closed")),
             )
             if corrections:
                 poly["vertices"] = corrected
