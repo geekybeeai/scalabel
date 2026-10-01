@@ -45,6 +45,24 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe("Toolbar category setting", () => {
+  test("keeps the visibility control after a long category name", () => {
+    setupTestStore(testJson)
+    const category = "a_category_name_that_needs_to_wrap"
+    const { getByTitle } = render(
+      <ToolbarCategory
+        categories={[category]}
+        treeCategories={null}
+        headerText={"Category"}
+        hiddenCategories={[]}
+        onToggleCategoryVisibility={() => undefined}
+      />
+    )
+
+    const visibilityControl = getByTitle(`Toggle visibility of ${category}`)
+    const row = visibilityControl.parentElement
+    expect(row?.lastElementChild).toBe(visibilityControl)
+  })
+
   test("Category selection", () => {
     setupTestStore(testJson)
     const { getByText } = render(

@@ -4,6 +4,7 @@ import * as action from "../../src/action/common"
 import Session, { dispatch, getState } from "../../src/common/session"
 import { getNumLabels, getShapes } from "../../src/functional/state_util"
 import { Size2D } from "../../src/math/size2d"
+import { Vector2D } from "../../src/math/vector2d"
 import { IdType, PathPoint2DType } from "../../src/types/state"
 import { checkPolygon } from "../util/shape"
 import { findNewLabels, findNewLabelsFromState } from "../util/state"
@@ -160,6 +161,27 @@ test("2d polygons highlighted and selected", () => {
     expect(highlighted.labelId).toEqual(labelIds[0])
   }
   expect(selected[0].labelId).toEqual(labelIds[0])
+})
+
+test("direct drag on a polygon handle does not create a new label", () => {
+  const [label2dHandler] = initializeTestingObjects()
+  dispatch(action.changeSelect({ labelType: 1 }))
+
+  const canvasSize = new Size2D(1000, 1000)
+  const labelId = drawPolygon(label2dHandler, canvasSize, [
+    [120, 120],
+    [210, 210],
+    [310, 260]
+  ])
+  const labelCount = Session.label2dList.labelList.length
+
+  // Simulate starting a drag without a preceding hover event. The canvas
+  // still supplies the label and handle hit-test result to mouse down.
+  label2dHandler.onMouseMove(new Vector2D(900, 900), canvasSize, -1, 0)
+  label2dHandler.onMouseDown(new Vector2D(120, 120), 0, 1)
+
+  expect(Session.label2dList.labelList.length).toEqual(labelCount)
+  expect(label2dHandler.highlightedLabel?.labelId).toEqual(labelId)
 })
 
 test("validation check for polygon2d", () => {

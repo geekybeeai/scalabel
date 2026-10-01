@@ -82,14 +82,30 @@ export class Label2DHandler {
    *
    * @param coord
    * @param labelIndex
-   * @param _labelIndex
    * @param handleIndex
    */
   public onMouseDown(
     coord: Vector2D,
-    _labelIndex: number,
+    labelIndex: number,
     handleIndex: number
   ): boolean {
+    // Mouse down can arrive before the first mouse move (for example when a
+    // user starts dragging immediately after selecting a tool). In that case
+    // the canvas hit-test is the only source of the label under the pointer.
+    // Resolve it before falling back to creating a new temporary label.
+    if (labelIndex >= 0) {
+      const clickedLabel = this._labelList.labelList[labelIndex]
+      if (clickedLabel !== undefined) {
+        if (this._highlightedLabel !== clickedLabel) {
+          if (this._highlightedLabel !== null) {
+            this._highlightedLabel.setHighlighted(false)
+          }
+          this._highlightedLabel = clickedLabel
+        }
+        this._highlightedLabel.setHighlighted(true, handleIndex)
+      }
+    }
+
     if (!this.hasSelectedLabels() || !this.isEditingSelectedLabels()) {
       if (this._highlightedLabel !== null) {
         this.selectHighlighted()
@@ -197,8 +213,17 @@ export class Label2DHandler {
         }
       }
       console.log("[DEBUG] Label2DHandler.onMouseUp completed:", {
-        highlightedLabel: this._highlightedLabel ? { index: this._highlightedLabel.index, type: this._highlightedLabel.type } : null,
-        selectedLabels: this._labelList.selectedLabels.map(l => ({ index: l.index, type: l.type, editing: l.editing })),
+        highlightedLabel: this._highlightedLabel
+          ? {
+              index: this._highlightedLabel.index,
+              type: this._highlightedLabel.type
+            }
+          : null,
+        selectedLabels: this._labelList.selectedLabels.map((l) => ({
+          index: l.index,
+          type: l.type,
+          editing: l.editing
+        })),
         pressedKeys: Array.from(this._pressedKey)
       })
     }
@@ -464,7 +489,13 @@ export class Label2DHandler {
       const highlightedAlreadySelected =
         this._labelList.selectedLabels.includes(this._highlightedLabel)
       console.log("[DEBUG] selectHighlighted values:", {
-        highlightedLabel: this._highlightedLabel ? { index: this._highlightedLabel.index, type: this._highlightedLabel.type, labelId: this._highlightedLabel.labelId } : null,
+        highlightedLabel: this._highlightedLabel
+          ? {
+              index: this._highlightedLabel.index,
+              type: this._highlightedLabel.type,
+              labelId: this._highlightedLabel.labelId
+            }
+          : null,
         category: this._highlightedLabel?.category,
         attributes: this._highlightedLabel?.attributes,
         labelId: this._highlightedLabel?.labelId,
@@ -485,7 +516,9 @@ export class Label2DHandler {
               this._labelList.selectedLabelIds,
               this._selectedItemIndex,
               labelIds,
-              this._highlightedLabel.category ? this._highlightedLabel.category[0] : undefined,
+              this._highlightedLabel.category
+                ? this._highlightedLabel.category[0]
+                : undefined,
               this._highlightedLabel.attributes,
               true
             )
@@ -497,7 +530,9 @@ export class Label2DHandler {
             this._labelList.selectedLabelIds,
             this._selectedItemIndex,
             labelIds,
-            this._highlightedLabel.category ? this._highlightedLabel.category[0] : undefined,
+            this._highlightedLabel.category
+              ? this._highlightedLabel.category[0]
+              : undefined,
             this._highlightedLabel.attributes
           )
         )
@@ -642,7 +677,7 @@ export class Label2DHandler {
     const clonedShapes: ShapeType[] = clonedLabel.shapes
       .map((shapeId) => {
         const shape = item.shapes[shapeId]
-        return shape !== undefined ? _.cloneDeep(shape) as ShapeType : null
+        return shape !== undefined ? (_.cloneDeep(shape) as ShapeType) : null
       })
       .filter((s): s is ShapeType => s !== null)
 

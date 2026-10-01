@@ -9,6 +9,10 @@ import { Box2D } from "./box2d"
 import { CustomLabel2D } from "./custom_label"
 import { DrawMode, Label2D } from "./label2d"
 import { Vector2D } from "../../math/vector2d"
+import {
+  nearestSnapPointIndex,
+  snapTargetIndices
+} from "./endpoint_snap_geometry"
 import { Polygon2D } from "./polygon2d"
 import { Tag2D } from "./tag2d"
 
@@ -42,10 +46,12 @@ export function makeDrawableLabel2D(
 
 /** An endpoint the dragged polyline endpoint can snap onto. */
 export interface EndpointSnapCandidate {
-  /** the polyline owning the endpoint */
+  /** the polyline owning the target vertex */
   polyline: Polygon2D
-  /** true if it is the start (index 0) endpoint, false if the end */
+  /** true if the target is the start (index 0) endpoint, false otherwise */
   isStart: boolean
+  /** the exact target vertex index */
+  targetPointIndex: number
   /**
    * true if releasing merges the two lines into one label (same primary
    * category, or self-close); false if the vertex only snaps onto the
@@ -422,12 +428,10 @@ export class Label2DList {
   }
 
   /**
-   * Find nearest endpoint of another polyline within screen-space radius.
-   * Returns the polyline, whether it is the start endpoint, and whether the
-   * two lines may be MERGED into one label (same primary category). Endpoints
-   * of a different category are still returned so the dragged vertex can be
-   * snapped exactly onto them (a "connect": no gap, but the lines stay two
-   * distinct labels with their own categories). Returns null if none.
+   * Find the nearest eligible snap handle within screen-space radius.
+   * Open polylines contribute their endpoints. Closed polygons contribute all
+   * visible handles, including midpoint handles, as connect-only targets, so
+   * snapping to a polygon never merges or changes its closed geometry.
    *
    * @param source The polyline being dragged
    * @param coord Mouse coordinate in image space
@@ -445,9 +449,10 @@ export class Label2DList {
     let bestCandidate: EndpointSnapCandidate | null = null
     let minDistance = snapRadiusImage
 
-    // Find all active polylines (excluding closed ones)
+    // Open polylines contribute endpoints; closed polygons contribute every
+    // visible handle as a connect-only target.
     const polylines = this._labelList.filter(
-      (label) => label instanceof Polygon2D && !label.closed
+      (label) => label instanceof Polygon2D
     ) as Polygon2D[]
 
     const draggedIndex = source.highlightedHandle - 1
@@ -467,7 +472,12 @@ export class Label2DList {
           const dist = Math.sqrt(dx * dx + dy * dy)
           if (dist < minDistance) {
             minDistance = dist
-            bestCandidate = { polyline, isStart: false, mergeable: true }
+            bestCandidate = {
+              polyline,
+              isStart: false,
+              targetPointIndex: points.length - 1,
+              mergeable: true
+            }
           }
         } else if (draggedIndex === points.length - 1) {
           // Dragging end, can only snap to start
@@ -477,7 +487,12 @@ export class Label2DList {
           const dist = Math.sqrt(dx * dx + dy * dy)
           if (dist < minDistance) {
             minDistance = dist
-            bestCandidate = { polyline, isStart: true, mergeable: true }
+            bestCandidate = {
+              polyline,
+              isStart: true,
+              targetPointIndex: 0,
+              mergeable: true
+            }
           }
         }
         continue
@@ -492,6 +507,30 @@ export class Label2DList {
         continue
       }
 
+      if (polyline.closed) {
+        const targetIndices = snapTargetIndices(points)
+        const nearestTargetIndex = nearestSnapPointIndex(
+          targetIndices.map((index) => points[index]),
+          coord,
+          minDistance
+        )
+        if (nearestTargetIndex !== null) {
+          const targetIndex = targetIndices[nearestTargetIndex]
+          const targetPoint = points[targetIndex]
+          const dx = coord.x - targetPoint.x
+          const dy = coord.y - targetPoint.y
+          const distance = Math.sqrt(dx * dx + dy * dy)
+          minDistance = distance
+          bestCandidate = {
+            polyline,
+            isStart: targetIndex === 0,
+            targetPointIndex: targetIndex,
+            mergeable: false
+          }
+        }
+        continue
+      }
+
       // Start endpoint (index 0)
       const startPoint = points[0]
       const dxStart = coord.x - startPoint.x
@@ -499,7 +538,12 @@ export class Label2DList {
       const distStart = Math.sqrt(dxStart * dxStart + dyStart * dyStart)
       if (distStart < minDistance) {
         minDistance = distStart
-        bestCandidate = { polyline, isStart: true, mergeable }
+        bestCandidate = {
+          polyline,
+          isStart: true,
+          targetPointIndex: 0,
+          mergeable
+        }
       }
 
       // End endpoint (index points.length - 1)
@@ -509,7 +553,12 @@ export class Label2DList {
       const distEnd = Math.sqrt(dxEnd * dxEnd + dyEnd * dyEnd)
       if (distEnd < minDistance) {
         minDistance = distEnd
-        bestCandidate = { polyline, isStart: false, mergeable }
+        bestCandidate = {
+          polyline,
+          isStart: false,
+          targetPointIndex: points.length - 1,
+          mergeable
+        }
       }
     }
 

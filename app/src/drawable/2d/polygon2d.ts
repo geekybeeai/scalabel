@@ -20,7 +20,13 @@ import {
   ShapeType,
   State
 } from "../../types/state"
-import { blendColor, Context2D, encodeControlColor, getColorByCategory, toCssColor } from "../util"
+import {
+  blendColor,
+  Context2D,
+  encodeControlColor,
+  getColorByCategory,
+  toCssColor
+} from "../util"
 import { DASH_LINE, DELETE_HIGHLIGHT_COLOR, MIN_SIZE } from "./common"
 import { curveGroupIndices } from "./curve_groups"
 import { getAntsOffset } from "./marching_ants"
@@ -135,7 +141,8 @@ export class Polygon2D extends Label2D {
   public updateState(state: State, itemIndex: number, labelId: IdType): void {
     super.updateState(state, itemIndex, labelId)
     if (this._label !== null) {
-      this._closed = this._label.type === LabelTypeName.POLYGON_2D || !!this._label.closed
+      this._closed =
+        this._label.type === LabelTypeName.POLYGON_2D || !!this._label.closed
     }
   }
 
@@ -197,7 +204,10 @@ export class Polygon2D extends Label2D {
     ratio: number,
     styleFactor: number
   ): void {
-    if (this._snapTargetPolyline === null || this._snapTargetPointIndex === -1) {
+    if (
+      this._snapTargetPolyline === null ||
+      this._snapTargetPointIndex === -1
+    ) {
       return
     }
     const targetPoint =
@@ -595,10 +605,7 @@ export class Polygon2D extends Label2D {
         this._state === Polygon2DState.MOVE
       ) {
         for (let i = 0; i < numPoints; ++i) {
-          if (
-            curveGroups !== null &&
-            !curveGroups.some((g) => g.includes(i))
-          ) {
+          if (curveGroups !== null && !curveGroups.some((g) => g.includes(i))) {
             continue
           }
           const point = this._points[i]
@@ -775,13 +782,12 @@ export class Polygon2D extends Label2D {
         const candidate = this._labelList.findNearestEndpoint(this, coord, 15)
         if (candidate !== null) {
           this._snapTargetPolyline = candidate.polyline
-          this._snapTargetPointIndex = candidate.isStart
-            ? 0
-            : candidate.polyline.points.length - 1
+          this._snapTargetPointIndex = candidate.targetPointIndex
           this._snapMergeable = candidate.mergeable
           // Snap the coordinates of the dragged vertex to the target coordinates
           // (for both merge and connect-only candidates, so there is no gap)
-          const targetPoint = candidate.polyline._points[this._snapTargetPointIndex]
+          const targetPoint =
+            candidate.polyline._points[this._snapTargetPointIndex]
           coord.x = targetPoint.x
           coord.y = targetPoint.y
         } else {
@@ -829,7 +835,10 @@ export class Polygon2D extends Label2D {
         this._snapTargetPointIndex !== -1 &&
         this._snapMergeable
       ) {
-        this.mergeWith(this._snapTargetPolyline, this._snapTargetPointIndex === 0)
+        this.mergeWith(
+          this._snapTargetPolyline,
+          this._snapTargetPointIndex === 0
+        )
       }
       this._state = Polygon2DState.FINISHED
       this.editing = false

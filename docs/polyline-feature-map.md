@@ -26,7 +26,8 @@ Open when: changing how a line is drawn, edited, its vertices/curves, merge, val
   polyline.
 - **Endpoint join / connect** (drag an open line's START or END vertex onto
   another endpoint within 15 screen px): `Label2DList.findNearestEndpoint`
-  returns an `EndpointSnapCandidate {polyline, isStart, mergeable}`;
+  returns an `EndpointSnapCandidate {polyline, isStart, targetPointIndex,
+  mergeable}`;
   `Polygon2D.onMouseMove` (RESHAPE) snaps the dragged coord onto the target
   point and shows `drawSnapIndicator`; `onMouseUp` calls `mergeWith` **only
   if `mergeable`** (same `category[0]`, or self-close start↔end → polygon).
@@ -36,7 +37,8 @@ Open when: changing how a line is drawn, edited, its vertices/curves, merge, val
   green halo + white centre = merge; dashed white halo + dark centre =
   connect-only. Merge deletes the target via `_mergedOut` → `isValid()=false`
   → `deleteInvalidLabel` (history: `edited(A)` + `deleted(B)`, i.e. two undo
-  steps). Closed shapes never participate.
+  steps). An open endpoint may also snap to any vertex of a closed polygon as
+  connect-only; the polygon remains closed and is never merged into.
 - `app/src/drawable/2d/path_point2d.ts` — `PathPoint2D`, `PathPointType` (LINE/MID/CURVE),
   point styles.
 - `app/src/drawable/2d/label2d.ts` — base **`Label2D`**: `editing`, `temporary`, `type`,
@@ -102,9 +104,11 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   invalid → `deleteInvalidLabel` (+ record). Helpers `polylineShapesChanged`, `lineSnapshot`.
   **Only path that turns drawing into `ADD_LABELS`.**
 - `app/src/common/draw_history.ts` — **`DrawHistory`** (polyline-level undo/redo). Command
-  kinds `created`/`edited`/`deleted`/`cut`; `undo`/`redo`/`recordUserLine`/`recordEdit`/
-  `recordDeletion`/`recordDeletedLine`/`recordCut`/`canUndo`/`canRedo`/`handleKeyboard`/
-  `reset`. `recordCut` records the split as one atomic command (single undo/redo step).
+  kinds `created`/`edited`/`deleted`/`cut`/`stamped`; `undo`/`redo`/`recordUserLine`/`recordEdit`/
+  `recordDeletion`/`recordDeletedLine`/`recordCut`/`recordStamp`/`canUndo`/`canRedo`/
+  `handleKeyboard`/`reset`. `recordCut` records the split as one atomic command
+  (single undo/redo step); `recordStamp` does the same for every mark created by
+  one stamp run.
   Only tracks **user-touched** lines (never untouched predictions).
 - `app/src/action/common.ts` — `addLabel`/`addLabelsToItem`/`deleteLabel`/`deleteLabels`/
   `changeShapes`/`changeViewerConfig`.
@@ -138,6 +142,28 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   (awaitFirst/awaitSecond/preview, mutually exclusive with cut mode);
   toolbar button in `viewer2d.tsx getDeleteSegmentButton`; picks/overlay/
   timer wiring in `label2d_canvas.tsx` (marching-ants preview, 3 s commit).
+- `app/src/components/viewer2d.tsx` — `getStampButton` ("Repeat marks along a
+  line"), and
+  `getOverlayComponents` (right-pinned settings panel). The stamp button is green
+  while it is armed or its panel is open; it is unavailable while drawing or on
+  tracking tasks.
+- Capture is initiated from the template picker, so there is no separate capture
+  button in the toolbar.
+- `app/src/components/stamp_settings.tsx` — **Stamp marks** panel: template
+  picker (Dash/Chevron/saved custom plus `+ Save a mark as a shape`), mark class,
+  angle, dash length, chevron arm/apex controls, custom size, perpendicular
+  offset, even-spacing controls with editable numeric values, Reset, and
+  Apply/Update/Done/Cancel. The panel stops pointer events from reaching the
+  canvas underneath it.
+- `app/src/common/stamp_state.ts` — transient ARMED/PREVIEW state, persisted
+  stamp options, captured templates in `localStorage`, and a separate placement
+  undo/redo stack for manual mode. Settings survive from one stamp to the next;
+  placed marks do not reach redux until Apply/Update.
+- `app/src/components/label2d_canvas.tsx` — `handleStamp` picks the guide,
+  `handleCapture` saves a reusable shape, `drawStampPreview` paints the live
+  preview, `addManualMark` records click positions along the guide, and
+  `commitStampPreview` writes the run. Image navigation disarms the tool and
+  ends an active preview.
 - "Curves only" sidebar checkbox — `showCurvesOnly` viewer-config flag
   (`toolbar.tsx` toggle → `label2d_canvas.tsx redraw` →
   `label2d_list.ts redraw` filter → `polygon2d.ts draw` curves-only branch,
@@ -256,3 +282,82 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   probe at `rotatePoint(mousePos)` because `getImageData` ignores context
   transforms. Viewport culling is bypassed while rotated. Never store or
   export rotated coordinates.
+
+---
+
+## 9. Repetitive stamp marks
+
+Open when: adding repeated dashes, chevrons, or a saved custom marking along an
+existing polyline/polygon.
+
+### UI and controls
+
+- The toolbar button titled **Repeat marks along a line** opens the **Stamp marks**
+  panel at the top-right of the canvas and arms a one-shot guide-line pick. The
+  next click on a visible line chooses the guide; the guide itself is never
+  modified.
+- The panel's template picker supports **Dash**, **Chevron**, captured custom
+  shapes, and `+ Save a mark as a shape`. It also exposes the output **Class**,
+  relative **Angle**, **Offset**,
+  and shape-specific sizing:
+  - Dash: **Length**.
+  - Chevron: **Arm A**, **Arm B**, and **Apex**.
+  - Custom: **Size** plus the saved template's **Rename** and **Forget** actions.
+- **Even spacing** is enabled by default. It shows **Spacing** and **Start**;
+  the internal end margin keeps marks away from both guide endpoints. Turning it
+  off switches to manual placement and shows the count of placed marks plus the
+  Clear button.
+- The template picker's **+ Save a mark as a shape** item captures the visible
+  polyline/polygon nearest the cursor, names it `Mark N`, stores it in browser
+  `localStorage`, and selects it as the current custom template. Captured shapes
+  remain available after reload; the panel can rename or forget them.
+
+### How the tool works
+
+1. Guide picking searches visible `POLYLINE_2D`/`POLYGON_2D` labels within
+   `CUT_CLICK_RADIUS_PX` (20 display pixels, converted to image pixels for the
+   current zoom). Hidden label types and categories are excluded.
+2. The chosen guide is flattened for curved spans and walked by **arc length**.
+   Each sample gets the local direction of travel. The mark is rotated by the
+   configured angle relative to that direction and shifted by the configured
+   perpendicular offset, so marks follow bends instead of using one global
+   orientation.
+3. Preview geometry is transient. Slider changes repaint the preview without
+   writing labels, and canvas clicks do not commit an even-spacing preview.
+   **Apply** creates one separate manual `POLYLINE_2D` label per
+   mark, using the panel class or the sidebar's selected class when no panel
+   class is set; the guide remains untouched.
+4. After the first Apply, the button becomes **Update**. Applying again removes
+   the previous run and writes the adjusted run, rather than stacking duplicates.
+   **Done** closes the preview while keeping the last applied run. **Cancel**
+   cancels an unapplied preview; the panel's X also closes the active preview.
+5. One stamp run is recorded as one `stamped` draw-history command, so undo/redo
+   removes or restores the whole batch in one step. In manual placement mode,
+   Ctrl/Cmd+Z and Ctrl/Cmd+Y operate on the pending placement positions until
+   Apply is pressed.
+
+### How to use it
+
+1. Draw or select an existing line that can serve as the guide.
+2. Click **Repeat marks along a line**, tune the panel settings, then click the
+   guide. The panel stays open while the green preview is adjusted.
+3. Keep **Even spacing** on for a regular run; changing the panel only updates
+   the preview, and canvas clicks leave it pending. Or turn even spacing off and
+   click along the guide to add individual marks. Clicking near an existing
+   pending mark removes it; use Ctrl/Cmd+Z/Y for placement undo/redo.
+4. Choose **Apply**. Use **Update** after changing settings, then **Done** when
+   the run is correct. To stamp another guide, toggle the toolbar button off and
+   on again if the panel is still open, then select the next guide.
+5. For an irregular marking, open the template picker, choose **+ Save a mark as
+   a shape**, click an existing mark, then choose the saved shape from the same
+   stamp panel and stamp it along another guide. Enter numeric values directly
+   beside any slider when a precise size, angle, spacing, or offset is needed.
+
+Implementation anchors: `app/src/components/stamp_settings.tsx`,
+`app/src/common/stamp_state.ts`, `app/src/components/viewer2d.tsx`
+(`getStampButton`), `app/src/components/label2d_canvas.tsx`
+(`handleStamp`/`handleCapture`/`drawStampPreview`/`commitStampPreview`),
+`app/src/drawable/2d/polyline_stamp.ts` (`findGuideLine`/`previewMarks`/
+`commitStamp`/`captureMarkAt`), and
+`app/src/drawable/2d/polyline_stamp_geometry.ts`
+(`stampAlongPath`/`samplePath`/`projectToPath`/`captureTemplate`).

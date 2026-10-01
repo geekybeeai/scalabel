@@ -47,6 +47,8 @@ interface Candidate {
   index: number
   /** how far the click was from that anchor */
   distance: number
+  /** whether the polyline is a closed ring created by endpoint joining */
+  closed: boolean
 }
 
 /**
@@ -101,18 +103,29 @@ export function performDisjoint(
       y: p.y,
       pointType: p.pointType
     }))
-    const hit = findDisjointAnchor(points, click, radius)
+    const hit = findDisjointAnchor(
+      points,
+      click,
+      radius,
+      label.type === LabelTypeName.POLYLINE_2D && label.closed === true
+    )
     if (hit === null) {
       continue
     }
-    // A closed ring has no free ends, so breaking it at one anchor would leave
-    // a single open line rather than two — a different operation entirely.
-    if (label.type === LabelTypeName.POLYGON_2D || label.closed === true) {
+    // True polygons still do not represent a joined line. A POLYLINE_2D with
+    // closed=true, however, is the ring produced when the user joins the two
+    // free ends of a polyline, so its interior join anchors are disjointable.
+    if (label.type === LabelTypeName.POLYGON_2D) {
       sawClosed = true
       continue
     }
     if (best === null || hit.distance < best.distance) {
-      best = { labelId, index: hit.index, distance: hit.distance }
+      best = {
+        labelId,
+        index: hit.index,
+        distance: hit.distance,
+        closed: label.closed === true
+      }
     }
   }
 
@@ -144,7 +157,8 @@ function commitDisjoint(
 
   const halves = buildDisjointHalves(
     stored.map((p) => ({ x: p.x, y: p.y, pointType: p.pointType })),
-    index
+    index,
+    candidate.closed
   )
   if (halves === null) {
     return "no-anchor"
@@ -162,6 +176,7 @@ function commitDisjoint(
   const labelA: LabelType = _.cloneDeep(label)
   labelA.shapes = shapesA.map((s) => s.id)
   labelA.manual = true
+  labelA.closed = false
 
   // Second half is a new polyline inheriting category and attributes.
   const newLabelId = uid()
@@ -181,6 +196,7 @@ function commitDisjoint(
   labelB.children = []
   labelB.shapes = shapesB.map((s) => s.id)
   labelB.manual = true
+  labelB.closed = false
 
   // Deselect so no stale selected drawable survives the rebuild.
   dispatch(

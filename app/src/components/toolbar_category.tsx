@@ -214,23 +214,8 @@ function renderTreeCategory(
       label={
         <div
           className={classes.treeItemLabelText}
-          style={{ display: "flex", alignItems: "center" }}
+          style={{ display: "flex", alignItems: "center", minWidth: 0 }}
         >
-          {isLeaf && onToggleVisibility !== undefined && (
-            <Checkbox
-              size="small"
-              checked={!hiddenCategories.includes(catIdx)}
-              // Stop the click from selecting this tree node as the active
-              // draw category — the checkbox only toggles canvas visibility.
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleVisibility(catIdx)
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-              title={`Toggle visibility of ${treeCategory.name}`}
-              style={{ padding: 2, color: "inherit" }}
-            />
-          )}
           {isLeaf && (
             <span
               // Solid swatch matching the colour this category's lines use.
@@ -247,7 +232,30 @@ function renderTreeCategory(
               }}
             />
           )}
-          {categoryDisplayName(treeCategory.name)}
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              wordBreak: "break-word"
+            }}
+          >
+            {categoryDisplayName(treeCategory.name)}
+          </span>
+          {isLeaf && onToggleVisibility !== undefined && (
+            <Checkbox
+              size="small"
+              checked={!hiddenCategories.includes(catIdx)}
+              // Stop the click from selecting this tree node as the active
+              // draw category — the checkbox only toggles canvas visibility.
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleVisibility(catIdx)
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={`Toggle visibility of ${treeCategory.name}`}
+              style={{ padding: 2, color: "inherit", flexShrink: 0 }}
+            />
+          )}
         </div>
       }
       classes={{
@@ -388,22 +396,6 @@ class MultipleSelect extends Component<Props> {
                         : "transparent"
                     }}
                   >
-                    {this.props.onToggleCategoryVisibility !== undefined && (
-                      <Checkbox
-                        size="small"
-                        checked={!hidden}
-                        // Stop the click from also selecting this category as
-                        // the active draw category — the checkbox only toggles
-                        // canvas visibility.
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          this.props.onToggleCategoryVisibility?.(index)
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        title={`Toggle visibility of ${name}`}
-                        style={{ padding: 2, color: "inherit" }}
-                      />
-                    )}
                     <span
                       // Solid swatch showing the colour this category's lines
                       // are drawn in on the canvas.
@@ -419,9 +411,31 @@ class MultipleSelect extends Component<Props> {
                         background: swatchColor
                       }}
                     />
-                    <span style={{ flex: 1, wordBreak: "break-word" }}>
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        wordBreak: "break-word"
+                      }}
+                    >
                       {categoryDisplayName(name)}
                     </span>
+                    {this.props.onToggleCategoryVisibility !== undefined && (
+                      <Checkbox
+                        size="small"
+                        checked={!hidden}
+                        // Stop the click from also selecting this category as
+                        // the active draw category — the checkbox only toggles
+                        // canvas visibility.
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          this.props.onToggleCategoryVisibility?.(index)
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        title={`Toggle visibility of ${name}`}
+                        style={{ padding: 2, color: "inherit", flexShrink: 0 }}
+                      />
+                    )}
                   </div>
                 )
               })}

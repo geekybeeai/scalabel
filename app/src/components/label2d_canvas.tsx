@@ -1293,7 +1293,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     context.lineWidth = 2
     for (const labelId of Object.keys(item.labels)) {
       const label = item.labels[labelId]
-      if (label.type !== LabelTypeName.POLYLINE_2D || label.closed === true) {
+      if (label.type !== LabelTypeName.POLYLINE_2D) {
         continue
       }
       const stored = getShapes(
@@ -1306,7 +1306,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         y: p.y,
         pointType: p.pointType
       }))
-      for (const i of disjointableAnchors(points)) {
+      for (const i of disjointableAnchors(points, label.closed === true)) {
         context.beginPath()
         context.arc(points[i].x * ratio, points[i].y * ratio, 6, 0, 2 * Math.PI)
         context.stroke()
