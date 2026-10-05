@@ -26,10 +26,13 @@ import {
  *
  * @param pathPoints
  * @param labelType
+ * @param closed the label was closed in the editor (a closed polyline keeps
+ * type polyline2d, so the type alone does not say it is closed)
  */
 export function convertPolygonToExport(
   pathPoints: PathPoint2DType[],
-  labelType: string
+  labelType: string,
+  closed: boolean = false
 ): PolygonExportType[] {
   const typeCharacters = pathPoints.map((point) => {
     switch (point.pointType) {
@@ -50,7 +53,7 @@ export function convertPolygonToExport(
     {
       vertices,
       types,
-      closed: labelType === LabelTypeName.POLYGON_2D
+      closed: labelType === LabelTypeName.POLYGON_2D || closed
     }
   ]
 }
@@ -244,7 +247,7 @@ export function convertPolygonLabelsToExport(
       return
     }
 
-    const ps = convertPolygonToExport(pts, l.type)
+    const ps = convertPolygonToExport(pts, l.type, l.closed === true)
 
     // Find the root of the tree to which this label belongs
     while (isValidId(l.parent)) {

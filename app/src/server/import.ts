@@ -285,6 +285,7 @@ function convertLabelToImport(
   }
 
   let labelType = LabelTypeName.EMPTY
+  let closed = false
   let shapes: null | ShapeType[] = null
   let labelId = labelExport.id.toString()
   if (newLabelId !== undefined) {
@@ -308,9 +309,15 @@ function convertLabelToImport(
     labelExport.poly2d !== undefined
   ) {
     const polyExport = labelExport.poly2d[0]
-    labelType = polyExport.closed
-      ? LabelTypeName.POLYGON_2D
-      : LabelTypeName.POLYLINE_2D
+    closed = polyExport.closed
+    // A closed shape becomes a polygon only where the project has polygons.
+    // In a polyline project it is a polyline the user closed, which the
+    // editor represents as polyline2d + closed: true; importing it as a
+    // polygon would change its type, and dropping the flag would open it.
+    labelType =
+      closed && labelTypes.includes(LabelTypeName.POLYGON_2D)
+        ? LabelTypeName.POLYGON_2D
+        : LabelTypeName.POLYLINE_2D
     shapes = polyExport.vertices.map((vertex, i) =>
       makePathPoint2D({
         x: vertex[0],
@@ -355,7 +362,10 @@ function convertLabelToImport(
       manual: labelExport.manualShape || false,
       category,
       attributes,
-      sensors: [sensorId]
+      sensors: [sensorId],
+      ...(closed && labelType === LabelTypeName.POLYLINE_2D
+        ? { closed: true }
+        : {})
     },
     false
   )
