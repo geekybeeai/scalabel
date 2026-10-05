@@ -19,10 +19,33 @@ export const createStyle = (): StyleRules<"listRoot" | "listHeader", {}> =>
 // Styles for sidebar project list
 export const projectListStyle = (
   theme: Theme
-): StyleRules<"coloredListItem", {}> =>
+): StyleRules<
+  "coloredListItem" | "projectName" | "projectLink" | "deleteIcon",
+  {}
+> =>
   createStyles({
     coloredListItem: {
       backgroundColor: theme.palette.action.hover
+    },
+    // The name column must be allowed to shrink below its content width,
+    // otherwise a long project name pushes the delete icon off the row.
+    projectName: {
+      flex: 1,
+      minWidth: 0,
+      display: "flex",
+      justifyContent: "center"
+    },
+    projectLink: {
+      display: "block",
+      maxWidth: "100%",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      textAlign: "center"
+    },
+    deleteIcon: {
+      flexShrink: 0,
+      marginLeft: theme.spacing(1)
     }
   })
 

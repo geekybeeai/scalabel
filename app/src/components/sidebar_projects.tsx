@@ -1,4 +1,4 @@
-import { Grid, Link } from "@material-ui/core"
+import { Link } from "@material-ui/core"
 import ListItem from "@material-ui/core/ListItem"
 import CloseIcon from "@material-ui/icons/Close"
 import { withStyles } from "@material-ui/core/styles"
@@ -11,6 +11,12 @@ import { Endpoint } from "../const/connection"
 interface ClassType {
   /** style for a colored entry */
   coloredListItem: string
+  /** shrinkable column holding the project name */
+  projectName: string
+  /** the name itself, truncated with an ellipsis */
+  projectLink: string
+  /** delete icon pinned to the row end */
+  deleteIcon: string
 }
 
 // Props for project list
@@ -58,20 +64,23 @@ class ProjectList extends React.Component<ProjectListProps, ProjectListState> {
             alignItems="center"
             className={index % 2 === 0 ? classes.coloredListItem : ""}
           >
-            <Grid container justifyContent="center">
+            <div className={classes.projectName}>
               <Link
                 component="button"
                 variant="body2"
                 color="inherit"
+                className={classes.projectLink}
+                title={project}
                 onClick={() => {
                   toProject(project)
                 }}
               >
                 {project}
               </Link>
-            </Grid>
+            </div>
             {this.state.projectsToExpress[0] !== "No existing project" ? (
               <CloseIcon
+                className={classes.deleteIcon}
                 titleAccess="Delete project"
                 fontSize="small"
                 onClick={() => {
