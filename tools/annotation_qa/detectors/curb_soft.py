@@ -30,8 +30,11 @@ BAND_CONTRAST = 20.0
 DIRT_SAT_MAX = 60  # saturated, smooth colour is paint, never dirt
 SHADOW_GRAY = 60
 ROAD_GRAY_MAX = 190  # a bright concrete walkway is never the road
-DIRT_GREEN_MIN = -5  # pink/magenta paint has G well below (R+B)/2; dirt does not
-STEP_MIN, STEP_WINDOW, STEP_NEAR, STEP_FAR = 30.0, 4, 3, 6
+DIRT_GREEN_MIN = -15  # magenta paint has G far below (R+B)/2; reddish clay only a little
+STEP_MIN, STEP_WINDOW, STEP_NEAR, STEP_FAR = 30.0, 4, 3, 12
+STEP_RISE_MAX_OFFSET = 3  # a kerb rise must start within this many px outside the line
+PAINT_MAX_PX = 8  # bright then dark again within this: a painted line, not a kerb
+MIN_FLAG_VOTES, CONF_FULL_VOTES = 2, 4
 MIN_STEP_SAMPLES = 5
 MIN_VOTES, MIN_EACH = 4, 2
 
@@ -122,13 +125,20 @@ def _sharp_step(ctx: FrameContext, sub: dict, side: int) -> bool:
                     np.where(ok, samp, 0.0).sum(axis=0) / np.maximum(cnt, 1), np.nan)
     if np.isnan(prof).all():
         return False
-    rise = prof[STEP_WINDOW:] - prof[:-STEP_WINDOW]  # outward brightening (kerb face)
-    if np.nanmax(rise, initial=0.0) > STEP_MIN:
-        return True
+    n_start = STEP_NEAR + STEP_RISE_MAX_OFFSET + 1  # candidate starts: offsets <= 3
+    for i in range(min(n_start, len(prof) - STEP_WINDOW)):
+        if not prof[i + STEP_WINDOW] - prof[i] > STEP_MIN:
+            continue
+        seg = prof[i + STEP_WINDOW:i + PAINT_MAX_PX + 1]
+        k = int(np.nanargmax(seg)) + i + STEP_WINDOW
+        after = prof[k + 1:k + 1 + STEP_WINDOW]
+        painted = after.size and not np.isnan(after).all() and np.nanmin(after) < prof[k] - STEP_MIN
+        if not painted:
+            return True
     # a dark shadow line at the kerb: a dip that recovers within the window
-    k = int(np.nanargmin(prof))
-    return bool(np.nanmax(prof[:k + 1]) - prof[k] > STEP_MIN
-                and np.nanmax(prof[k:]) - prof[k] > STEP_MIN)
+    w = prof[:STEP_NEAR + PAINT_MAX_PX + 1]
+    k = int(np.nanargmin(w))
+    return bool(np.nanmax(w[:k + 1]) - w[k] > STEP_MIN and np.nanmax(w[k:]) - w[k] > STEP_MIN)
 
 
 def _soft_like(st) -> bool:
@@ -169,9 +179,13 @@ def _vote(ctx: FrameContext, sub: dict, ring_road: int | None = None):
         curb += 1.0
     elif o.gray - road.gray > 25 and o.sat < CURB_SAT_MAX and o.texture < CURB_TEXTURE_MAX:
         curb += 1.0
-    # a gray step / shadow line next to dirt or grass is the ground edge, not a kerb
+    # a gray step / shadow line next to dirt or grass is the ground edge, not a kerb;
+    # on its own it only counts when the far strip is a hard surface too
     if (band or not near_soft) and _sharp_step(ctx, sub, side):
-        curb += 0.5 if curb else 1.0
+        if curb:
+            curb += 0.5
+        elif not _soft_like(o):
+            curb = 1.0
     if curb:
         return (CURB, curb)
     if _soft_like(o):
@@ -207,11 +221,11 @@ def detect(ctx: FrameContext) -> list[Issue]:
                     label_id=lid, category=cat)
         wrong = SOFT if cat == CURB else CURB
         share = (n_soft if cat == CURB else n_curb) / n
-        if share >= FLAG_SHARE:
+        if share >= FLAG_SHARE and n >= MIN_FLAG_VOTES:
             anchor = max((v for v in votes if v[0] == wrong), key=lambda v: v[1])[2]
             kind = "grass/dirt" if wrong == SOFT else "a hard surface"
             issues.append(Issue(
-                **base, confidence=float(np.clip((share - 0.5) * 2, 0, 1)),
+                **base, confidence=float(np.clip((share - 0.5) * 2, 0, 1) * min(1.0, n / CONF_FULL_VOTES)),
                 reason=f"{cat} borders {kind} on {share:.0%} of {n} voting stretches",
                 anchor=(float(anchor[0]), float(anchor[1])),
                 fix={"op": "set_category", "to": wrong}, hand_fix=False))

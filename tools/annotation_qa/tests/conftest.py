@@ -116,7 +116,7 @@ def edge_ctx_from_image(tmp_path, img, polys, category="curb_road_edge"):
     return FrameContext(Export(Path("exp.json"), [frame], {}), frame, _frame(tmp_path, img))
 
 
-def make_edge_ctx(tmp_path, category: str, left: str, right: str, size: int = 400):
+def make_edge_ctx(tmp_path, category: str, left: str, right: str, size: int = 800):
     """FrameContext with one horizontal edge label at y=200 (x 50..size-50).
 
     Road lies below the line; above it the outside is ``left`` for x<size/2 and

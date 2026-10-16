@@ -137,7 +137,7 @@ def test_deep_shadow_stretch_is_skipped(tmp_path):
 
 def test_mixed_rule_needs_four_votes(tmp_path):
     # 400 px canvas -> 2 stretches (1 curb, 1 soft): neither flag nor hand_fix
-    assert detect(make_edge_ctx(tmp_path, "curb_road_edge", "grass", "concrete")) == []
+    assert detect(make_edge_ctx(tmp_path, "curb_road_edge", "grass", "concrete", size=400)) == []
 
 
 def test_step_ignores_black_padding_near_roi_edge(tmp_path):
@@ -174,3 +174,61 @@ def test_bright_concrete_is_not_taken_for_road(tmp_path):
     img[10:390, 10:390] = (215, 215, 215)  # bright walkway as the 'road' side
     _mulch(img, slice(10, 200), slice(10, 390))
     assert detect(edge_ctx_from_image(tmp_path, img, [hpoly(200)])) == []
+
+
+def test_single_voting_stretch_gives_no_issue(tmp_path):
+    # 200 px line = one 150 px+ stretch: grass beyond a curb label is not enough evidence
+    img = _road()
+    _outside(img, slice(10, 200), slice(10, 390))
+    ctx = edge_ctx_from_image(tmp_path, img, [hpoly(200, 100, 280)])
+    assert detect(ctx) == []
+
+
+def test_confidence_scales_with_votes(tmp_path):
+    img = _road()
+    _outside(img, slice(10, 200), slice(10, 390))
+    [two] = detect(edge_ctx_from_image(tmp_path, img, [hpoly(200, 50, 350)]))
+    assert two.confidence <= 0.5 + 1e-9
+
+
+def _split_ctx(tmp_path, left_votes):
+    """800 px curb-labelled edge: concrete under the first ``left_votes`` x-bands, grass after."""
+    img = _road(800)
+    cut = 50 + 150 * left_votes
+    img[10:200, 10:cut] = (170, 170, 170)
+    _outside(img, slice(10, 200), slice(cut, 790))
+    return edge_ctx_from_image(tmp_path, img, [hpoly(200, 50, 750)])
+
+
+def test_three_one_split_is_flagged_not_hand_fix(tmp_path):
+    # 1 concrete + 3 grass stretches on a curb label -> flag (flag rule before mixed rule)
+    [i] = detect(_split_ctx(tmp_path, 1))
+    assert not i.hand_fix and i.fix["to"] == "without_curb_road_edge"
+
+
+def test_outside_strip_shadow_is_skipped(tmp_path):
+    img = _road()
+    _outside(img, slice(10, 200), slice(10, 390))
+    img[10:200, 10:390] = (img[10:200, 10:390] * 0.3).astype(np.uint8)  # outside gray < 60
+    assert detect(edge_ctx_from_image(tmp_path, img, [hpoly(200)])) == []
+
+
+def test_clay_dirt_is_soft(tmp_path):
+    img = _road()
+    rng = np.random.default_rng(5)
+    clay = np.array((100, 112, 150)) + rng.normal(0, 22, (190, 380, 1))  # reddish clay, green -13
+    img[10:200, 10:390] = np.clip(clay, 0, 255).astype(np.uint8)
+    [i] = detect(edge_ctx_from_image(tmp_path, img, [hpoly(200, 50, 350)]))
+    assert i.fix["to"] == "without_curb_road_edge"
+
+
+def test_painted_edge_line_is_not_a_kerb_step(tmp_path):
+    from annotation_qa.detectors.curb_soft import _sharp_step, _stretches
+
+    img = _road()
+    img[196:200, 10:390] = (230, 230, 230)  # 4 px white paint just outside the line, road beyond
+    img[10:196, 10:390] = ROAD
+    ctx = edge_ctx_from_image(tmp_path, img, [hpoly(200)])
+    sub, _ = _stretches(hpoly(200))[0]
+    assert not _sharp_step(ctx, sub, side=1)
+
