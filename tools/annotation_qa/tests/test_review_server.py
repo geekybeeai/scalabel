@@ -144,3 +144,67 @@ def test_tolerant_reader_skips_truncated_line(tmp_path):
 
 def test_binds_loopback_only(server):
     assert server.server_address[0] == "127.0.0.1"
+
+
+# ---- I10: calibration status ----
+def test_calibration_status_endpoint(tmp_path, repo):
+    from annotation_qa.issues import calibration_sample
+    out = tmp_path / "o"
+    out.mkdir()
+    iss = [_issue("shape", i, 0.5) for i in range(40)]
+    (out / "issues_shape.jsonl").write_text("".join(json.dumps(i.__dict__) + "\n" for i in iss))
+    sample = calibration_sample(iss)
+    write_marks(out / "marks.json", {i.key: ("real" if k < 15 else "false")
+                                     for k, i in enumerate(sample[:21])})
+    root, orig = repo
+    srv = make_server(out, port=0, repo_root=root, originals_dir=orig)
+    try:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        st = json.loads(get(srv, "/calibration"))["shape"]
+        assert st == {"n": 30, "answered": 21, "real": 15, "need": 20,
+                      "precision": 15 / 21, "status": "PASS"}
+        items = json.loads(get(srv, "/calibrate/items?type=shape"))
+        assert [i["key"] for i in items] == [i.key for i in sample]  # the gated sample
+        page = get(srv, "/calibrate?type=shape")
+        assert "/calibration" in page and "PASS needs" in page
+        assert "/calibration" in get(srv, "/") and 'class="cal"' in get(srv, "/")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+# ---- M5: POST hardening ----
+def _raw_post(srv, path, body: bytes, headers):
+    req = urllib.request.Request(_url(srv, path), body, headers)
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def test_post_needs_json_content_type(server, out_dir):
+    assert _raw_post(server, "/marks", b'{"k":"real"}', {"Content-Type": "text/plain"}) == 415
+    assert _raw_post(server, "/marks", b'{"k":"real"}',
+                     {"Content-Type": "application/x-www-form-urlencoded"}) == 415
+    assert read_marks(out_dir / "marks.json") == {}
+
+
+def test_post_needs_local_host_header(server, out_dir):
+    h = {"Content-Type": "application/json", "Host": "evil.example:8790"}
+    assert _raw_post(server, "/marks", b'{"k":"real"}', h) == 403
+    assert read_marks(out_dir / "marks.json") == {}
+    h["Host"] = f"localhost:{server.server_address[1]}"
+    assert _raw_post(server, "/marks", b'{"k":"real"}', h) == 200
+
+
+def test_bulk_dry_run_counts_without_writing(server, out_dir):
+    r = post(server, "/marks/bulk", {"issue_type": "shape", "min_confidence": 0.8,
+                                     "dry_run": True})
+    assert r == {"count": 2} and read_marks(out_dir / "marks.json") == {}
+
+
+def test_page_js_checks_post_response_and_confirms_bulk(server):
+    html = get(server, "/")
+    assert "if(!r.ok)" in html and "confirm(" in html and "dry_run:true" in html
+    assert "if(!r.ok)" in get(server, "/calibrate?type=shape")

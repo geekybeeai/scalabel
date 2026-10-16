@@ -51,6 +51,18 @@ def out(tmp_path):
     return tmp_path / "out"
 
 
+@pytest.fixture(autouse=True)
+def originals(tmp_path, monkeypatch):
+    """Never read (or copy) the real originals in these tests."""
+    from annotation_qa import data
+    from annotation_qa import fix as fixmod
+    orig = tmp_path / "orig"
+    orig.mkdir()
+    monkeypatch.setattr(data, "ORIGINALS_DIR", orig)
+    monkeypatch.setattr(fixmod, "ORIGINALS_DIR", orig)
+    return orig
+
+
 @pytest.fixture
 def repo(tmp_path):
     return tmp_path
@@ -151,10 +163,13 @@ def _issue(t, lid, frame, stem=STEM):
 
 
 def test_bar_lists_reviewer_frames_and_missing_real(out, capsys):
-    a, b = _issue("shape", "1", "x_208199.png"), _issue("position", "2", "x_208199.png")
-    c = _issue("shape", "3", "MLC 1 y.png")
+    d = "items/Full_Verfication/batchwise_data/b/images/"
+    a = _issue("shape", "1", d + "208199_verification.png")
+    b = _issue("position", "2", d + "208199_verification.png")
+    c = _issue("shape", "3", d + "MLC 1_verification_z20.png")
+    fake = _issue("shape", "4", d + "113652_211565_verification.png")  # not 565_verification
     out.mkdir()
-    for t, lst in (("shape", [a, c]), ("position", [b])):
+    for t, lst in (("shape", [a, c, fake]), ("position", [b])):
         (out / f"issues_{t}.jsonl").write_text("".join(json.dumps(i.__dict__) + "\n" for i in lst))
     write_marks(out / "marks.json", {b.key: "real", c.key: "false"})
     assert cli.main(["bar", "--out", str(out)]) == 0
@@ -164,6 +179,7 @@ def test_bar_lists_reviewer_frames_and_missing_real(out, capsys):
     assert "No real-marked issue: " in text
     missing = text.split("No real-marked issue: ")[1]
     assert "MLC 1" in missing and "208199" not in missing and "207851" in missing
+    assert "565_verification: no issues" in text  # the 211565 frame is not a false hit
 
 
 def _merge(out, tag, tmp_path):
@@ -178,25 +194,33 @@ def _two_changes():
                        "2": {"before": _snap(_label("2")), "after": None}}}
 
 
-def test_final_copies_merged_stems_and_counts(out, tmp_path, capsys):
+def test_final_copies_merged_stems_and_counts(out, tmp_path, capsys, originals):
     tag = _round(out, "shape", 1, _two_changes(), [_frame("f1.png", [])])
     _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [_label("1")])]))
-    _write(out / "work" / "other_export_b.json", _export([]))  # no rounds: not copied
+    _write(out / "work" / "other_export_b.json", _export([]))  # no rounds: copied as is
+    _write(originals / "third_export_c.json", _export([_frame("t.png", [_label("7")])]))
     _merge(out, tag, tmp_path)
     assert cli.main(["final", "--out", str(out)]) == 0
     dest = out / "final" / f"{STEM}_qa_2026_10_17.json"
     assert json.loads(dest.read_text()) == _export([_frame("f1.png", [])])
-    assert not list((out / "final").glob("other*"))
-    assert f"{STEM}: 2 changes" in capsys.readouterr().out
+    text = capsys.readouterr().out
+    assert f"{STEM}: 2 changes" in text
+    # I9: one corrected export per batch, also for batches no round touched
+    assert "other_export_b: 0 changes" in text and "third_export_c: 0 changes" in text
+    third = json.loads((out / "final" / "third_export_c_qa_2026_10_17.json").read_text())
+    assert third == _export([_frame("t.png", [_label("7")])])
+    assert (out / "final" / "other_export_b_qa_2026_10_17.json").exists()
 
 
-def test_final_does_not_export_unmerged_stem(out, capsys):
+def test_final_does_not_export_unmerged_stem(out, capsys, originals):
     _round(out, "shape", 1, _two_changes(), [_frame("f1.png", [])])
     _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [_label("1")])]))
+    _write(originals / "other_export_b.json", _export([]))
     assert cli.main(["final", "--out", str(out)]) == 0
     text = capsys.readouterr().out
-    assert not (out / "final").exists() or not list((out / "final").glob("*.json"))
+    assert not (out / "final" / f"{STEM}_qa_2026_10_17.json").exists()
     assert "NOT EXPORTED" in text and "shape_v1" in text and STEM in text
+    assert "other_export_b: 0 changes" in text  # the untouched batch still ships
 
 
 def test_final_skips_stem_with_one_unmerged_round(out, tmp_path, capsys):
@@ -206,7 +230,7 @@ def test_final_skips_stem_with_one_unmerged_round(out, tmp_path, capsys):
     _merge(out, t1, tmp_path)
     assert cli.main(["final", "--out", str(out)]) == 0
     text = capsys.readouterr().out
-    assert not list((out / "final").glob("*.json")) if (out / "final").exists() else True
+    assert not (out / "final" / f"{STEM}_qa_2026_10_17.json").exists()
     assert "NOT EXPORTED" in text and "position_v2" in text and "shape_v1" not in text.split(
         "NOT EXPORTED")[1]
 
@@ -251,3 +275,138 @@ def test_final_refuses_originals_dir(out, tmp_path, monkeypatch):
     monkeypatch.setattr(data, "ORIGINALS_DIR", out / "final")
     with pytest.raises(ValueError):
         cli.main(["final", "--out", str(out)])
+
+
+# ---- I5: View B shows what will ship ----
+def _merge_with(out, tag, tmp_path, frames):
+    from annotation_qa.merge import merge_reviewed
+    rev = tmp_path / f"{tag}_rev.json"
+    _write(rev, _export(frames))
+    return merge_reviewed(STEM, rev, out, round_tag=tag)
+
+
+def _three_changes(out):
+    """Round shape_v1 on f1.png: 1 moved, 2 recategorised, 3 deleted by the tool."""
+    after1, after2 = _label("1", y=110), _label("2", "dashed_white_line", y=130)
+    ch = {"f1.png": {"1": {"before": _snap(_label("1", y=100)), "after": _snap(after1)},
+                     "2": {"before": _snap(_label("2", y=130)), "after": _snap(after2)},
+                     "3": {"before": _snap(_label("3", y=150)), "after": None}}}
+    items = [_frame("f1.png", [after1, after2, _label("4", y=170)])]
+    tag = _round(out, "shape", 1, ch, items)
+    _write(out / "work" / f"{STEM}.json",
+           _export([_frame("f1.png", [_label("1", y=100), _label("2", y=130), _label("3", y=150),
+                                      _label("4", y=170)])]))
+    return tag
+
+
+def test_viewb_flags_review_changes_and_added_deleted(out, repo, tmp_path):
+    tag = _three_changes(out)
+    # review: 1 accepted as proposed, 2 put back to solid (reverted), 4 deleted, 5 added
+    _merge_with(out, tag, tmp_path, [_frame("f1.png", [
+        _label("1", y=110), _label("2", y=130), _label("5", y=60)])])
+    (r,) = build_rows(out, repo)
+    got = {c["label_id"]: c for c in r["changes"]}
+    assert got["1"]["review"] == "" and got["1"]["merged"]
+    assert got["2"]["review"] == "reverted"
+    assert got["3"]["review"] == ""  # deleted by the tool, still deleted
+    assert r["review_edits"] == [{"round": "shape_v1", "added": ["5"], "deleted": ["4"]}]
+
+
+def test_viewb_changed_in_review_and_shipped_description(out, repo, tmp_path):
+    tag = _three_changes(out)
+    _merge_with(out, tag, tmp_path, [_frame("f1.png", [
+        _label("1", y=120), _label("2", "dashed_white_line", y=130), _label("4", y=170)])])
+    (r,) = build_rows(out, repo)
+    c1 = next(c for c in r["changes"] if c["label_id"] == "1")
+    assert c1["review"] == "changed in review" and c1["shipped"] == "moved 20 px"
+    assert r["review_edits"] == []
+
+
+def test_viewb_after_crop_of_merged_round_uses_working_copy(out, repo, tmp_path):
+    from annotation_qa.viewb import frame_specs
+    tag = _three_changes(out)
+    specs = frame_specs(out, STEM, "f1.png")
+    proposed = {l["id"]: l for l in specs[(tag, "1", "after")]["frame"]["labels"]}
+    assert proposed["1"]["poly2d"][0]["vertices"][0][1] == 110  # not merged: the proposal
+    _merge_with(out, tag, tmp_path, [_frame("f1.png", [_label("1", y=120)])])
+    specs = frame_specs(out, STEM, "f1.png")
+    shipped = {l["id"]: l for l in specs[(tag, "1", "after")]["frame"]["labels"]}
+    assert shipped["1"]["poly2d"][0]["vertices"][0][1] == 120 and set(shipped) == {"1"}
+    before = {l["id"]: l for l in specs[(tag, "1", "before")]["frame"]["labels"]}
+    assert before["1"]["poly2d"][0]["vertices"][0][1] == 100
+
+
+def test_describe_partial_shift_reports_curve_move():
+    from annotation_qa.viewb import describe
+    b = _snap(_label("1", y=100))
+    a = {"category": b["category"], "poly2d": [{"vertices": [[20, 100], [60, 100], [80, 108],
+                                                             [180, 108]],
+                                                "types": "LLLL", "closed": False}]}
+    assert describe(b, a) == "moved up to 8 px + vertices 2 → 4"
+
+
+# ---- I6: crops are throttled, cached and rendered per frame ----
+def test_all_crops_of_a_frame_from_one_decode(out, repo, monkeypatch):
+    from annotation_qa import viewb
+    (repo / "local-data").mkdir()
+    cv2.imwrite(str(repo / "local-data" / "f1.png"), np.full((200, 200, 3), 90, np.uint8))
+    tag = _three_changes(out)
+    reads = []
+    real = cv2.imread
+    monkeypatch.setattr(cv2, "imread", lambda *a, **k: reads.append(a[0]) or real(*a, **k))
+    p = viewb.render_crop(out, repo, STEM, "f1.png", "2", tag, "after")
+    assert p is not None and p.read_bytes()[:2] == b"\xff\xd8"
+    assert len(reads) == 1 and len(list((out / "viewb").glob("*.jpg"))) == 6  # 3 labels x 2
+    assert viewb.render_crop(out, repo, STEM, "f1.png", "3", tag, "before").exists()
+    assert len(reads) == 1  # served from disk
+
+
+def test_render_slots_limit_concurrency(out, repo, monkeypatch):
+    from annotation_qa import viewb
+    assert viewb.RENDER_SLOTS._value == 2
+    (repo / "local-data").mkdir()
+    cv2.imwrite(str(repo / "local-data" / "f1.png"), np.full((200, 200, 3), 90, np.uint8))
+    _three_changes(out)
+    active, peak = [0], [0]
+    real = viewb.issue_crop
+    lock = threading.Lock()
+
+    def slow(*a, **k):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        import time
+        time.sleep(0.05)
+        with lock:
+            active[0] -= 1
+        return real(*a, **k)
+    monkeypatch.setattr(viewb, "issue_crop", slow)
+    # five different frames' worth of renders at once: never more than two in flight
+    names = [f"g{i}.png" for i in range(5)]
+    for n in names:
+        cv2.imwrite(str(repo / "local-data" / n), np.full((200, 200, 3), 90, np.uint8))
+        _round(out, f"t{n[1]}", 1, {n: {"1": {"before": _snap(_label("1")), "after": None}}},
+               [_frame(n, [])])
+    ths = [threading.Thread(target=viewb.render_frame, args=(out, repo, STEM, n)) for n in names]
+    [t.start() for t in ths]
+    [t.join() for t in ths]
+    assert peak[0] <= 2 and len(list((out / "viewb").glob("*.jpg"))) == 10
+
+
+def test_exports_parsed_once_per_mtime(out, repo, monkeypatch):
+    from annotation_qa import viewb
+    _three_changes(out)
+    calls = []
+    real = viewb.load_export
+    monkeypatch.setattr(viewb, "load_export", lambda p: calls.append(p) or real(p))
+    build_rows(out, repo)
+    build_rows(out, repo)
+    assert len(calls) == len(set(calls)) == 1  # the items file, parsed once (not merged yet)
+
+
+def test_prerender_renders_everything(out, repo, capsys):
+    from annotation_qa.viewb import prerender
+    (repo / "local-data").mkdir()
+    cv2.imwrite(str(repo / "local-data" / "f1.png"), np.full((200, 200, 3), 90, np.uint8))
+    _three_changes(out)
+    assert prerender(out, repo) == 6 and prerender(out, repo) == 0

@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import random
 import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,28 +12,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from annotation_qa.data import ORIGINALS_DIR, REPO_ROOT
-from annotation_qa.issues import Issue, read_marks, write_marks
+from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_sample,  # noqa: F401
+                                  calibration_status, load_issues_tolerant, read_marks,
+                                  write_marks)
 from annotation_qa.viewb import build_rows, render_crop, viewb_html
 
 log = logging.getLogger(__name__)
 SCALABEL = "http://localhost:8686"
-CALIBRATION_N = 30
-
-
-def load_issues_tolerant(path: Path) -> list[Issue]:
-    """Like issues.read_issues, but skips (and logs) malformed lines, e.g. a truncated last line."""
-    out = []
-    with open(path) as f:
-        for n, line in enumerate(f, 1):
-            if not line.strip():
-                continue
-            try:
-                d = json.loads(line)
-                d["anchor"] = tuple(d["anchor"])
-                out.append(Issue(**d))
-            except (ValueError, KeyError, TypeError) as e:
-                log.warning("%s:%d skipped malformed line (%s)", path, n, e)
-    return out
+LOCAL_HOSTS = {"127.0.0.1", "localhost"}
 
 
 class ReviewState:
@@ -111,10 +96,13 @@ class ReviewState:
         return [self.card(i, counts) for i in sorted(mine, key=lambda i: -i.confidence)]
 
     def calibration(self, t: str) -> list[dict]:
-        mine = sorted(self.issues(t).get(t, []), key=lambda i: i.key)
-        if len(mine) > CALIBRATION_N:
-            mine = random.Random(0).sample(mine, CALIBRATION_N)
-        return [self.card(i, {}) for i in mine]
+        """The fixed calibration sample of type ``t`` (the one `fix` is gated on)."""
+        return [self.card(i, {}) for i in calibration_sample(self.issues(t).get(t, []))]
+
+    def calibration_status(self) -> dict[str, dict]:
+        """type -> answered k/n, real, precision and PASS / FAIL / NOT CALIBRATED."""
+        marks = read_marks(self.out / "marks.json")
+        return {t: calibration_status(v, marks) for t, v in self.issues().items() if v}
 
     def save(self, new: dict[str, str]) -> int:
         with self.lock:
@@ -123,7 +111,10 @@ class ReviewState:
             write_marks(self.out / "marks.json", marks)
         return len(new)
 
-    def bulk(self, t: str, min_conf: float) -> int:
+    def bulk(self, t: str, min_conf: float, dry_run: bool = False) -> int:
+        """Mark every issue of ``t`` with confidence >= ``min_conf`` real (false marks stay).
+
+        ``dry_run`` only counts them, so the page can ask for confirmation first."""
         with self.lock:
             marks = read_marks(self.out / "marks.json")
             n = 0
@@ -131,7 +122,8 @@ class ReviewState:
                 if i.confidence >= min_conf and marks.get(i.key) != "false":
                     marks[i.key] = "real"
                     n += 1
-            write_marks(self.out / "marks.json", marks)
+            if not dry_run:
+                write_marks(self.out / "marks.json", marks)
         return n
 
 
@@ -162,6 +154,8 @@ def _handler(state: ReviewState):
                 self._json(state.cards(t))
             elif u.path == "/calibrate/items":
                 self._json(state.calibration(t))
+            elif u.path == "/calibration":
+                self._json(state.calibration_status())
             elif u.path == "/calibrate":
                 self._send(calibrate_html(t).encode(), "text/html; charset=utf-8")
             elif u.path == "/viewb":
@@ -186,6 +180,15 @@ def _handler(state: ReviewState):
                 self._send(b"not found", "text/plain", 404)
 
         def do_POST(self):
+            host = (self.headers.get("Host") or "").strip().lower()
+            host = host[1:].split("]")[0] if host.startswith("[") else host.rsplit(":", 1)[0]
+            if host not in LOCAL_HOSTS:  # a page on another site must not post marks
+                self._json({"error": "forbidden host"}, 403)
+                return
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._json({"error": "Content-Type must be application/json"}, 415)
+                return
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 if self.path == "/marks":
@@ -194,8 +197,9 @@ def _handler(state: ReviewState):
                         raise ValueError("expected {key: 'real'|'false'}")
                     self._json({"saved": state.save(body)})
                 elif self.path == "/marks/bulk":
-                    self._json({"saved": state.bulk(body["issue_type"],
-                                                    float(body["min_confidence"]))})
+                    dry = bool(body.get("dry_run"))
+                    n = state.bulk(body["issue_type"], float(body["min_confidence"]), dry)
+                    self._json({"count": n} if dry else {"saved": n})
                 else:
                     self._send(b"not found", "text/plain", 404)
             except (ValueError, KeyError, TypeError) as e:
@@ -242,10 +246,17 @@ INDEX_JS = """
 const TABS=%s;let cur=null,marks={},items=[],shown=0;const PAGE=100;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json();}
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+ let j={};try{j=await r.json();}catch(e){}
+ if(!r.ok){alert('Not saved: '+(j.error||r.status));throw new Error('save failed');}return j;}
+function calText(s){if(!s)return '';const p=s.precision==null?'-':s.precision.toFixed(2);
+ return `${s.status} (answered ${s.answered}/${s.n}, real ${s.real}, precision ${p})`;}
+async function calib(){const st=await (await fetch('/calibration')).json();
+ document.querySelectorAll('.tab').forEach(e=>{const s=st[e.dataset.t];e.querySelector('.cal').textContent=s?' · '+s.status:'';});
+ $('#cal').innerHTML=cur&&st[cur]?'Calibration of '+esc(cur)+': <b>'+esc(calText(st[cur]))+'</b> &mdash; fix needs PASS (precision &ge; 2/3 on &ge; '+st[cur].need+' answered) <a href="/calibrate?type='+encodeURIComponent(cur)+'">calibrate</a>':'';}
 async function show(t){cur=t;document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('on',e.dataset.t==t));
- marks=await (await fetch('/marks')).json();items=await (await fetch('/issues?type='+t)).json();shown=0;
- $('#cards').innerHTML='';more();}
+ marks=await (await fetch('/marks')).json();items=await (await fetch('/issues?type='+encodeURIComponent(t))).json();shown=0;
+ $('#cards').innerHTML='';more();calib();}
 function more(){const end=Math.min(items.length,shown+PAGE);let h='';
  for(let i=shown;i<end;i++)h+=card(items[i],i);shown=end;$('#cards').insertAdjacentHTML('beforeend',h);
  $('#more').style.display=shown<items.length?'':'none';$('#more').textContent='show more ('+(items.length-shown)+' left)';}
@@ -258,24 +269,29 @@ function card(it,i){const m=marks[it.key]||'';
  <div><a href="${it.link}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}</div>
  <div style="margin-top:8px"><button class="r" onclick="mark(${i},'real')">Real</button>
  <button class="f" onclick="mark(${i},'false')">False alarm</button></div></div></div>`;}
-async function mark(i,v){const it=items[i];await post('/marks',{[it.key]:v});marks[it.key]=v;
- $('#c'+i).className='card '+v;}
+async function mark(i,v){const it=items[i];try{await post('/marks',{[it.key]:v});}catch(e){return;}
+ marks[it.key]=v;$('#c'+i).className='card '+v;calib();}
 async function bulk(){const c=parseFloat($('#conf').value);if(isNaN(c))return;
- const r=await post('/marks/bulk',{issue_type:cur,min_confidence:c});await show(cur);$('#msg').textContent='marked '+r.saved+' as real';}
+ let d;try{d=await post('/marks/bulk',{issue_type:cur,min_confidence:c,dry_run:true});}catch(e){return;}
+ if(!d.count){$('#msg').textContent='nothing to mark';return;}
+ if(!confirm('Mark '+d.count+' '+cur+' issues with confidence >= '+c+' as real?'))return;
+ let r;try{r=await post('/marks/bulk',{issue_type:cur,min_confidence:c});}catch(e){return;}
+ await show(cur);$('#msg').textContent='marked '+r.saved+' as real';}
 document.addEventListener('DOMContentLoaded',()=>{if(TABS.length)show(TABS[0][0]);});
 """
 
 
 def index_html(types: dict[str, int]) -> str:
-    tabs = "".join(f'<span class="tab" data-t="{t}" onclick="show(\'{t}\')">{t} ({n})</span>'
-                   for t, n in types.items())
+    tabs = "".join(f'<span class="tab" data-t="{t}" onclick="show(\'{t}\')">{t} ({n})'
+                   f'<span class="cal"></span></span>' for t, n in types.items())
     calib = " ".join(f'<a href="/calibrate?type={t}">{t}</a>' for t in types)
     js = INDEX_JS % json.dumps([[t, n] for t, n in types.items()])
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Annotation QA review</title>
 <style>{CSS}</style></head><body><header>{tabs}
 <div class="bar">Mark all &ge; <input id="conf" size="4" value="0.8"> as real
 <button class="r" onclick="bulk()">Apply to this tab</button> <span id="msg"></span>
-&nbsp;|&nbsp; Calibrate: {calib} &nbsp;|&nbsp; <a href="/viewb">View B (final review)</a></div></header>
+&nbsp;|&nbsp; Calibrate: {calib} &nbsp;|&nbsp; <a href="/viewb">View B (final review)</a></div>
+<div class="bar" id="cal"></div></header>
 <div id="cards"></div><div style="margin:16px"><button id="more" onclick="more()">show more</button></div>
 <script>{js}</script></body></html>"""
 
@@ -283,10 +299,15 @@ def index_html(types: dict[str, int]) -> str:
 CAL_JS = """
 const T=%s;const $=s=>document.querySelector(s);let items=[],marks={};
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function count(){const k=items.filter(i=>marks[i.key]).length;$('#prog').textContent='answered '+k+' / '+items.length;
- $('#done').style.display=(items.length&&k==items.length)?'':'none';}
-async function answer(i,v){const it=items[i];await fetch('/marks',{method:'POST',headers:{'Content-Type':'application/json'},
- body:JSON.stringify({[it.key]:v})});marks[it.key]=v;$('#c'+i).className='card '+v;count();}
+async function count(){const k=items.filter(i=>marks[i.key]).length;$('#prog').textContent='answered '+k+' / '+items.length;
+ $('#done').style.display=(items.length&&k==items.length)?'':'none';
+ const s=(await (await fetch('/calibration')).json())[T];if(!s){$('#status').textContent='';return;}
+ const p=s.precision==null?'-':s.precision.toFixed(2);
+ $('#status').textContent=`${s.status}: real ${s.real} of ${s.answered} answered, precision ${p} (PASS needs >= 2/3 with >= ${s.need} answered)`;}
+async function answer(i,v){const it=items[i];
+ const r=await fetch('/marks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[it.key]:v})});
+ if(!r.ok){alert('Not saved ('+r.status+'); try again');return;}
+ marks[it.key]=v;$('#c'+i).className='card '+v;count();}
 (async()=>{marks=await (await fetch('/marks')).json();items=await (await fetch('/calibrate/items?type='+T)).json();
  $('#cards').innerHTML=items.map((it,i)=>`<div class="card ${marks[it.key]||''}" id="c${i}"><div>
  <img loading="lazy" src="${it.crop}" style="max-width:900px;max-height:700px"><div>${esc(it.reason)}</div>
@@ -300,5 +321,5 @@ def calibrate_html(t: str) -> str:
     safe = "".join(c for c in t if c.isalnum() or c == "_")
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Calibrate {safe}</title>
 <style>{CSS}</style></head><body><header><a href="/">&larr; back</a> &nbsp; Calibrate: {safe}
-&nbsp; <b id="prog"></b> <b id="done" style="display:none;color:#2a9d4a">All done - thank you!</b></header>
+&nbsp; <b id="prog"></b> &nbsp; <b id="status"></b> <b id="done" style="display:none;color:#2a9d4a">All done - thank you!</b></header>
 <div id="cards"></div><script>{CAL_JS % json.dumps(safe)}</script></body></html>"""
