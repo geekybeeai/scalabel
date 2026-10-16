@@ -24,3 +24,6 @@ REGISTRY["position"] = position.detect
 from annotation_qa.detectors import shape  # noqa: E402
 
 REGISTRY["shape"] = shape.detect
+from annotation_qa.detectors import duplicates  # noqa: E402
+
+REGISTRY["duplicates"] = duplicates.detect
