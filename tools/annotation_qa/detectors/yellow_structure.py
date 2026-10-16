@@ -7,8 +7,9 @@ class"; a yellow single wider than it gets "double yellow?" (both set_category,
 the first at confidence 0.5). "Yellow" is position.select_channel == yellow.
 
 Centre turn lane (``center_turn_lane``, at most one issue per label, paint first):
-- paint: the yellow ridge within +-3 px of the line must be >= 25 (median over
-  the line), else "no solid yellow paint under the line"; a second yellow ridge
+- paint: only when the line sits on yellow by the position detector's standard
+  (median over the line of the max yellow ridge within +-3 px >= 10; otherwise
+  nothing is emitted, position owns that case) a second yellow ridge
   (>= 12 at the 90th percentile, so sparse dashes count; real dashed yellow
   measures 12-40 on frame 101713) must lie 3-10 px to
   one side of the line's own ridge peak, else "no dashed yellow beside it; ...".
@@ -22,7 +23,7 @@ where OUT is the parent of ``ctx.image.roi_cache`` (scan puts the cache at
 OUT/roi_cache), unless ``set_stats_path`` gives an explicit file. Loaded once per
 path. If ``width_usable`` is false (calibration found double yellows less than 1.5x as wide as
 yellow singles) the width check is skipped too. If the file is missing, one warning is logged and the width and partner
-checks are skipped; the CTL paint check still runs. A label with several polys
+checks are skipped; the CTL dashed-beside check still runs. A label with several polys
 is judged on its longest poly.
 """
 
@@ -47,7 +48,7 @@ log = logging.getLogger("annotation_qa.yellow_structure")
 DOUBLE, CTL = "double_yellow_line", "center_turn_lane"
 R = 25
 LINE_R = 3  # the solid yellow must sit within this many px of the line
-FIRST_MIN = 25.0
+ON_PAINT_MIN = 10.0  # position detector's standard: near ridge >= 10 within +-3 px
 SECOND_MIN = 12.0
 YELLOW_CONTRAST_MIN = 80.0  # raw yellow contrast that is yellow paint beyond doubt
 SECOND_PERCENTILE = 90
@@ -88,6 +89,13 @@ def load_stats(path: Path) -> dict | None:
                         "partner-distance checks; run `annotation_qa calibrate-yellow`",
                         path, type(e).__name__)
             _cache[path] = None
+        else:
+            st = _cache[path]
+            if not st.get("width_usable", True):
+                log.warning("yellow width check skipped (%s): double-yellow median FWHM %.1f px "
+                            "is under 1.5x the yellow-single median %.1f px",
+                            path, st.get("fwhm_double_median", float("nan")),
+                            st.get("fwhm_single_yellow_median", float("nan")))
     return _cache[path]
 
 
@@ -113,18 +121,21 @@ def pair_distance(a: dict, b: dict) -> float | None:
     """Perpendicular distance between two roughly parallel lines, else None.
 
     Direction difference must be under 15 degrees and the lines must overlap
-    along the direction of ``a``. Measured from a's centroid to b's line.
+    along a's direction. Measured at the middle of the overlap interval: the
+    distance from that point on a to b's line (symmetric in a and b).
     """
-    cos = abs(float(a["d"] @ b["d"]))
-    if np.degrees(np.arccos(min(cos, 1.0))) >= PAIR_ANGLE:
+    cos = float(a["d"] @ b["d"])
+    if np.degrees(np.arccos(min(abs(cos), 1.0))) >= PAIR_ANGLE:
         return None
-    off = b["c"] - a["c"]
-    sgn = 1.0 if a["d"] @ b["d"] >= 0 else -1.0
-    t_b0, t_b1 = sorted((float(off @ a["d"]) + sgn * b["t0"], float(off @ a["d"]) + sgn * b["t1"]))
-    if min(t_b1, a["t1"]) <= max(t_b0, a["t0"]):
+    sgn = 1.0 if cos >= 0 else -1.0
+    shift = float((b["c"] - a["c"]) @ a["d"])  # b's centroid along a's direction
+    t_b0, t_b1 = sorted((shift + sgn * b["t0"], shift + sgn * b["t1"]))
+    lo, hi = max(t_b0, a["t0"]), min(t_b1, a["t1"])
+    if hi <= lo:
         return None
-    normal = np.array([-a["d"][1], a["d"][0]])
-    return abs(float(off @ normal))
+    p = a["c"] + 0.5 * (lo + hi) * a["d"]
+    v = p - b["c"]
+    return abs(float(v[0] * b["d"][1] - v[1] * b["d"][0]))
 
 
 def nearest_partner(geoms: dict[str, dict], lid: str) -> tuple[str, float] | None:
@@ -231,15 +242,14 @@ def _paint(ctx, poly):
 
 def _ctl_issue(ctx, lid, label, pi, poly, geoms, stats):
     paint = _paint(ctx, poly)
+    paint_feats = {}
     if paint is not None:
         first, second, k = paint
-        feats = {"first_ridge": first, "second_ridge": second, "peak_offset": k}
-        if first < FIRST_MIN:
-            return _issue(ctx, label, pi, poly, 0.7, "no solid yellow paint under the line",
-                          None, feats)
-        if second < SECOND_MIN:
+        paint_feats = {"first_ridge": first, "second_ridge": second, "peak_offset": k}
+        # a line off its paint is the position detector's case: emit nothing for it here
+        if first >= ON_PAINT_MIN and second < SECOND_MIN:
             return _issue(ctx, label, pi, poly, 0.6,
-                          "no dashed yellow beside it; is this a turn lane?", None, feats)
+                          "no dashed yellow beside it; is this a turn lane?", None, paint_feats)
     if stats is None or geoms.get(lid) is None:
         return None
     med = float(stats["ctl_pair_distance_median"])
@@ -248,7 +258,7 @@ def _ctl_issue(ctx, lid, label, pi, poly, geoms, stats):
           for d in [pair_distance(geoms[lid], g)] if d is not None]
     ok = [d for d in ds if lo <= d <= hi]
     feats = {"ctl_pair_distance_median": med, "partner_distance": min(ok, key=lambda d: abs(d - med)) if ok else None,
-             "nearest_distance": min(ds) if ds else None}
+             "nearest_distance": min(ds) if ds else None, **paint_feats}
     if ok:
         return None
     return _issue(ctx, label, pi, poly, 0.6, "missing other side of turn lane", None, feats)

@@ -119,14 +119,13 @@ def test_ctl_without_dashed_beside_flagged(tmp_path):
     assert got[0].features["first_ridge"] >= 25 and got[0].features["second_ridge"] < 15
 
 
-def test_ctl_on_bare_road_flagged_no_paint(tmp_path):
-    write_stats(tmp_path)
+def test_ctl_on_bare_road_emits_nothing_for_paint(tmp_path):
+    write_stats(tmp_path)  # position owns lines off their paint
     labels = [("A", "center_turn_lane", 180), ("B", "center_turn_lane", 220)]
-    got = detect(ctx_of(tmp_path, _road(), labels))
-    assert len(got) == 2 and all("no solid yellow" in i.reason for i in got)
+    assert detect(ctx_of(tmp_path, _road(), labels)) == []
 
 
-def test_missing_stats_skips_width_and_partner_but_keeps_paint(tmp_path, caplog):
+def test_missing_stats_skips_width_and_partner_but_keeps_dashed_check(tmp_path, caplog):
     yellow_structure.clear_cache()
     with caplog.at_level(logging.WARNING, logger="annotation_qa.yellow_structure"):
         narrow = band(_road(), 198, 203)
@@ -134,9 +133,9 @@ def test_missing_stats_skips_width_and_partner_but_keeps_paint(tmp_path, caplog)
         # lone CTL with paint ok: partner check skipped
         img = _ctl_scene()
         assert detect(ctx_of(tmp_path, img, [("A", "center_turn_lane", 180)])) == []
-        # paint check still runs
-        got = detect(ctx_of(tmp_path, _road(), [("A", "center_turn_lane", 180)]))
-        assert [i.reason for i in got] == ["no solid yellow paint under the line"]
+        # dashed-beside check still runs
+        got = detect(ctx_of(tmp_path, _ctl_scene(second=False), [("A", "center_turn_lane", 180)]))
+        assert [i.reason for i in got] == ["no dashed yellow beside it; is this a turn lane?"]
     warns = [r for r in caplog.records if "yellow_stats" in r.getMessage()]
     assert len(warns) == 1
 
@@ -172,7 +171,51 @@ def test_width_skipped_when_doubles_not_wider_than_singles(tmp_path):
 def test_ctl_on_dark_road_negative_ridge_does_not_crash(tmp_path):
     write_stats(tmp_path)
     img = _road()
-    img[170:190, 10:390] = (30, 200, 230)  # wide yellow beside, none under the line: ridge < 0 near it
+    img[170:190, 10:390] = (30, 200, 230)  # wide yellow beside, none under the line
     img[195:206, 10:390] = (60, 60, 60)
-    got = detect(ctx_of(tmp_path, img, [("A", "center_turn_lane", 200)]))
-    assert [i.reason for i in got] == ["no solid yellow paint under the line"]
+    assert detect(ctx_of(tmp_path, img, [("A", "center_turn_lane", 200), ("B", "center_turn_lane", 240)])) == []
+
+
+def test_ctl_off_paint_not_flagged_for_dashed(tmp_path):
+    write_stats(tmp_path)
+    img = _ctl_scene(second=False)
+    img[205:210, 10:390] = _road()[205:210, 10:390]  # irrelevant; label sits 12 px off its paint
+    labels = [("A", "center_turn_lane", 192), ("B", "center_turn_lane", 232)]
+    assert detect(ctx_of(tmp_path, img, labels)) == []
+
+
+def test_width_unusable_logs_one_warning_with_medians(tmp_path, caplog):
+    write_stats(tmp_path)
+    p = tmp_path / "calibration" / "yellow_stats.json"
+    p.write_text(json.dumps({**json.loads(p.read_text()), "width_usable": False}))
+    yellow_structure.clear_cache()
+    with caplog.at_level(logging.WARNING, logger="annotation_qa.yellow_structure"):
+        img = band(_road(), 198, 203)
+        for _ in range(2):
+            detect(ctx_of(tmp_path, img, [("L1", "double_yellow_line", 200)]))
+    msgs = [r.getMessage() for r in caplog.records if "width check skipped" in r.getMessage()]
+    assert len(msgs) == 1 and "20.0" in msgs[0] and "4.0" in msgs[0]
+
+
+def _geom(y0, y1, x0=0, x1=300):
+    return yellow_structure.line_geom(
+        {"vertices": [[x0, y0], [x1, y1]], "types": "LL", "closed": False})
+
+
+def test_pair_distance_symmetric_and_reversed():
+    pd = yellow_structure.pair_distance
+    a, b = _geom(100, 100), _geom(140, 140)
+    rev = _geom(140, 140, 300, 0)  # drawn the other way
+    assert abs(pd(a, b) - 40) < 1e-6 and abs(pd(b, a) - 40) < 1e-6
+    assert abs(pd(a, rev) - 40) < 1e-6 and abs(pd(rev, a) - 40) < 1e-6
+    # slightly tilted partner: distance taken mid-overlap, same both ways
+    c = _geom(130, 150)
+    assert abs(pd(a, c) - pd(c, a)) < 1.0 and abs(pd(a, c) - 40) < 1.0
+
+
+def test_pair_distance_rejects_angle_and_non_overlap():
+    pd = yellow_structure.pair_distance
+    a = _geom(100, 100)
+    assert pd(a, _geom(100, 200)) is None  # 18 degrees
+    assert pd(a, _geom(140, 140, 400, 700)) is None  # no overlap along the line
+    assert pd(a, _geom(100, 160)) is not None  # 11 degrees
