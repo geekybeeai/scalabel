@@ -47,6 +47,11 @@ class FrameImage:
             self._roi = load_roi_mask(self.path, cache_dir=self.roi_cache)
         return self._roi
 
+    def release(self) -> None:
+        """Free the decoded image (and ROI) so the next frame can load."""
+        self._bgr = None
+        self._roi = None
+
     @property
     def shape(self) -> tuple[int, int]:
         """(height, width) of the image."""
