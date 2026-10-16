@@ -30,7 +30,14 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--out", type=Path, default=DEFAULT_OUT)
     sc.add_argument("--types", required=True, help="comma-separated issue types")
     sc.add_argument("--subset", choices=["reviewer+random20"], default=None)
+    rv = sub.add_parser("review", help="serve the review page")
+    rv.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    rv.add_argument("--port", type=int, default=8790)
     a = ap.parse_args(argv)
+    if a.cmd == "review":
+        from annotation_qa.review_server import serve
+        serve(a.out, a.port)
+        return 0
     s = run_scan(_expand(a.exports), a.root, a.out,
                  list(dict.fromkeys(t for t in a.types.split(",") if t)), subset=a.subset)
     print(f"frames={s.frames} skipped={len(s.skipped)} counts={s.counts}")

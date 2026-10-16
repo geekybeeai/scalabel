@@ -1,0 +1,292 @@
+"""Local review server (View A): triage detected issues as real / false alarm."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import random
+import threading
+from dataclasses import asdict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+from annotation_qa.data import ORIGINALS_DIR, REPO_ROOT
+from annotation_qa.issues import Issue, read_marks, write_marks
+
+log = logging.getLogger(__name__)
+SCALABEL = "http://localhost:8686"
+CALIBRATION_N = 30
+
+
+def load_issues_tolerant(path: Path) -> list[Issue]:
+    """Like issues.read_issues, but skips (and logs) malformed lines, e.g. a truncated last line."""
+    out = []
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+                d["anchor"] = tuple(d["anchor"])
+                out.append(Issue(**d))
+            except (ValueError, KeyError, TypeError) as e:
+                log.warning("%s:%d skipped malformed line (%s)", path, n, e)
+    return out
+
+
+class ReviewState:
+    def __init__(self, out: Path, repo_root: Path, originals_dir: Path):
+        self.out, self.repo_root, self.originals = Path(out), Path(repo_root), Path(originals_dir)
+        self.lock = threading.Lock()
+        self._frame_idx: dict[str, dict[str, int]] = {}
+        self._task_size: dict[str, tuple[int, bool]] = {}
+
+    def issues(self, t: str | None = None) -> dict[str, list[Issue]]:
+        res = {}
+        for p in sorted(self.out.glob("issues_*.jsonl")):
+            name = p.stem[len("issues_"):]
+            if t is None or name == t:
+                res[name] = load_issues_tolerant(p)
+        return res
+
+    def types(self) -> dict[str, int]:
+        return {k: len(v) for k, v in self.issues().items() if v}
+
+    def _frames(self, stem: str) -> dict[str, int]:
+        if stem not in self._frame_idx:
+            idx: dict[str, int] = {}
+            for p in (self.out / "work" / f"{stem}.json", self.originals / f"{stem}.json"):
+                if p.exists():
+                    try:
+                        frames = json.loads(p.read_text()).get("frames", [])
+                        idx = {f.get("name"): i for i, f in reversed(list(enumerate(frames)))}
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("cannot read export %s: %s", p, e)
+                        continue
+                    break
+            self._frame_idx[stem] = idx
+        return self._frame_idx[stem]
+
+    def _project(self, project: str) -> tuple[int, bool]:
+        if project not in self._task_size:
+            d = self.repo_root / "local-data/scalabel/projects" / project
+            size = 0
+            try:
+                size = int(json.loads((d / "project.json").read_text())["config"]["taskSize"])
+            except Exception:  # noqa: BLE001
+                pass
+            self._task_size[project] = (size, d.is_dir())
+        return self._task_size[project]
+
+    def card(self, issue: Issue, type_counts: dict[tuple[str, str], int]) -> dict:
+        project = issue.export_stem.split("_export_")[0]
+        size, found = self._project(project)
+        i = self._frames(issue.export_stem).get(issue.frame_name)
+        if i is not None and size > 0:
+            task, frame_no = i // size, i % size + 1
+        else:
+            task, frame_no = 0, None
+        d = asdict(issue)
+        d.update(
+            key=issue.key,
+            others=type_counts.get((issue.export_stem, issue.frame_name), 1) - 1,
+            frame_no=frame_no,
+            project=project,
+            project_found=found,
+            link=f"{SCALABEL}/label?project_name={project}&task_index={task}",
+            crop=f"/crops/{issue.issue_type}/"
+                 f"{hashlib.sha1(issue.key.encode()).hexdigest()[:12]}.jpg",
+        )
+        return d
+
+    def cards(self, t: str) -> list[dict]:
+        allv = [i for v in self.issues().values() for i in v]
+        counts: dict[tuple[str, str], int] = {}
+        for i in allv:
+            counts[(i.export_stem, i.frame_name)] = counts.get((i.export_stem, i.frame_name), 0) + 1
+        mine = self.issues(t).get(t, [])
+        return [self.card(i, counts) for i in sorted(mine, key=lambda i: -i.confidence)]
+
+    def calibration(self, t: str) -> list[dict]:
+        mine = sorted(self.issues(t).get(t, []), key=lambda i: i.key)
+        if len(mine) > CALIBRATION_N:
+            mine = random.Random(0).sample(mine, CALIBRATION_N)
+        return [self.card(i, {}) for i in mine]
+
+    def save(self, new: dict[str, str]) -> int:
+        with self.lock:
+            marks = read_marks(self.out / "marks.json")
+            marks.update(new)
+            write_marks(self.out / "marks.json", marks)
+        return len(new)
+
+    def bulk(self, t: str, min_conf: float) -> int:
+        with self.lock:
+            marks = read_marks(self.out / "marks.json")
+            n = 0
+            for i in self.issues(t).get(t, []):
+                if i.confidence >= min_conf and marks.get(i.key) != "false":
+                    marks[i.key] = "real"
+                    n += 1
+            write_marks(self.out / "marks.json", marks)
+        return n
+
+
+def _handler(state: ReviewState):
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):  # quiet
+            pass
+
+        def _send(self, body: bytes, ctype="application/json", code=200):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _json(self, obj, code=200):
+            self._send(json.dumps(obj).encode(), code=code)
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            t = (q.get("type") or [""])[0]
+            if u.path == "/":
+                self._send(index_html(state.types()).encode(), "text/html; charset=utf-8")
+            elif u.path == "/marks":
+                self._json(read_marks(state.out / "marks.json"))
+            elif u.path == "/issues":
+                self._json(state.cards(t))
+            elif u.path == "/calibrate/items":
+                self._json(state.calibration(t))
+            elif u.path == "/calibrate":
+                self._send(calibrate_html(t).encode(), "text/html; charset=utf-8")
+            elif u.path.startswith("/crops/"):
+                base = (state.out / "crops").resolve()
+                p = (base / unquote(u.path[len("/crops/"):])).resolve()
+                if base in p.parents and p.is_file():
+                    self._send(p.read_bytes(), "image/jpeg")
+                else:
+                    self._send(b"not found", "text/plain", 404)
+            else:
+                self._send(b"not found", "text/plain", 404)
+
+        def do_POST(self):
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                if self.path == "/marks":
+                    if not isinstance(body, dict) or any(
+                            v not in ("real", "false") for v in body.values()):
+                        raise ValueError("expected {key: 'real'|'false'}")
+                    self._json({"saved": state.save(body)})
+                elif self.path == "/marks/bulk":
+                    self._json({"saved": state.bulk(body["issue_type"],
+                                                    float(body["min_confidence"]))})
+                else:
+                    self._send(b"not found", "text/plain", 404)
+            except (ValueError, KeyError, TypeError) as e:
+                self._json({"error": str(e)}, 400)
+
+    return H
+
+
+def make_server(out: Path, port: int = 8790, repo_root: Path = REPO_ROOT,
+                originals_dir: Path = ORIGINALS_DIR) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer(("127.0.0.1", port),
+                               _handler(ReviewState(out, repo_root, originals_dir)))
+
+
+def serve(out: Path, port: int = 8790) -> None:
+    srv = make_server(out, port)
+    print(f"review server: http://localhost:{srv.server_address[1]}/  (Ctrl-C to stop)")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+
+
+CSS = """
+body{font:14px system-ui,sans-serif;margin:0;background:#f4f4f6;color:#222}
+header{background:#fff;padding:8px 16px;border-bottom:1px solid #ddd;position:sticky;top:0;z-index:2}
+.tab{display:inline-block;padding:6px 12px;margin-right:4px;border-radius:6px;cursor:pointer;background:#e8e8ee}
+.tab.on{background:#2b5fd9;color:#fff}
+.bar{margin-top:8px}
+.card{background:#fff;margin:12px 16px;padding:12px;border-radius:8px;display:flex;gap:16px;
+ border-left:8px solid #ccc}
+.card.real{border-color:#d33}.card.false{border-color:#2a9d4a}
+.card img{max-width:640px;max-height:480px;object-fit:contain;background:#000}
+.meta{max-width:520px}.meta div{margin:3px 0}
+.badge{background:#f90;color:#fff;border-radius:4px;padding:1px 6px;font-size:12px}
+button{padding:8px 14px;border:0;border-radius:6px;cursor:pointer;font-size:14px}
+.r{background:#d33;color:#fff}.f{background:#2a9d4a;color:#fff}
+.big button{font-size:20px;padding:18px 28px;margin-right:10px}
+"""
+
+INDEX_JS = """
+const TABS=%s;let cur=null,marks={},items=[],shown=0;const PAGE=100;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json();}
+async function show(t){cur=t;document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('on',e.dataset.t==t));
+ marks=await (await fetch('/marks')).json();items=await (await fetch('/issues?type='+t)).json();shown=0;
+ $('#cards').innerHTML='';more();}
+function more(){const end=Math.min(items.length,shown+PAGE);let h='';
+ for(let i=shown;i<end;i++)h+=card(items[i],i);shown=end;$('#cards').insertAdjacentHTML('beforeend',h);
+ $('#more').style.display=shown<items.length?'':'none';$('#more').textContent='show more ('+(items.length-shown)+' left)';}
+function card(it,i){const m=marks[it.key]||'';
+ return `<div class="card ${m}" id="c${i}"><img loading="lazy" src="${it.crop}"><div class="meta">
+ <div><b>${esc(it.export_stem)}</b></div><div>frame ${esc(it.frame_name)}${it.frame_no?' (frame '+it.frame_no+' in task)':''}</div>
+ <div>label ${esc(it.label_id)} &middot; ${esc(it.category)} &middot; conf ${it.confidence.toFixed(2)}</div>
+ <div>${esc(it.reason)}</div><div>this frame has ${it.others} other issues</div>
+ ${it.hand_fix?'<div><span class="badge">draw by hand</span></div>':''}
+ <div><a href="${it.link}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}</div>
+ <div style="margin-top:8px"><button class="r" onclick="mark(${i},'real')">Real</button>
+ <button class="f" onclick="mark(${i},'false')">False alarm</button></div></div></div>`;}
+async function mark(i,v){const it=items[i];await post('/marks',{[it.key]:v});marks[it.key]=v;
+ $('#c'+i).className='card '+v;}
+async function bulk(){const c=parseFloat($('#conf').value);if(isNaN(c))return;
+ const r=await post('/marks/bulk',{issue_type:cur,min_confidence:c});await show(cur);$('#msg').textContent='marked '+r.saved+' as real';}
+document.addEventListener('DOMContentLoaded',()=>{if(TABS.length)show(TABS[0][0]);});
+"""
+
+
+def index_html(types: dict[str, int]) -> str:
+    tabs = "".join(f'<span class="tab" data-t="{t}" onclick="show(\'{t}\')">{t} ({n})</span>'
+                   for t, n in types.items())
+    calib = " ".join(f'<a href="/calibrate?type={t}">{t}</a>' for t in types)
+    js = INDEX_JS % json.dumps([[t, n] for t, n in types.items()])
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>Annotation QA review</title>
+<style>{CSS}</style></head><body><header>{tabs}
+<div class="bar">Mark all &ge; <input id="conf" size="4" value="0.8"> as real
+<button class="r" onclick="bulk()">Apply to this tab</button> <span id="msg"></span>
+&nbsp;|&nbsp; Calibrate: {calib}</div></header>
+<div id="cards"></div><div style="margin:16px"><button id="more" onclick="more()">show more</button></div>
+<script>{js}</script></body></html>"""
+
+
+CAL_JS = """
+const T=%s;const $=s=>document.querySelector(s);let items=[],marks={};
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function count(){const k=items.filter(i=>marks[i.key]).length;$('#prog').textContent='answered '+k+' / '+items.length;
+ $('#done').style.display=(items.length&&k==items.length)?'':'none';}
+async function answer(i,v){const it=items[i];await fetch('/marks',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({[it.key]:v})});marks[it.key]=v;$('#c'+i).className='card '+v;count();}
+(async()=>{marks=await (await fetch('/marks')).json();items=await (await fetch('/calibrate/items?type='+T)).json();
+ $('#cards').innerHTML=items.map((it,i)=>`<div class="card ${marks[it.key]||''}" id="c${i}"><div>
+ <img loading="lazy" src="${it.crop}" style="max-width:900px;max-height:700px"><div>${esc(it.reason)}</div>
+ <div>${esc(it.category)} &middot; ${esc(it.frame_name)} &middot; label ${esc(it.label_id)}</div>
+ <div class="big"><button class="r" onclick="answer(${i},'real')">YES &mdash; real mistake</button>
+ <button class="f" onclick="answer(${i},'false')">NO &mdash; false alarm</button></div></div></div>`).join('');count();})();
+"""
+
+
+def calibrate_html(t: str) -> str:
+    safe = "".join(c for c in t if c.isalnum() or c == "_")
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>Calibrate {safe}</title>
+<style>{CSS}</style></head><body><header><a href="/">&larr; back</a> &nbsp; Calibrate: {safe}
+&nbsp; <b id="prog"></b> <b id="done" style="display:none;color:#2a9d4a">All done - thank you!</b></header>
+<div id="cards"></div><script>{CAL_JS % json.dumps(safe)}</script></body></html>"""
