@@ -152,3 +152,18 @@ def scene_grass_labelled_soft(tmp_path):
 @pytest.fixture
 def scene_half_grass_half_concrete(tmp_path):
     return make_edge_ctx(tmp_path, "curb_road_edge", "grass", "concrete")
+
+
+# ---- position scenes ----
+def stripe_image(rows_by_value: dict[int, int] | None = None, stripes=((200, 255),), x1=390):
+    """Road with 5 px stripes (centre row, peak value) over the whole width."""
+    img = _road()
+    for cy, peak in stripes:
+        for dy, f in zip(range(-2, 3), (0.8, 0.9, 1.0, 0.9, 0.8)):
+            v = int(110 + (peak - 110) * f)
+            img[cy + dy, 10:x1] = (v, v, v)
+    return img
+
+
+def line_ctx(tmp_path, img, polys, category="solid_single_line"):
+    return edge_ctx_from_image(tmp_path, img, polys, category)

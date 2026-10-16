@@ -150,7 +150,7 @@ def _soft_like(st) -> bool:
 
 
 def _vote(ctx: FrameContext, sub: dict, ring_road: int | None = None):
-    """(vote, strength) for one stretch; None when the stretch cannot be judged.
+    """(vote, strength, outside-strip info) for one stretch; None when the stretch cannot be judged.
 
     R14: curb evidence comes from the curb itself (a narrow bright low-sat band
     1-6 px outside the line and/or a masked sharp step at the line). With that
@@ -175,6 +175,7 @@ def _vote(ctx: FrameContext, sub: dict, ring_road: int | None = None):
         band = nb.gray - road.gray > BAND_CONTRAST and nb.sat < CURB_SAT_MAX
         near_soft = _soft_like(nb)
     curb = 0.0
+    step = False
     if band:
         curb += 1.0
     elif o.gray - road.gray > 25 and o.sat < CURB_SAT_MAX and o.texture < CURB_TEXTURE_MAX:
@@ -182,15 +183,31 @@ def _vote(ctx: FrameContext, sub: dict, ring_road: int | None = None):
     # a gray step / shadow line next to dirt or grass is the ground edge, not a kerb;
     # on its own it only counts when the far strip is a hard surface too
     if (band or not near_soft) and _sharp_step(ctx, sub, side):
+        step = True
         if curb:
             curb += 0.5
         elif not _soft_like(o):
             curb = 1.0
+    info = {"gray": o.gray, "sat": o.sat, "green": o.green, "brown": o.brown,
+            "texture": o.texture, "band": band, "step": step}
     if curb:
-        return (CURB, curb)
+        return (CURB, curb, info)
     if _soft_like(o):
-        return (SOFT, 1.0)
-    return (None, 0.0)  # judged, no verdict
+        return (SOFT, 1.0, info)
+    return (None, 0.0, info)  # judged, no verdict
+
+
+def _features(votes: list, deciding: list, share: float) -> dict:
+    """Vote counts plus the mean outside-strip stats of the deciding stretches,
+    so thresholds can be refit from marks without rescanning."""
+    n = len(votes)
+    f = {"n_votes": n, "curb_votes": sum(1 for v in votes if v[0] == CURB),
+         "soft_votes": sum(1 for v in votes if v[0] == SOFT), "share": float(share),
+         "near_band_votes": sum(1 for v in votes if v[3]["band"]),
+         "step_votes": sum(1 for v in votes if v[3]["step"])}
+    for k in ("gray", "sat", "green", "brown", "texture"):
+        f[f"outside_{k}"] = float(np.mean([v[3][k] for v in deciding]))
+    return f
 
 
 def detect(ctx: FrameContext) -> list[Issue]:
@@ -207,7 +224,7 @@ def detect(ctx: FrameContext) -> list[Issue]:
         for sub, centre in _stretches(poly):
             v = _vote(ctx, sub, ring_road)
             if v is not None and v[0] is not None:  # only stretches that cast a vote
-                votes.append((v[0], v[1], centre))
+                votes.append((v[0], v[1], centre, v[2]))
 
     issues = []
     for lid, votes in per_label.items():
@@ -224,15 +241,18 @@ def detect(ctx: FrameContext) -> list[Issue]:
         if share >= FLAG_SHARE and n >= MIN_FLAG_VOTES:
             anchor = max((v for v in votes if v[0] == wrong), key=lambda v: v[1])[2]
             kind = "grass/dirt" if wrong == SOFT else "a hard surface"
+            deciding = [v for v in votes if v[0] == wrong]
             issues.append(Issue(
                 **base, confidence=float(np.clip((share - 0.5) * 2, 0, 1) * min(1.0, n / CONF_FULL_VOTES)),
                 reason=f"{cat} borders {kind} on {share:.0%} of {n} voting stretches",
                 anchor=(float(anchor[0]), float(anchor[1])),
-                fix={"op": "set_category", "to": wrong}, hand_fix=False))
+                fix={"op": "set_category", "to": wrong}, hand_fix=False,
+                features=_features(votes, deciding, share)))
         elif (n >= MIN_VOTES and min(n_curb, n_soft) >= MIN_EACH
               and n_curb / n >= MIXED_SHARE and n_soft / n >= MIXED_SHARE):
             anchor = max(votes, key=lambda v: v[1])[2]
             issues.append(Issue(**base, confidence=0.5,
                                 reason="edge changes type partway; split by hand",
-                                anchor=anchor, fix=None, hand_fix=True))
+                                anchor=anchor, fix=None, hand_fix=True,
+                                features=_features(votes, votes, max(n_curb, n_soft) / n)))
     return issues

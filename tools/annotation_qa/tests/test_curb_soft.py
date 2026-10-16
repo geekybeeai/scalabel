@@ -232,3 +232,13 @@ def test_painted_edge_line_is_not_a_kerb_step(tmp_path):
     sub, _ = _stretches(hpoly(200))[0]
     assert not _sharp_step(ctx, sub, side=1)
 
+
+
+def test_features_report_votes(scene_concrete_sidewalk_labelled_soft):
+    [i] = detect(scene_concrete_sidewalk_labelled_soft)
+    f = i.features
+    assert f["n_votes"] >= 2 and f["curb_votes"] == f["n_votes"] and f["soft_votes"] == 0
+    assert f["share"] == 1.0
+    for k in ("outside_gray", "outside_sat", "outside_green", "outside_brown",
+              "outside_texture", "near_band_votes", "step_votes"):
+        assert k in f

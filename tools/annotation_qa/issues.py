@@ -23,6 +23,8 @@ class Issue:
     fix: dict | None
     hand_fix: bool  # True -> cannot auto-fix; frame goes to review unchanged
     related_label_ids: list[str] = field(default_factory=list)
+    # numbers that drove the decision, so thresholds can be refit from marks later
+    features: dict = field(default_factory=dict)
 
     @property
     def key(self) -> str:

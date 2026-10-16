@@ -18,3 +18,6 @@ REGISTRY: dict[str, Callable[[FrameContext], list[Issue]]] = {}
 from annotation_qa.detectors import curb_soft  # noqa: E402
 
 REGISTRY["curb_soft"] = curb_soft.detect
+from annotation_qa.detectors import position  # noqa: E402
+
+REGISTRY["position"] = position.detect
