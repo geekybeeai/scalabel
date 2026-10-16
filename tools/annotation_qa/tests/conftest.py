@@ -91,3 +91,58 @@ def road_with_grass_left_concrete_right(tmp_path):
     img[10:200, 10:390] = (60, 140, 60)
     img[200:390, 10:390] = (170, 170, 170)
     return _frame(tmp_path, img), hpoly(200)
+
+
+# ---- curb / soft-edge scenes: outside material above y=200, road below ----
+GRASS = (40, 120, 40)
+
+
+def _outside(img, rows, x0, x1, kind):
+    if kind == "concrete":
+        img[rows, x0:x1] = (170, 170, 170)
+    else:
+        rng = np.random.default_rng(0)
+        noise = rng.normal(0, 12, (img[rows, x0:x1].shape[0], x1 - x0, 1))
+        img[rows, x0:x1] = np.clip(np.array(GRASS) + noise, 0, 255).astype(np.uint8)
+
+
+def make_edge_ctx(tmp_path, category: str, left: str, right: str):
+    """FrameContext with one horizontal edge label at y=200 (x 50..350).
+
+    Road lies below the line; above it the outside is ``left`` for x<200 and
+    ``right`` for x>=200 ("concrete" or "grass").
+    """
+    from annotation_qa.context import FrameContext
+
+    img = _road()
+    _outside(img, slice(10, 200), 10, 200, left)
+    _outside(img, slice(10, 200), 200, 390, right)
+    label = {"id": "L1", "category": category, "attributes": {}, "manualShape": True,
+             "poly2d": [hpoly(200)], "box2d": None, "box3d": None}
+    frame = {"name": "f.png", "url": "f.png", "labels": [label]}
+    return FrameContext(Export(Path("exp.json"), [frame], {}), frame, _frame(tmp_path, img))
+
+
+@pytest.fixture
+def scene_concrete_sidewalk_labelled_soft(tmp_path):
+    return make_edge_ctx(tmp_path, "without_curb_road_edge", "concrete", "concrete")
+
+
+@pytest.fixture
+def scene_concrete_sidewalk_labelled_curb(tmp_path):
+    return make_edge_ctx(tmp_path, "curb_road_edge", "concrete", "concrete")
+
+
+@pytest.fixture
+def scene_grass_labelled_curb(tmp_path):
+    return make_edge_ctx(tmp_path, "curb_road_edge", "grass", "grass")
+
+
+@pytest.fixture
+def scene_grass_labelled_soft(tmp_path):
+    return make_edge_ctx(tmp_path, "without_curb_road_edge", "grass", "grass")
+
+
+@pytest.fixture
+def scene_half_grass_half_concrete(tmp_path):
+    return make_edge_ctx(tmp_path, "curb_road_edge", "grass", "concrete")
