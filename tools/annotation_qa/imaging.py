@@ -62,10 +62,17 @@ class FrameImage:
 
 @dataclass
 class Profile:
+    """Ridge scores along each resampled point's normal.
+
+    ``white``/``yellow`` are NaN wherever ``ok`` is False, so consumers must
+    use nan-aware reductions (np.nanmean / np.nanmax).
+    """
+
     offsets: np.ndarray  # ints -R..R
     white: np.ndarray  # (M, 2R+1) white ridge per resampled point
     yellow: np.ndarray  # (M, 2R+1) yellow ridge per resampled point
-    valid: np.ndarray  # (M,) bool: samples inside ROI and canvas
+    valid: np.ndarray  # (M,) bool: == ok[:, R] (offset-0 cell and its sides inside)
+    ok: np.ndarray  # (M, 2R+1) bool: centre cell and both side cells inside ROI+canvas
     P: np.ndarray  # (M, 2)
     Nrm: np.ndarray  # (M, 2)
 
@@ -81,18 +88,25 @@ class StripStats:
 
 
 def _resampled(poly: dict):
-    P, Nrm = resample(dense(poly))
-    return P, Nrm
+    pts = dense(poly)
+    if not np.isfinite(pts).all():
+        return None, None
+    return resample(pts)
 
 
 def _local_crop(img: FrameImage, P: np.ndarray, pad: int):
     """Float32 crop around P padded by ``pad``; returns (crop, x0, y0)."""
+    if not np.isfinite(P).all():
+        return None
     h, w = img.shape
     x0 = max(int(np.floor(P[:, 0].min())) - pad, 0)
     y0 = max(int(np.floor(P[:, 1].min())) - pad, 0)
     x1 = min(int(np.ceil(P[:, 0].max())) + pad + 1, w)
     y1 = min(int(np.ceil(P[:, 1].max())) + pad + 1, h)
-    return img.crop(x0, y0, x1, y1).astype(np.float32), x0, y0
+    c = img.crop(x0, y0, x1, y1)
+    if c.size == 0:
+        return None
+    return c.astype(np.float32), x0, y0
 
 
 def _sample(chan: np.ndarray, x: np.ndarray, y: np.ndarray, x0: int, y0: int):
@@ -122,34 +136,44 @@ def profile(img: FrameImage, poly: dict, R: int = 25, side_gap: int = 5) -> Prof
     P, Nrm = _resampled(poly)
     if P is None:
         return None
-    crop, x0, y0 = _local_crop(img, P, R + side_gap + 2)
-    gray, sat, r, g, b = _channels(crop)
-    white = cv2.blur(gray - 0.8 * sat, (3, 3))
-    yellow = cv2.blur((r + g) / 2 - b, (3, 3))
-
     ext = np.arange(-R - side_gap, R + side_gap + 1)
+    if not np.isfinite(P).all():
+        return None
     X = P[:, 0:1] + ext[None, :] * Nrm[:, 0:1]
     Y = P[:, 1:2] + ext[None, :] * Nrm[:, 1:2]
     offsets = np.arange(-R, R + 1)
-    centre = slice(side_gap, side_gap + 2 * R + 1)
-    valid = _inside(img, X[:, centre], Y[:, centre]).all(axis=1)
+    inside = _inside(img, X, Y)
+    ok = (inside[:, :2 * R + 1] & inside[:, side_gap:side_gap + 2 * R + 1]
+          & inside[:, 2 * side_gap:])
+    valid = ok[:, R].copy()
     if valid.sum() < MIN_VALID:
         return None
+    loc = _local_crop(img, P, R + side_gap + 2)
+    if loc is None:
+        return None
+    crop, x0, y0 = loc
+    gray, sat, r, g, b = _channels(crop)
+    white = cv2.blur(gray - 0.8 * sat, (3, 3))
+    yellow = cv2.blur((r + g) / 2 - b, (3, 3))
+    centre = slice(side_gap, side_gap + 2 * R + 1)
 
     def ridge(score):
         s = _sample(score, X, Y, x0, y0)
         left, mid, right = s[:, :2 * R + 1], s[:, centre], s[:, 2 * side_gap:]
-        return mid - np.maximum(left, right)
+        return np.where(ok, mid - np.maximum(left, right), np.nan)
 
-    return Profile(offsets, ridge(white), ridge(yellow), valid, P, Nrm)
+    return Profile(offsets, ridge(white), ridge(yellow), valid, ok, P, Nrm)
 
 
 def side_strips(img: FrameImage, poly: dict, near: int = 6, far: int = 20):
     """(left, right) strip stats; left is the -Nrm side. None if too little data."""
     P, Nrm = _resampled(poly)
-    if P is None:
+    if P is None or not np.isfinite(P).all():
         return None
-    crop, x0, y0 = _local_crop(img, P, far + 2)
+    loc = _local_crop(img, P, far + 2)
+    if loc is None:
+        return None
+    crop, x0, y0 = loc
     gray, sat, r, g, b = _channels(crop)
     planes = {"gray": gray, "sat": sat, "green": g - (r + b) / 2, "brown": r - b}
     dist = np.arange(near, far + 1)
