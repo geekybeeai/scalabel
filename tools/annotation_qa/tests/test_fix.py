@@ -37,7 +37,7 @@ def env(tmp_path, monkeypatch):
     curve = _label("c1", "curb_road_edge", [[0, 0], [30, 0], [60, 30], [90, 30]], "LCCL")
     frames = [
         _frame("f1.png", [_label("a", "solid_single_line", [[0, 0], [100, 0]]),
-                          _label("b", "solid_single_line", [[0, 50], [100, 50]]), curve]),
+                          _label("b", "solid_single_line", [[0, 50], [50, 50], [100, 50]]), curve]),
         _frame("f2.png", [_label("h", "dashed_white_line", [[0, 9], [100, 9]])]),
         _frame("f3.png", [_label("z", "solid_single_line", [[0, 80], [100, 80]])]),
     ]
@@ -95,8 +95,8 @@ def test_delete_and_drop_vertices(env):
     fixed = json.load(open(out / "work" / "exportA_fix_curb_soft_v1.json"))
     labels = fixed["frames"][0]["labels"]
     assert [l["id"] for l in labels] == ["b", "c1"]
-    assert labels[0]["poly2d"][0]["vertices"] == [[100, 50]]
-    assert labels[0]["poly2d"][0]["types"] == "L"
+    assert labels[0]["poly2d"][0]["vertices"] == [[50, 50], [100, 50]]
+    assert labels[0]["poly2d"][0]["types"] == "LL"
     ch = json.load(open(out / "rounds" / "exportA_fix_curb_soft_v1_changes.json"))
     assert ch["f1.png"]["a"]["after"] is None
 
@@ -138,3 +138,88 @@ def test_working_copy_copies_once(env):
     p.write_text(json.dumps({"frames": [], "config": {}}))
     working_copy("exportA", out)
     assert json.load(open(p))["frames"] == []
+
+
+def _fixed(out, itype="position"):
+    return json.load(open(out / "work" / f"exportA_fix_{itype}_v1.json"))
+
+
+def test_bad_shift_skipped_not_aborting(env, capsys):
+    orig, out, _ = env
+    bad = _issue("exportA", "f1.png", "a", "position",
+                 {"op": "shift", "poly_index": 0, "offsets": [1.0, 2.0]})  # wrong length
+    good = _issue("exportA", "f3.png", "z", "position", {"op": "delete"})
+    _setup(out, [bad, good], ["real", "real"])
+    r = apply("position", out, 1)
+    assert r.changed == {"exportA": ["f3.png"]}
+    assert len(r.skipped) == 1 and "a" in r.skipped[0] and "offsets" in r.skipped[0]
+    assert "skip" in capsys.readouterr().out.lower()
+    assert [f["name"] for f in _fixed(out)["frames"]] == ["f1.png", "f2.png", "f3.png"]
+
+
+def test_unknown_op_and_missing_label_skipped(env):
+    orig, out, _ = env
+    i1 = _issue("exportA", "f1.png", "a", "position", {"op": "explode"})
+    i2 = _issue("exportA", "f1.png", "nope", "position", {"op": "delete"})
+    i3 = _issue("exportA", "f3.png", "z", "position", {"op": "delete"})
+    _setup(out, [i1, i2, i3], ["real"] * 3)
+    r = apply("position", out, 1)
+    assert r.changed == {"exportA": ["f3.png"]}
+    assert len(r.skipped) == 2
+    assert any("explode" in s for s in r.skipped) and any("nope" in s for s in r.skipped)
+
+
+def test_two_issues_same_label_only_first_by_confidence(env):
+    orig, out, _ = env
+    lo = _issue("exportA", "f1.png", "a", "position", {"op": "delete"})
+    lo.confidence = 0.3
+    hi = _issue("exportA", "f1.png", "a", "position",
+                {"op": "drop_vertices", "poly_index": 0, "indices": []})
+    hi.confidence = 0.9
+    hi.fix = {"op": "set_category", "to": "dashed_white_line"}
+    _setup(out, [lo, hi], ["real", "real"])
+    r = apply("position", out, 1)
+    labels = {l["id"]: l for l in _fixed(out)["frames"][0]["labels"]}
+    assert labels["a"]["category"] == "dashed_white_line"  # high-confidence one applied
+    assert len(r.skipped) == 1 and "another fix already applied to this label" in r.skipped[0]
+
+
+def _drop(lid, indices, poly_index=0):
+    return _issue("exportA", "f1.png", lid, "position",
+                  {"op": "drop_vertices", "poly_index": poly_index, "indices": indices})
+
+
+@pytest.mark.parametrize("indices", [[5], [-1], [0, 1, 2], [1, 3]])
+def test_drop_vertices_invalid_skipped(env, indices):
+    # label "c1" is LCCL (indices 1,2 control; 3 end; 0 start); "b" has 3 L vertices
+    orig, out, _ = env
+    lid = "b" if indices in ([5], [-1], [0, 1, 2]) else "c1"
+    _setup(out, [_drop(lid, indices)], ["real"])
+    r = apply("position", out, 1)
+    assert len(r.skipped) == 1 and r.changed == {}
+    labels = {l["id"]: l for l in _fixed(out)["frames"][0]["labels"]}
+    assert len(labels["b"]["poly2d"][0]["vertices"]) == 3
+    assert labels["c1"]["poly2d"][0]["types"] == "LCCL"
+
+
+def test_drop_vertices_never_below_two(env):
+    orig, out, _ = env
+    _setup(out, [_drop("b", [0, 1])], ["real"])
+    r = apply("position", out, 1)
+    assert len(r.skipped) == 1 and "fewer than 2" in r.skipped[0]
+
+
+def test_drop_vertices_valid_l_vertex_around_curve(env, ):
+    orig, out, frames = env
+    # polyline L L C C L L: drop the leading pure-L vertex only
+    lab = _label("m", "solid_single_line",
+                 [[-20, 0], [0, 0], [30, 0], [60, 30], [90, 30], [120, 30]], "LLCCLL")
+    frames[1]["labels"].append(lab)
+    (orig / "exportA.json").write_text(json.dumps({"frames": frames, "config": {}}))
+    i = _issue("exportA", "f2.png", "m", "position",
+               {"op": "drop_vertices", "poly_index": 0, "indices": [0]})
+    _setup(out, [i], ["real"])
+    r = apply("position", out, 1)
+    assert r.skipped == [] and r.changed == {"exportA": ["f2.png"]}
+    m = [l for l in _fixed(out)["frames"][1]["labels"] if l["id"] == "m"][0]
+    assert m["poly2d"][0]["types"] == "LCCLL"

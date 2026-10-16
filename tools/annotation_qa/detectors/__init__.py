@@ -21,3 +21,6 @@ REGISTRY["curb_soft"] = curb_soft.detect
 from annotation_qa.detectors import position  # noqa: E402
 
 REGISTRY["position"] = position.detect
+from annotation_qa.detectors import shape  # noqa: E402
+
+REGISTRY["shape"] = shape.detect

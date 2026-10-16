@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,14 +12,17 @@ from pathlib import Path
 import numpy as np
 
 from annotation_qa.data import ORIGINALS_DIR, load_export, save_export
-from annotation_qa.geometry import shift_poly
+from annotation_qa.geometry import _segments, shift_poly
 from annotation_qa.issues import Issue, read_issues, read_marks
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
 class FixResult:
     changed: dict[str, list[str]] = field(default_factory=dict)
     hand: dict[str, list[str]] = field(default_factory=dict)
+    skipped: list[str] = field(default_factory=list)  # issues not applied, with the reason
 
 
 def working_copy(export_stem: str, out: Path) -> Path:
@@ -30,8 +34,29 @@ def working_copy(export_stem: str, out: Path) -> Path:
     return work
 
 
+def droppable_vertices(poly: dict) -> set[int]:
+    """Raw vertex indices that are plain line points: not a Bezier start, control or end."""
+    n = len(poly["vertices"])
+    types = poly.get("types") or "L" * n
+    in_curve: set[int] = set()
+    for kind, idx in _segments(poly):
+        if kind == "C":
+            in_curve.update(idx)
+    return {i for i in range(n) if types[i] == "L" and i not in in_curve}
+
+
 def _drop_vertices(poly: dict, indices: list[int]) -> dict:
+    n = len(poly["vertices"])
     drop = set(indices)
+    bad = sorted(i for i in drop if not 0 <= i < n)
+    if bad:
+        raise ValueError(f"drop_vertices index out of range: {bad}")
+    bad = sorted(drop - droppable_vertices(poly))
+    if bad:
+        raise ValueError(f"drop_vertices indices {bad} are not plain L vertices "
+                         "(Bezier start/control/end points cannot be dropped)")
+    if n - len(drop) < (3 if poly.get("closed") else 2):
+        raise ValueError("drop_vertices would leave fewer than 2 vertices")
     keep = [i for i in range(len(poly["vertices"])) if i not in drop]
     out = dict(poly)
     out["vertices"] = [poly["vertices"][i] for i in keep]
@@ -81,7 +106,8 @@ def apply(issue_type: str, out: Path, version: int) -> FixResult:
         changes: dict[str, dict[str, dict]] = {}
         changed: list[str] = []
         hand: list[str] = []
-        for iss in stem_issues:
+        done_labels: set[tuple[str, str]] = set()
+        for iss in sorted(stem_issues, key=lambda i: -i.confidence):
             frame = frames.get(iss.frame_name)
             if frame is None:
                 continue
@@ -89,15 +115,36 @@ def apply(issue_type: str, out: Path, version: int) -> FixResult:
                 if iss.frame_name not in hand:
                     hand.append(iss.frame_name)
                 continue
+            where = f"{iss.key} ({iss.fix.get('op')})"
+
+            def skip(why: str) -> None:
+                msg = f"{where}: {why}"
+                res.skipped.append(msg)
+                log.warning("skipped %s", msg)
+                print(f"warning: skipped {msg}", flush=True)
+
             labels = frame.get("labels") or []
             idx = next((k for k, l in enumerate(labels) if l["id"] == iss.label_id), None)
             if idx is None:
+                skip("label not found")
                 continue
-            if not _apply_op(labels[idx], iss.fix):
+            if (iss.frame_name, iss.label_id) in done_labels:
+                skip("another fix already applied to this label")
+                continue
+            label = labels[idx]
+            try:
+                trial = copy.deepcopy(label)
+                keep_label = _apply_op(trial, iss.fix)
+            except Exception as e:  # one bad issue must not abort the round
+                skip(f"{type(e).__name__}: {e}")
+                continue
+            done_labels.add((iss.frame_name, iss.label_id))
+            if not keep_label:
                 del labels[idx]
                 after = None
             else:
-                after = labels[idx]
+                labels[idx] = trial
+                after = trial
             rec = changes.setdefault(iss.frame_name, {}).setdefault(
                 iss.label_id, {"before": _snapshot(
                     next(l for l in before[iss.frame_name]["labels"] if l["id"] == iss.label_id))})
