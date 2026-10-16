@@ -37,6 +37,8 @@ CV_MAX = 0.5
 DASH_FRAC = (0.15, 0.75)
 SOLID_FRAC = 0.85
 NEAR_R = 3
+MIN_DASHES = 4  # interior on-runs needed to call a pattern dashed
+UNKNOWN_MAX = 0.25  # skip when more than this share of in-ROI samples is dark
 NEAR_RATIO = 0.7  # ridge within +-3 px must be this share of the best ridge within +-25
 
 
@@ -65,6 +67,10 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
     gray = ctx.image.bgr[iy, ix].astype(np.float32).mean(axis=1)
     state = np.where(np.isnan(col) | (gray < DARK_GRAY), -1, (col >= ON_MIN).astype(int))
     known = state >= 0
+    in_roi = ~np.isnan(col)
+    unknown_fraction = float((in_roi & ~known).sum() / max(in_roi.sum(), 1))
+    if unknown_fraction > UNKNOWN_MAX:
+        return None
     if known.sum() * STEP < MIN_LENGTH:
         return None
     on_fraction = float(state[known].mean())
@@ -82,7 +88,7 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
     on_paint = on_fraction >= DASH_FRAC[0] and near_p >= NEAR_RATIO * full_p
     if not on_paint:
         return None
-    dashed = len(off_runs) >= MIN_OFF_RUNS and cv <= CV_MAX and DASH_FRAC[0] <= on_fraction <= DASH_FRAC[1]
+    dashed = len(off_runs) >= MIN_OFF_RUNS and len(on_len) >= MIN_DASHES and cv <= CV_MAX and DASH_FRAC[0] <= on_fraction <= DASH_FRAC[1]
     solid = on_fraction >= SOLID_FRAC
     if dashed == solid:
         return None
@@ -96,7 +102,7 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
     return {"to": to, "conf": float(np.clip(conf, 0, 1)), "anchor": (float(mid[0]), float(mid[1])),
             "length": (len(P) - 1) * STEP,
             "features": {"on_fraction": on_fraction, "n_off_runs": len(off_runs), "on_cv": cv,
-                         "n_on_runs": len(on_len), "near_ridge": float(near_p),
+                         "n_on_runs": len(on_len), "unknown_fraction": unknown_fraction, "near_ridge": float(near_p),
                          "best_ridge": float(full_p), "channel": channel}}
 
 
@@ -106,7 +112,7 @@ def detect(ctx: FrameContext) -> list[Issue]:
     for label, pi, poly in iter_polys(ctx.frame):
         if label.get("category") not in (SOLID, DASHED):
             continue
-        # judge the longest poly of a label (cheap proxy: vertex count then bbox span)
+        # judge the longest poly of a label (proxy: diagonal of its vertex bbox)
         xs = [v[0] for v in poly["vertices"]]
         ys = [v[1] for v in poly["vertices"]]
         span = float(np.hypot(max(xs) - min(xs), max(ys) - min(ys))) if xs else 0.0

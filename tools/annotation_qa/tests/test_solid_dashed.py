@@ -65,3 +65,15 @@ def test_yellow_solid_over_yellow_dashes_not_flagged(tmp_path):
     for a, b in dashes():
         img[198:203, a:b] = (30, 200, 230)
     assert detect(line_ctx(tmp_path, img, [hpoly(200)], "solid_single_line")) == []
+
+
+def test_dashed_with_dark_gaps_not_flagged_solid(tmp_path):
+    img = paint(_road(), dashes())
+    for (_a, b), (a2, _b2) in zip(dashes(), dashes()[1:]):
+        img[190:211, b:a2] = (35, 35, 35)  # dark asphalt in the gaps
+    assert detect(line_ctx(tmp_path, img, [hpoly(200)], "dashed_white_line")) == []
+
+
+def test_solid_broken_by_three_gaps_not_dashed(tmp_path):
+    img = paint(_road(), [(10, 100), (130, 200), (230, 300), (330, 390)])
+    assert detect(line_ctx(tmp_path, img, [hpoly(200)], "solid_single_line")) == []
