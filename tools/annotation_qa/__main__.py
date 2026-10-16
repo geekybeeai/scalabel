@@ -33,7 +33,31 @@ def main(argv: list[str] | None = None) -> int:
     rv = sub.add_parser("review", help="serve the review page")
     rv.add_argument("--out", type=Path, default=DEFAULT_OUT)
     rv.add_argument("--port", type=int, default=8790)
+    fx = sub.add_parser("fix", help="apply accepted fixes and build review item files")
+    fx.add_argument("--type", required=True)
+    fx.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    fx.add_argument("--version", type=int, required=True)
+    fx.add_argument("--create-projects", action="store_true")
+    fx.add_argument("--server", default="http://localhost:8686")
+    mg = sub.add_parser("merge", help="merge a reviewed export into the working copy")
+    mg.add_argument("--stem", required=True)
+    mg.add_argument("--reviewed", type=Path, required=True)
+    mg.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
+    if a.cmd == "fix":
+        from annotation_qa.fix import apply
+        r = apply(a.type, a.out, a.version)
+        for stem in sorted(set(r.changed) | set(r.hand)):
+            print(f"{stem}: changed={r.changed.get(stem, [])} hand={r.hand.get(stem, [])}")
+            if a.create_projects:
+                from annotation_qa.scalabel_project import create
+                tag = f"{stem}_fix_{a.type}_v{a.version}"
+                print(create(a.out / "rounds" / f"{tag}_items.json", tag, a.server))
+        return 0
+    if a.cmd == "merge":
+        from annotation_qa.merge import merge_reviewed
+        print(f"merged {merge_reviewed(a.stem, a.reviewed, a.out)} frames")
+        return 0
     if a.cmd == "review":
         from annotation_qa.review_server import serve
         serve(a.out, a.port)
