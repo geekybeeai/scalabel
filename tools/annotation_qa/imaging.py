@@ -195,3 +195,51 @@ def side_strips(img: FrameImage, poly: dict, near: int = 6, far: int = 20):
             green=float(vals["green"].mean()), brown=float(vals["brown"].mean()),
             texture=float(vals["gray"].std()), n=int(ok.sum())))
     return stats[0], stats[1]
+
+
+def yellow_fwhm(img: FrameImage, poly: dict, R: int = 25, peak_window: int = 3,
+                min_contrast: float = 20.0) -> tuple[float, int, float] | None:
+    """(median FWHM in px, n samples, median peak-minus-base contrast of the raw yellow score).
+
+    Per resampled point the yellow score ((R+G)/2 - B, 3x3 blurred) is sampled
+    over offsets -R..R; the peak is the maximum within ``peak_window`` of
+    offset 0, the base the 10th percentile of the row, and the width the run of
+    offsets around the peak that stay at or above (peak + base) / 2. Points
+    whose window leaves the ROI/canvas, or whose peak is less than
+    ``min_contrast`` above the base (no yellow), are dropped. None if fewer than
+    MIN_VALID points remain.
+    """
+    P, Nrm = _resampled(poly)
+    if P is None:
+        return None
+    ext = np.arange(-R, R + 1)
+    X = P[:, 0:1] + ext[None, :] * Nrm[:, 0:1]
+    Y = P[:, 1:2] + ext[None, :] * Nrm[:, 1:2]
+    ok = _inside(img, X, Y).all(axis=1)
+    if ok.sum() < MIN_VALID:
+        return None
+    loc = _local_crop(img, P, R + 2)
+    if loc is None:
+        return None
+    crop, x0, y0 = loc
+    _gray, _sat, r, g, b = _channels(crop)
+    score = _sample(cv2.blur((r + g) / 2 - b, (3, 3)), X, Y, x0, y0)[ok]
+    base = np.percentile(score, 10, axis=1)
+    win = score[:, R - peak_window:R + peak_window + 1]
+    k = R - peak_window + win.argmax(axis=1)
+    peak = score[np.arange(len(score)), k]
+    widths, centre = [], []
+    for row, kk, pk, bs in zip(score, k, peak, base):
+        if pk - bs < min_contrast:
+            continue
+        centre.append(pk - bs)
+        half = (pk + bs) / 2
+        lo = hi = int(kk)
+        while lo > 0 and row[lo - 1] >= half:
+            lo -= 1
+        while hi < len(row) - 1 and row[hi + 1] >= half:
+            hi += 1
+        widths.append(hi - lo + 1)
+    if len(widths) < MIN_VALID:
+        return None
+    return float(np.median(widths)), len(widths), float(np.median(centre))

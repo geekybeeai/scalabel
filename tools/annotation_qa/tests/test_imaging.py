@@ -1,4 +1,4 @@
-from annotation_qa.imaging import profile, side_strips
+from annotation_qa.imaging import profile, side_strips, yellow_fwhm
 
 import numpy as np
 
@@ -70,3 +70,24 @@ def test_off_canvas_and_short_labels_return_none(road_with_concrete_band):
 def test_side_strips_none_when_strip_outside_roi(road_mostly_black):
     img, poly = road_mostly_black
     assert side_strips(img, poly) is None
+
+
+def _yellow_band(tmp_path, y0, y1):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    from annotation_qa.tests.conftest import _frame, _road
+
+    img = _road()
+    img[y0:y1, 10:390] = (30, 200, 230)
+    return _frame(tmp_path, img)
+
+
+def test_yellow_fwhm_tracks_band_width(tmp_path):
+    narrow, n_valid, c = yellow_fwhm(_yellow_band(tmp_path / "a", 198, 203), hpoly(200))
+    wide, _, _ = yellow_fwhm(_yellow_band(tmp_path / "b", 190, 211), hpoly(200))
+    assert c > 100 and n_valid > 50 and 4 <= narrow <= 9 and 19 <= wide <= 25
+
+
+def test_yellow_fwhm_none_without_yellow(tmp_path):
+    from annotation_qa.tests.conftest import _frame, _road
+
+    assert yellow_fwhm(_frame(tmp_path, _road()), hpoly(200)) is None

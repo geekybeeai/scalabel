@@ -30,3 +30,6 @@ REGISTRY["duplicates"] = duplicates.detect
 from annotation_qa.detectors import solid_dashed  # noqa: E402
 
 REGISTRY["solid_dashed"] = solid_dashed.detect
+from annotation_qa.detectors import yellow_structure  # noqa: E402
+
+REGISTRY["yellow_structure"] = yellow_structure.detect

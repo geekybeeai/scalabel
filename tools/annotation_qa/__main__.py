@@ -30,6 +30,10 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--out", type=Path, default=DEFAULT_OUT)
     sc.add_argument("--types", required=True, help="comma-separated issue types")
     sc.add_argument("--subset", choices=["reviewer+random20"], default=None)
+    cy = sub.add_parser("calibrate-yellow", help="write OUT/calibration/yellow_stats.json")
+    cy.add_argument("--exports", nargs="+", required=True, help="a directory or export files")
+    cy.add_argument("--root", type=Path, default=DEFAULT_ROOT)
+    cy.add_argument("--out", type=Path, default=DEFAULT_OUT)
     rv = sub.add_parser("review", help="serve the review page")
     rv.add_argument("--out", type=Path, default=DEFAULT_OUT)
     rv.add_argument("--port", type=int, default=8790)
@@ -44,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
     mg.add_argument("--reviewed", type=Path, required=True)
     mg.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
+    if a.cmd == "calibrate-yellow":
+        import json
+        from annotation_qa.calibrate import calibrate_yellow
+        print(json.dumps(calibrate_yellow(_expand(a.exports), a.root, a.out), indent=1))
+        return 0
     if a.cmd == "fix":
         from annotation_qa.fix import apply
         r = apply(a.type, a.out, a.version)
