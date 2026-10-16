@@ -47,11 +47,28 @@ def test_line_on_paint_with_stronger_neighbour_not_flagged(tmp_path):
     assert detect(line_ctx(tmp_path, img, [hpoly(200)])) == []
 
 
-def test_partial_drift_found_locally(tmp_path):
-    poly = {"vertices": [[50, 200], [270, 200], [310, 215], [350, 215]],
+def test_partial_drift_gets_partial_shift(tmp_path):
+    poly = {"vertices": [[50, 200], [270, 200], [280, 215], [350, 215]],
             "types": "LLLL", "closed": False}
-    [i] = detect(line_ctx(tmp_path, stripe_image(), [poly]))
-    assert i.anchor[0] > 280
+    ctx = line_ctx(tmp_path, stripe_image(), [poly])
+    [i] = detect(ctx)
+    assert i.anchor[0] > 270 and i.features["coverage"] < 0.3
+    assert i.fix["op"] == "shift" and not i.hand_fix
+    moved = shift_poly(poly, np.array(i.fix["offsets"]))
+    (_, y0), _, _, (_, y3) = moved["vertices"]
+    assert abs(y0 - 200) < 1.5  # the on-paint part stays put
+    assert abs(y3 - 200) < 1.5  # the drifted part lands on paint
+
+
+def test_single_flagged_stretch_gives_no_issue(tmp_path):
+    assert detect(line_ctx(tmp_path, stripe_image(), [hpoly(212, 50, 105)])) == []
+
+
+def test_inconsistent_offsets_are_hand_fix(tmp_path):
+    img = stripe_image(stripes=())
+    img[198:203, 10:200] = (255, 255, 255)
+    img[230:235, 200:390] = (255, 255, 255)
+    [i] = detect(line_ctx(tmp_path, img, [hpoly(212)]))
     assert i.hand_fix and i.fix is None and "redraw" in i.reason
 
 
@@ -97,5 +114,5 @@ def test_calibration_frame_97944():
     ctx = FrameContext(Export(Path("x.json"), [frame], {}), frame,
                        FrameImage(img_path, REPO / "local-data/items/Full_Verfication/qa_2026_10_17/roi_cache"))
     flagged = {i.label_id for i in detect(ctx)}
-    assert set(fx["real"]) <= flagged
+    assert set(fx["real"]) <= flagged  # shift or hand fix, either is fine
     assert not (set(fx["false_alarm"]) & flagged)

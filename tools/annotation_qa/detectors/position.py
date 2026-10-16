@@ -26,7 +26,8 @@ R = 25
 STRETCH, STRIDE = 20, 10
 NEAR_R = 3  # a line within this many px of its paint is on it
 NEAR_MAX, PEAK_MIN = 10.0, 25.0
-SHIFT_STD_MAX, SHIFT_COVERAGE_MIN = 3.0, 0.3
+SHIFT_STD_MAX = 3.0
+MIN_FLAGGED_STRETCHES = 2  # R16: one flagged stretch is noise
 SMOOTH = 15
 DASH_PERCENTILE = 80
 CONF_SCALE = 80.0
@@ -103,7 +104,7 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
             continue
         if near < NEAR_MAX and peak >= PEAK_MIN and abs(off) > NEAR_R:
             flagged.append((a, b, float(near), peak, off))
-    if not flagged:
+    if len(flagged) < MIN_FLAGGED_STRETCHES:
         return None
     worst = max(flagged, key=lambda f: f[3] - f[2])
     m = len(prof.P)
@@ -125,7 +126,7 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
     return {
         "conf": float(np.clip((worst[3] - worst[2]) / CONF_SCALE, 0, 1)),
         "anchor": (float(centre[0]), float(centre[1])),
-        "consistent": std <= SHIFT_STD_MAX and coverage >= SHIFT_COVERAGE_MIN,
+        "consistent": std <= SHIFT_STD_MAX,
         "offsets": smooth.tolist(),
         "features": {"near": worst[2], "peak": worst[3], "off": worst[4],
                      "n_flagged_stretches": len(flagged), "n_stretches": len(stretches),
