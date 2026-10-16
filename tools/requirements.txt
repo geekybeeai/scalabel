@@ -12,3 +12,4 @@
 pillow>=9.0      # reading the orthomosaic to build the ROI mask
 numpy>=1.21      # mask and geometry maths
 scipy>=1.7       # hole filling, connected components, nearest-inside lookup
+opencv-python-headless>=4.8  # annotation_qa: drawing crops/overlays
