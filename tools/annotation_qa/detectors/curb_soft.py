@@ -25,11 +25,23 @@ MIXED_SHARE = 0.4
 # Calibrated on real orthomosaics (the brief's 30 / 18 / 15 were far too tight:
 # real concrete is warm and grainy, sat 15-30, R-B 15-28, gray std 20-35).
 CURB_SAT_MAX, CURB_TEXTURE_MAX, SOFT_BROWN_MIN = 35, 40, 30
-STEP_MIN, STEP_WINDOW, STEP_REACH = 30.0, 4, 10
+NEAR_BAND = (1, 6)  # px outside the line searched for a curb top / gutter
+BAND_CONTRAST = 20.0
+DIRT_SAT_MAX = 60  # saturated, smooth colour is paint, never dirt
+SHADOW_GRAY = 60
+ROAD_GRAY_MAX = 190  # a bright concrete walkway is never the road
+DIRT_GREEN_MIN = -5  # pink/magenta paint has G well below (R+B)/2; dirt does not
+STEP_MIN, STEP_WINDOW, STEP_NEAR, STEP_FAR = 30.0, 4, 3, 6
+MIN_STEP_SAMPLES = 5
+MIN_VOTES, MIN_EACH = 4, 2
 
 
 def _stretches(poly: dict) -> list[tuple[dict, tuple[float, float]]]:
-    """Sub-polys of ~150 px (dense L-polylines) with their centre points."""
+    """Sub-polys of ~150 px (dense L-polylines) with their centre points.
+
+    ``geometry.dense`` already closes a closed poly's ring, so the closing
+    segment is part of the stretches.
+    """
     pts = dense(poly)
     if not np.isfinite(pts).all():
         return []
@@ -50,6 +62,17 @@ def _stretches(poly: dict) -> list[tuple[dict, tuple[float, float]]]:
     return out
 
 
+def _ring_road_side(poly: dict) -> int:
+    """Closed poly: the road is the ring's OUTSIDE. 0 = left (-normal) strip.
+
+    With normal (-ty, tx), a positive shoelace area (same algebra in image
+    coordinates) puts the interior on the +normal side, so the outside is left.
+    """
+    P = dense(poly)
+    area = 0.5 * float(np.sum(P[:-1, 0] * P[1:, 1] - P[1:, 0] * P[:-1, 1]))
+    return 0 if area > 0 else 1
+
+
 def _road_side(left, right) -> int | None:
     """0 if the left strip is road, 1 if the right one; None when unknown."""
     if abs(left.gray - right.gray) < MIN_GRAY_DIFF:
@@ -65,42 +88,95 @@ def _road_side(left, right) -> int | None:
     return 0 if votes > 0 else 1
 
 
-def _sharp_step(ctx: FrameContext, sub: dict) -> bool:
-    """Mean gray profile across the line has a >30 step within 4 px."""
+def _sharp_step(ctx: FrameContext, sub: dict, side: int) -> bool:
+    """Kerb signature at the line, on the outside (non-road) side: a gray rise >30
+    within 4 px (outside brighter than the road) or a dark shadow line that recovers.
+
+    ``side`` is the road side (0 = left). The profile spans -3..+6 px outward
+    of the line; ROI-invalid samples are NaN so black padding is never a step.
+    """
     P, N = resample(dense(sub))
     if P is None:
         return False
     h, w = ctx.image.shape
-    pad = STEP_REACH + 2
+    pad = STEP_FAR + 3
     x0, y0 = max(int(P[:, 0].min()) - pad, 0), max(int(P[:, 1].min()) - pad, 0)
     x1, y1 = min(int(P[:, 0].max()) + pad + 1, w), min(int(P[:, 1].max()) + pad + 1, h)
     c = ctx.image.crop(x0, y0, x1, y1)
     if c.size == 0:
         return False
     gray = cv2.cvtColor(c, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    off = np.arange(-STEP_REACH, STEP_REACH + 1)
-    X = (P[:, 0:1] + off[None, :] * N[:, 0:1] - x0).astype(np.float32)
-    Y = (P[:, 1:2] + off[None, :] * N[:, 1:2] - y0).astype(np.float32)
-    prof = cv2.remap(gray, X, Y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE).mean(axis=0)
-    return bool((np.abs(prof[STEP_WINDOW:] - prof[:-STEP_WINDOW]) > STEP_MIN).any())
+    # the left strip is the -normal side, so road left -> outside is +N
+    out = 1.0 if side == 0 else -1.0
+    off = np.arange(-STEP_NEAR, STEP_FAR + 1)
+    X = P[:, 0:1] + out * off[None, :] * N[:, 0:1]
+    Y = P[:, 1:2] + out * off[None, :] * N[:, 1:2]
+    samp = cv2.remap(gray, (X - x0).astype(np.float32), (Y - y0).astype(np.float32),
+                     cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    ix, iy = np.rint(X).astype(int), np.rint(Y).astype(int)
+    inb = (ix >= 0) & (iy >= 0) & (ix < w) & (iy < h)
+    ok = np.zeros(inb.shape, bool)
+    ok[inb] = ctx.image.roi.mask[iy[inb], ix[inb]]
+    cnt = ok.sum(axis=0)
+    prof = np.where(cnt >= MIN_STEP_SAMPLES,
+                    np.where(ok, samp, 0.0).sum(axis=0) / np.maximum(cnt, 1), np.nan)
+    if np.isnan(prof).all():
+        return False
+    rise = prof[STEP_WINDOW:] - prof[:-STEP_WINDOW]  # outward brightening (kerb face)
+    if np.nanmax(rise, initial=0.0) > STEP_MIN:
+        return True
+    # a dark shadow line at the kerb: a dip that recovers within the window
+    k = int(np.nanargmin(prof))
+    return bool(np.nanmax(prof[:k + 1]) - prof[k] > STEP_MIN
+                and np.nanmax(prof[k:]) - prof[k] > STEP_MIN)
 
 
-def _vote(ctx: FrameContext, sub: dict):
-    """(vote, strength) for one stretch; vote is CURB, SOFT or None (unknown/tie)."""
+def _soft_like(st) -> bool:
+    """Grass, or dirt/gravel: brown, moderately saturated and textured.
+    Smooth saturated colour is paint, never dirt."""
+    dirt = (st.brown > SOFT_BROWN_MIN and st.sat < DIRT_SAT_MAX and st.texture > 18
+            and st.green > DIRT_GREEN_MIN)
+    return bool(st.green > 8 or dirt)
+
+
+def _vote(ctx: FrameContext, sub: dict, ring_road: int | None = None):
+    """(vote, strength) for one stretch; None when the stretch cannot be judged.
+
+    R14: curb evidence comes from the curb itself (a narrow bright low-sat band
+    1-6 px outside the line and/or a masked sharp step at the line). With that
+    evidence the stretch votes curb whatever lies beyond. Soft needs no curb
+    evidence AND dirt/gravel/grass outside.
+    """
     strips = side_strips(ctx.image, sub)
     if strips is None:
         return None
-    side = _road_side(*strips)
+    side = ring_road if ring_road is not None else _road_side(*strips)
     if side is None:
         return None
     road, o = strips[side], strips[1 - side]
-    curb = 1.0 if (o.gray - road.gray > 25 and o.sat < CURB_SAT_MAX and o.texture < CURB_TEXTURE_MAX) else 0.0
-    soft = 1.0 if (o.green > 8 or (o.brown > SOFT_BROWN_MIN and o.texture > 18)) else 0.0
-    if _sharp_step(ctx, sub):
-        curb += 0.5
-    if curb == soft:
-        return (None, 0.0)  # valid stretch, no verdict
-    return (CURB, curb - soft) if curb > soft else (SOFT, soft - curb)
+    if road.gray < SHADOW_GRAY or o.gray < SHADOW_GRAY:
+        return None  # deep shadow: not judged
+    if ring_road is None and road.gray > ROAD_GRAY_MAX:
+        return None  # the 'road' side is bright concrete: side not trustworthy
+    near = side_strips(ctx.image, sub, near=NEAR_BAND[0], far=NEAR_BAND[1])
+    band = near_soft = False
+    if near is not None:
+        nb = near[1 - side]
+        band = nb.gray - road.gray > BAND_CONTRAST and nb.sat < CURB_SAT_MAX
+        near_soft = _soft_like(nb)
+    curb = 0.0
+    if band:
+        curb += 1.0
+    elif o.gray - road.gray > 25 and o.sat < CURB_SAT_MAX and o.texture < CURB_TEXTURE_MAX:
+        curb += 1.0
+    # a gray step / shadow line next to dirt or grass is the ground edge, not a kerb
+    if (band or not near_soft) and _sharp_step(ctx, sub, side):
+        curb += 0.5 if curb else 1.0
+    if curb:
+        return (CURB, curb)
+    if _soft_like(o):
+        return (SOFT, 1.0)
+    return (None, 0.0)  # judged, no verdict
 
 
 def detect(ctx: FrameContext) -> list[Issue]:
@@ -113,9 +189,10 @@ def detect(ctx: FrameContext) -> list[Issue]:
             continue
         labels[label["id"]] = label
         votes = per_label.setdefault(label["id"], [])
+        ring_road = _ring_road_side(poly) if poly.get("closed") else None
         for sub, centre in _stretches(poly):
-            v = _vote(ctx, sub)
-            if v is not None:
+            v = _vote(ctx, sub, ring_road)
+            if v is not None and v[0] is not None:  # only stretches that cast a vote
                 votes.append((v[0], v[1], centre))
 
     issues = []
@@ -128,21 +205,20 @@ def detect(ctx: FrameContext) -> list[Issue]:
         n_soft = sum(1 for v in votes if v[0] == SOFT)
         base = dict(issue_type="curb_soft", export_stem=stem, frame_name=frame_name,
                     label_id=lid, category=cat)
-        if n_curb / n >= MIXED_SHARE and n_soft / n >= MIXED_SHARE:
+        wrong = SOFT if cat == CURB else CURB
+        share = (n_soft if cat == CURB else n_curb) / n
+        if share >= FLAG_SHARE:
+            anchor = max((v for v in votes if v[0] == wrong), key=lambda v: v[1])[2]
+            kind = "grass/dirt" if wrong == SOFT else "a hard surface"
+            issues.append(Issue(
+                **base, confidence=float(np.clip((share - 0.5) * 2, 0, 1)),
+                reason=f"{cat} borders {kind} on {share:.0%} of {n} voting stretches",
+                anchor=(float(anchor[0]), float(anchor[1])),
+                fix={"op": "set_category", "to": wrong}, hand_fix=False))
+        elif (n >= MIN_VOTES and min(n_curb, n_soft) >= MIN_EACH
+              and n_curb / n >= MIXED_SHARE and n_soft / n >= MIXED_SHARE):
             anchor = max(votes, key=lambda v: v[1])[2]
             issues.append(Issue(**base, confidence=0.5,
                                 reason="edge changes type partway; split by hand",
                                 anchor=anchor, fix=None, hand_fix=True))
-            continue
-        wrong = SOFT if cat == CURB else CURB
-        share = (n_soft if cat == CURB else n_curb) / n
-        if share < FLAG_SHARE:
-            continue
-        anchor = max((v for v in votes if v[0] == wrong), key=lambda v: v[1])[2]
-        kind = "grass/dirt" if wrong == SOFT else "a hard surface"
-        issues.append(Issue(
-            **base, confidence=float(np.clip((share - 0.5) * 2, 0, 1)),
-            reason=f"{cat} borders {kind} on {share:.0%} of {n} stretches",
-            anchor=(float(anchor[0]), float(anchor[1])),
-            fix={"op": "set_category", "to": wrong}, hand_fix=False))
     return issues

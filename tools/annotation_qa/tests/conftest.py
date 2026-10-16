@@ -106,21 +106,27 @@ def _outside(img, rows, x0, x1, kind):
         img[rows, x0:x1] = np.clip(np.array(GRASS) + noise, 0, 255).astype(np.uint8)
 
 
-def make_edge_ctx(tmp_path, category: str, left: str, right: str):
-    """FrameContext with one horizontal edge label at y=200 (x 50..350).
-
-    Road lies below the line; above it the outside is ``left`` for x<200 and
-    ``right`` for x>=200 ("concrete" or "grass").
-    """
+def edge_ctx_from_image(tmp_path, img, polys, category="curb_road_edge"):
+    """FrameContext over ``img`` with one label (id L1) holding ``polys``."""
     from annotation_qa.context import FrameContext
 
-    img = _road()
-    _outside(img, slice(10, 200), 10, 200, left)
-    _outside(img, slice(10, 200), 200, 390, right)
     label = {"id": "L1", "category": category, "attributes": {}, "manualShape": True,
-             "poly2d": [hpoly(200)], "box2d": None, "box3d": None}
+             "poly2d": polys, "box2d": None, "box3d": None}
     frame = {"name": "f.png", "url": "f.png", "labels": [label]}
     return FrameContext(Export(Path("exp.json"), [frame], {}), frame, _frame(tmp_path, img))
+
+
+def make_edge_ctx(tmp_path, category: str, left: str, right: str, size: int = 400):
+    """FrameContext with one horizontal edge label at y=200 (x 50..size-50).
+
+    Road lies below the line; above it the outside is ``left`` for x<size/2 and
+    ``right`` for x>=size/2 ("concrete" or "grass").
+    """
+    img = _road(size)
+    half = size // 2
+    _outside(img, slice(10, 200), 10, half, left)
+    _outside(img, slice(10, 200), half, size - 10, right)
+    return edge_ctx_from_image(tmp_path, img, [hpoly(200, 50, size - 50)], category)
 
 
 @pytest.fixture
