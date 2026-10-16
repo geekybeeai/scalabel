@@ -27,3 +27,6 @@ REGISTRY["shape"] = shape.detect
 from annotation_qa.detectors import duplicates  # noqa: E402
 
 REGISTRY["duplicates"] = duplicates.detect
+from annotation_qa.detectors import solid_dashed  # noqa: E402
+
+REGISTRY["solid_dashed"] = solid_dashed.detect

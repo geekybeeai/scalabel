@@ -21,7 +21,7 @@ import numpy as np
 
 from annotation_qa.context import FrameContext
 from annotation_qa.fix import droppable_vertices
-from annotation_qa.detectors.position import _channel
+from annotation_qa.detectors.position import select_channel
 from annotation_qa.geometry import _arc, _segments, dense, length
 from annotation_qa.imaging import profile
 from annotation_qa.issues import Issue
@@ -155,7 +155,7 @@ def _paint_ridge(ctx: FrameContext, category: str, poly: dict) -> float | None:
     prof = profile(ctx.image, poly)
     if prof is None:
         return None
-    _, ridge = _channel(category, prof)
+    _, ridge = select_channel(category, prof)
     col = ridge[:, ridge.shape[1] // 2]
     if np.isnan(col).all():
         return None

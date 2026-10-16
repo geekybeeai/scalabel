@@ -63,7 +63,7 @@ def _stretch_profiles(ridge: np.ndarray, dashed: bool):
     return out
 
 
-def _channel(cat: str, prof) -> tuple[str, np.ndarray]:
+def select_channel(cat: str, prof) -> tuple[str, np.ndarray]:
     if cat in YELLOW_CATS:
         return "yellow", prof.yellow
     if cat == DASHED:
@@ -89,7 +89,7 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
     prof = profile(ctx.image, poly, R=R)
     if prof is None:
         return None
-    channel, ridge = _channel(cat, prof)
+    channel, ridge = select_channel(cat, prof)
     stretches = _stretch_profiles(ridge, cat == DASHED)
     if not stretches:
         return None
