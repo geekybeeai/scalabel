@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--subset", choices=["reviewer+random20"], default=None)
     a = ap.parse_args(argv)
     s = run_scan(_expand(a.exports), a.root, a.out,
-                 [t for t in a.types.split(",") if t], subset=a.subset)
+                 list(dict.fromkeys(t for t in a.types.split(",") if t)), subset=a.subset)
     print(f"frames={s.frames} skipped={len(s.skipped)} counts={s.counts}")
     return 0
 

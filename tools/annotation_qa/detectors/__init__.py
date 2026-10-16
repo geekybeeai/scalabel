@@ -1,5 +1,8 @@
 """Detector registry: issue type -> callable(FrameContext) -> list[Issue].
 
+Contract: a detector emits at most ONE issue per (export_stem, frame_name,
+label_id, issue_type); run_scan keeps the first and warns on a duplicate key.
+
 Empty for now; each detector module registers itself here in later tasks.
 """
 

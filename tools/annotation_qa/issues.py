@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -31,7 +32,17 @@ class Issue:
 def write_issues(path: Path, issues: list[Issue]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        for i in issues:
+            f.write(json.dumps(asdict(i)) + "\n")
+    os.replace(tmp, path)
+
+
+def append_issues(path: Path, issues: list[Issue]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
         for i in issues:
             f.write(json.dumps(asdict(i)) + "\n")
 
@@ -59,5 +70,7 @@ def read_marks(path: Path) -> dict[str, str]:
 def write_marks(path: Path, marks: dict[str, str]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
         json.dump(marks, f, indent=1, sort_keys=True)
+    os.replace(tmp, path)

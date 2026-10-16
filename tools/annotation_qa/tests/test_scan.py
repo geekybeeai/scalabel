@@ -165,3 +165,39 @@ def test_cli_scan(tmp_path, export_with_one_missing_image, fake_detector):
     rc = main(["scan", "--exports", str(exp.parent), "--root", str(root),
                "--out", str(out), "--types", "fake"])
     assert rc == 0 and (out / "issues_fake.jsonl").exists()
+
+
+def test_detector_error_is_recorded_and_scan_continues(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    _img(root, "items/a.png")
+    exp = _write_export(tmp_path / "ex.json", [_frame(f"f{i}.png") for i in range(3)])
+
+    def det(ctx):
+        if ctx.frame["name"] == "f1.png":
+            raise RuntimeError("boom")
+        return [Issue("fake", ctx.export.stem, ctx.frame["name"], "1", "c", .9, "r", (200., 100.), None, False)]
+    monkeypatch.setitem(REGISTRY, "fake", det)
+    out = tmp_path / "out"
+    s = run_scan([exp], root, out, ["fake", "fake"])
+    assert len(s.errors) == 1 and "boom" in s.errors[0] and s.counts == {"fake": 2}
+    assert [i.frame_name for i in read_issues(out / "issues_fake.jsonl")] == ["f0.png", "f2.png"]
+    assert len(json.loads((out / "scan_summary.json").read_text())["errors"]) == 1
+
+
+def test_bad_export_is_recorded(tmp_path, fake_detector):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{nope")
+    s = run_scan([bad], tmp_path, tmp_path / "out", ["fake"])
+    assert len(s.errors) == 1
+
+
+def test_duplicate_key_keeps_first(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    _img(root, "items/a.png")
+    exp = _write_export(tmp_path / "ex.json", [_frame("f.png")])
+    mk = lambda r: Issue("fake", "ex", "f.png", "1", "c", .9, r, (200., 100.), None, False)
+    monkeypatch.setitem(REGISTRY, "fake", lambda ctx: [mk("first"), mk("second")])
+    out = tmp_path / "out"
+    s = run_scan([exp], root, out, ["fake"])
+    assert [i.reason for i in read_issues(out / "issues_fake.jsonl")] == ["first"]
+    assert s.counts["fake"] == 1
