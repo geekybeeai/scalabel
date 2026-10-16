@@ -47,7 +47,35 @@ def main(argv: list[str] | None = None) -> int:
     mg.add_argument("--stem", required=True)
     mg.add_argument("--reviewed", type=Path, required=True)
     mg.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    vb = sub.add_parser("viewb", help="serve the review page (View B is at /viewb)")
+    vb.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    vb.add_argument("--port", type=int, default=8790)
+    br = sub.add_parser("bar", help="check the 8 reviewer frames have real-marked issues")
+    br.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    fn = sub.add_parser("final", help="copy merged working copies to OUT/final")
+    fn.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
+    if a.cmd == "bar":
+        from annotation_qa.final import bar_report
+        rep = bar_report(a.out)
+        for sub_, r in rep.items():
+            types = " ".join(f"{t}={n}" for t, n in sorted(r["types"].items())) or "no issues"
+            print(f"{sub_}: {types} real={r['real']}")
+        print("No real-marked issue: " + (", ".join(s for s, r in rep.items() if not r["real"])
+                                          or "none"))
+        return 0
+    if a.cmd == "final":
+        from annotation_qa.final import finalize
+        counts = finalize(a.out)
+        for stem, n in sorted(counts.items()):
+            print(f"{stem}: {n} changes -> final/{stem}_qa_2026_10_17.json")
+        if not counts:
+            print("no fix rounds found; nothing copied")
+        return 0
+    if a.cmd == "viewb":
+        from annotation_qa.review_server import serve
+        serve(a.out, a.port, page="/viewb")
+        return 0
     if a.cmd == "calibrate-yellow":
         import json
         from annotation_qa.calibrate import calibrate_yellow

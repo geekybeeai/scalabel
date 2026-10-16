@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from annotation_qa.data import ORIGINALS_DIR, REPO_ROOT
 from annotation_qa.issues import Issue, read_marks, write_marks
+from annotation_qa.viewb import build_rows, render_crop, viewb_html
 
 log = logging.getLogger(__name__)
 SCALABEL = "http://localhost:8686"
@@ -163,6 +164,17 @@ def _handler(state: ReviewState):
                 self._json(state.calibration(t))
             elif u.path == "/calibrate":
                 self._send(calibrate_html(t).encode(), "text/html; charset=utf-8")
+            elif u.path == "/viewb":
+                self._send(viewb_html(CSS).encode(), "text/html; charset=utf-8")
+            elif u.path == "/viewb/rows":
+                self._json(build_rows(state.out, state.repo_root))
+            elif u.path == "/viewb/crop":
+                p = render_crop(state.out, state.repo_root, *(
+                    (q.get(k) or [""])[0] for k in ("stem", "frame", "label", "round", "side")))
+                if p is not None and p.is_file():
+                    self._send(p.read_bytes(), "image/jpeg")
+                else:
+                    self._send(b"not found", "text/plain", 404)
             elif u.path.startswith("/crops/"):
                 base = (state.out / "crops").resolve()
                 p = (base / unquote(u.path[len("/crops/"):])).resolve()
@@ -198,9 +210,9 @@ def make_server(out: Path, port: int = 8790, repo_root: Path = REPO_ROOT,
                                _handler(ReviewState(out, repo_root, originals_dir)))
 
 
-def serve(out: Path, port: int = 8790) -> None:
+def serve(out: Path, port: int = 8790, page: str = "/") -> None:
     srv = make_server(out, port)
-    print(f"review server: http://localhost:{srv.server_address[1]}/  (Ctrl-C to stop)")
+    print(f"review server: http://localhost:{srv.server_address[1]}{page}  (Ctrl-C to stop)")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -263,7 +275,7 @@ def index_html(types: dict[str, int]) -> str:
 <style>{CSS}</style></head><body><header>{tabs}
 <div class="bar">Mark all &ge; <input id="conf" size="4" value="0.8"> as real
 <button class="r" onclick="bulk()">Apply to this tab</button> <span id="msg"></span>
-&nbsp;|&nbsp; Calibrate: {calib}</div></header>
+&nbsp;|&nbsp; Calibrate: {calib} &nbsp;|&nbsp; <a href="/viewb">View B (final review)</a></div></header>
 <div id="cards"></div><div style="margin:16px"><button id="more" onclick="more()">show more</button></div>
 <script>{js}</script></body></html>"""
 
