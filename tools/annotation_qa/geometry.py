@@ -91,16 +91,28 @@ def _bezier_t(cum, i0, s):
     return np.interp(s, cum[i0:i1 + 1], np.linspace(0.0, 1.0, i1 - i0 + 1))
 
 
+def _basis(u):
+    return (1 - u) ** 3, 3 * u * (1 - u) ** 2, 3 * u**2 * (1 - u), u**3
+
+
 def _fit_controls(p0, p3, u, targets, c1_old, c2_old):
-    """Least-squares cubic control points through ``targets`` with fixed ends
-    at Bezier parameters ``u``."""
-    b0, b1 = (1 - u) ** 3, 3 * u * (1 - u) ** 2
-    b2, b3 = 3 * u**2 * (1 - u), u**3
-    rhs = targets - np.outer(b0, p0) - np.outer(b3, p3)
-    A = np.stack([b1, b2], axis=1)
-    sol, *_ = np.linalg.lstsq(A, rhs, rcond=None)
-    if not np.all(np.isfinite(sol)):
-        return c1_old, c2_old
+    """Least-squares cubic control points through ``targets`` with fixed ends.
+
+    ``u`` are initial Bezier parameters of the targets; they are re-projected
+    onto the fitted curve a few times so the fit minimises point distance.
+    """
+    grid = np.linspace(0.0, 1.0, 400)
+    for _ in range(5):
+        b0, b1, b2, b3 = _basis(u)
+        rhs = targets - np.outer(b0, p0) - np.outer(b3, p3)
+        sol, *_ = np.linalg.lstsq(np.stack([b1, b2], axis=1), rhs, rcond=None)
+        if not np.all(np.isfinite(sol)):
+            return c1_old, c2_old
+        g0, g1, g2, g3 = _basis(grid)
+        curve = (np.outer(g0, p0) + np.outer(g1, sol[0])
+                 + np.outer(g2, sol[1]) + np.outer(g3, p3))
+        d = np.linalg.norm(targets[:, None, :] - curve[None], axis=2)
+        u = grid[np.argmin(d, axis=1)]
     return sol[0], sol[1]
 
 
@@ -114,7 +126,8 @@ def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
     control points and end points move together.
     """
     verts = np.asarray(poly["vertices"], dtype=float)
-    r = _resample(dense(poly), step)
+    pts = dense(poly)
+    r = _resample(pts, step)
     if r is None:
         raise ValueError("poly too short to shift")
     s, P, N = r
@@ -123,7 +136,7 @@ def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
         raise ValueError(f"expected {len(s)} offsets, got {len(offsets)}")
 
     # arc position at the end of each segment along the dense curve
-    cum = _arc(dense(poly))
+    cum = _arc(pts)
     segs = list(_segments(poly))
     ends, starts, count = [], [], 1
     for kind, idx in segs:
@@ -134,11 +147,19 @@ def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
         ends.append(cum[min(count - 1, len(cum) - 1)])
 
     def vec_at(si: float):
+        """Offset vector at arc position ``si``; mitred at corners."""
         j = int(np.argmin(np.abs(s - si)))
-        return offsets[j] * N[j]
+        n1, n2 = N[max(j - 2, 0)], N[min(j + 2, len(N) - 1)]
+        return offsets[j] * (n1 + n2) / max(1.0 + float(n1 @ n2), 0.2)
 
     new = verts.copy()
-    new[0] = verts[0] + vec_at(0.0)
+    if poly.get("closed"):
+        # closing corner: mitre the offset of the first and last edges
+        n1, n2 = N[0], N[-1]
+        off = 0.5 * (offsets[0] + offsets[-1])
+        new[0] = verts[0] + off * (n1 + n2) / max(1.0 + float(n1 @ n2), 0.2)
+    else:
+        new[0] = verts[0] + vec_at(0.0)
     prev_pos = 0.0
     for (kind, idx), end_pos, i0 in zip(segs, ends, starts):
         end = idx[-1]
@@ -146,10 +167,15 @@ def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
             new[end] = verts[end] + vec_at(end_pos)
         if kind == "C":
             m = (s >= prev_pos) & (s <= end_pos)
+            k = np.flatnonzero(m)
+            if len(k) >= 8:
+                k = k[2:-2]  # end samples sit on corners with ambiguous normals
+                m = np.zeros_like(m)
+                m[k] = True
             if m.sum() >= 4:
                 new[idx[1]], new[idx[2]] = _fit_controls(
-                    new[idx[0]] if idx[0] != 0 else new[0], new[end],
-                    _bezier_t(cum, i0, s[m]), (P[m] + offsets[m, None] * N[m]), verts[idx[1]],
+                    new[idx[0]], new[end], _bezier_t(cum, i0, s[m]),
+                    P[m] + offsets[m, None] * N[m], verts[idx[1]],
                     verts[idx[2]])
             else:  # tiny segment: use the mean offset/normal
                 nrm = N[m].mean(axis=0) if m.any() else N[0]

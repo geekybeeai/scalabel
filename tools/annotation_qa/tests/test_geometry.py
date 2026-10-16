@@ -38,3 +38,34 @@ def test_shift_poly_straight_line_moves_all_vertices():
     moved = shift_poly(poly, np.full(len(P), 5.0))
     assert np.allclose(np.array(moved["vertices"])[:, 1], N[0][1] * 5.0)
     assert poly["vertices"][0] == [0, 0]  # input untouched
+
+
+def _max_err(poly, off_fn):
+    P, N = resample(dense(poly))
+    off = off_fn(len(P))
+    Q, _ = resample(dense(shift_poly(poly, off)), step=0.5)
+    d = cKDTree(Q).query(P + off[:, None] * N)[0]
+    if poly["closed"]:
+        # samples near the closing corners have one-sided/averaged normals that
+        # are not the mitred offset target; ignore them
+        v = np.array(poly["vertices"][-1:] + poly["vertices"][:1], dtype=float)
+        d = d[cKDTree(v).query(P)[0] > 15]
+    return d.max()
+
+
+LLCCLL = {"vertices": [[0, 0], [60, 0], [60, 60], [120, 60], [180, 0], [240, 0]],
+          "types": "LLCCLL", "closed": False}
+CLOSED = {"vertices": [[0, 0], [100, 0], [150, 50], [100, 100], [0, 100]],
+          "types": "LLCCL", "closed": True}
+
+
+def test_shift_mixed_open_nonuniform():
+    assert _max_err(LLCCLL, lambda n: np.linspace(-6, 10, n)) <= 1.5
+
+
+def test_shift_closed_uniform():
+    assert _max_err(CLOSED, lambda n: np.full(n, 8.0)) <= 1.5
+
+
+def test_shift_closed_smooth():
+    assert _max_err(CLOSED, lambda n: 8 * np.sin(np.linspace(0, np.pi, n))) <= 1.5
