@@ -36,6 +36,15 @@ def round_files(out: Path) -> list[dict]:
     return sorted(rounds, key=lambda r: (r["v"], r["type"], r["stem"]))
 
 
+def merged_tags(out: Path) -> set[tuple[str, str]]:
+    """(stem, round tag) pairs recorded by merge_reviewed in OUT/rounds/merged.json."""
+    path = Path(out) / "rounds" / "merged.json"
+    try:
+        return {(m["stem"], m["tag"]) for m in json.loads(path.read_text())}
+    except (OSError, ValueError, KeyError, TypeError):
+        return set()
+
+
 def _moved(before: dict, after: dict) -> float | None:
     """Largest vertex displacement in px, or None when the vertex structure differs."""
     bp, ap = before.get("poly2d") or [], after.get("poly2d") or []
@@ -94,6 +103,7 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
         return rows.setdefault((stem, name), {
             "export_stem": stem, "frame_name": name, "changes": [], "hand": [], "projects": []})
 
+    merged = merged_tags(out)
     work_labels: dict[str, dict[str, list]] = {}
 
     def current(stem: str) -> dict[str, list]:
@@ -121,6 +131,7 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                 rw["changes"].append({
                     "round": r["round"], "issue_type": r["type"], "label_id": lid,
                     "what": describe(rec.get("before"), rec.get("after")),
+                    "merged": (r["stem"], r["tag"]) in merged,
                     "before_crop": f"/viewb/crop?{q}&side=before",
                     "after_crop": f"/viewb/crop?{q}&side=after"})
             if fname in items:
@@ -153,7 +164,8 @@ def render_crop(out: Path, repo_root: Path, stem: str, frame_name: str, label_id
                            if f["name"] == frame_name)
     except (OSError, ValueError, KeyError, StopIteration):
         return None
-    dest = out / "viewb" / f"{_crop_name(tag, frame_name, label_id, side)}.jpg"
+    stamp = str(rnd["changes"].stat().st_mtime_ns)
+    dest = out / "viewb" / f"{_crop_name(tag, frame_name, label_id, side, stamp)}.jpg"
     if dest.exists():
         return dest
     snap = rec.get(side)
@@ -187,9 +199,9 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;',
  $('#n').textContent=rows.length+' edited frames';
  $('#rows').innerHTML=rows.map(r=>`<div class="card"><div class="meta"><div><b>${esc(r.export_stem)}</b></div>
  <div>${esc(r.frame_name)} &middot; ${r.changes.length} changes</div>
- <div>${r.projects.map(p=>`<a href="${p.link}" target="_blank">${esc(p.project)}</a>`).join('<br>')}</div>
+ <div>${r.projects.map(p=>`<a href="${esc(p.link)}" target="_blank">${esc(p.project)}</a>`).join('<br>')}</div>
  ${r.hand.length?'<div><span class="badge">draw by hand</span> '+r.hand.map(h=>esc(h.round)+': '+(h.done?'done':'not done')).join(', ')+'</div>':''}
- <table>${r.changes.map(c=>`<tr><td>${esc(c.round)}</td><td>label ${esc(c.label_id)}</td><td>${esc(c.what)}</td>
+ <table>${r.changes.map(c=>`<tr><td>${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}</td><td>label ${esc(c.label_id)}</td><td>${esc(c.what)}</td>
  <td><img loading="lazy" src="${c.before_crop}" title="before"></td><td><img loading="lazy" src="${c.after_crop}" title="after"></td></tr>`).join('')}</table>
  </div></div>`).join('');})();
 """

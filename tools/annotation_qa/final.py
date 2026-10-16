@@ -8,7 +8,7 @@ from pathlib import Path
 from annotation_qa import data
 from annotation_qa.issues import read_marks
 from annotation_qa.review_server import load_issues_tolerant
-from annotation_qa.viewb import round_files
+from annotation_qa.viewb import merged_tags, round_files
 
 REVIEWER_FRAMES = ["208199", "207851", "MLC 1", "100865_201054",
                    "565_verification", "860_verification", "105193_204737", "100292_200553"]
@@ -29,22 +29,25 @@ def bar_report(out: Path) -> dict[str, dict]:
     return res
 
 
-def change_counts(out: Path) -> dict[str, int]:
-    """Stem -> number of label changes over every round (stems with a round map to >= 0)."""
-    counts: dict[str, int] = {}
-    for r in round_files(out):
-        n = sum(len(labels) for labels in json.loads(r["changes"].read_text()).values())
-        counts[r["stem"]] = counts.get(r["stem"], 0) + n
-    return counts
+def finalize(out: Path) -> tuple[dict[str, int], dict[str, list[str]]]:
+    """Export every stem whose rounds are ALL merged.
 
-
-def finalize(out: Path) -> dict[str, int]:
-    """Copy work/<stem>.json of every stem with a round to final/<stem>_qa_2026_10_17.json."""
+    Returns (exported: stem -> change count, unmerged: stem -> unmerged round tags).
+    """
     out = Path(out)
-    counts = change_counts(out)
-    for stem in sorted(counts):
+    merged = merged_tags(out)
+    counts: dict[str, int] = {}
+    unmerged: dict[str, list[str]] = {}
+    for r in round_files(out):
+        if (r["stem"], r["tag"]) not in merged:
+            unmerged.setdefault(r["stem"], []).append(r["tag"])
+        else:
+            n = sum(len(l) for l in json.loads(r["changes"].read_text()).values())
+            counts[r["stem"]] = counts.get(r["stem"], 0) + n
+    exported = {s: n for s, n in counts.items() if s not in unmerged}
+    for stem in sorted(exported):
         src = out / "work" / f"{stem}.json"
         if not src.exists():
             raise FileNotFoundError(f"no working copy for {stem}: {src}")
         data.save_export(data.load_export(src), out / "final" / f"{stem}_qa_2026_10_17.json")
-    return counts
+    return exported, unmerged

@@ -166,12 +166,23 @@ def test_bar_lists_reviewer_frames_and_missing_real(out, capsys):
     assert "MLC 1" in missing and "208199" not in missing and "207851" in missing
 
 
+def _merge(out, tag, tmp_path):
+    from annotation_qa.merge import merge_reviewed
+    rev = tmp_path / f"{tag}_reviewed.json"
+    _write(rev, _export([_frame("f1.png", [])]))
+    return merge_reviewed(STEM, rev, out, round_tag=tag)
+
+
+def _two_changes():
+    return {"f1.png": {"1": {"before": _snap(_label("1")), "after": None},
+                       "2": {"before": _snap(_label("2")), "after": None}}}
+
+
 def test_final_copies_merged_stems_and_counts(out, tmp_path, capsys):
-    _round(out, "shape", 1, {"f1.png": {"1": {"before": _snap(_label("1")), "after": None},
-                                         "2": {"before": _snap(_label("2")), "after": None}}},
-           [_frame("f1.png", [])])
-    _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [])]))
+    tag = _round(out, "shape", 1, _two_changes(), [_frame("f1.png", [])])
+    _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [_label("1")])]))
     _write(out / "work" / "other_export_b.json", _export([]))  # no rounds: not copied
+    _merge(out, tag, tmp_path)
     assert cli.main(["final", "--out", str(out)]) == 0
     dest = out / "final" / f"{STEM}_qa_2026_10_17.json"
     assert json.loads(dest.read_text()) == _export([_frame("f1.png", [])])
@@ -179,10 +190,64 @@ def test_final_copies_merged_stems_and_counts(out, tmp_path, capsys):
     assert f"{STEM}: 2 changes" in capsys.readouterr().out
 
 
-def test_final_refuses_originals_dir(out, monkeypatch):
+def test_final_does_not_export_unmerged_stem(out, capsys):
+    _round(out, "shape", 1, _two_changes(), [_frame("f1.png", [])])
+    _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [_label("1")])]))
+    assert cli.main(["final", "--out", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert not (out / "final").exists() or not list((out / "final").glob("*.json"))
+    assert "NOT EXPORTED" in text and "shape_v1" in text and STEM in text
+
+
+def test_final_skips_stem_with_one_unmerged_round(out, tmp_path, capsys):
+    t1 = _round(out, "shape", 1, _two_changes(), [_frame("f1.png", [])])
+    _round(out, "position", 2, _two_changes(), [_frame("f1.png", [])])
+    _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [])]))
+    _merge(out, t1, tmp_path)
+    assert cli.main(["final", "--out", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert not list((out / "final").glob("*.json")) if (out / "final").exists() else True
+    assert "NOT EXPORTED" in text and "position_v2" in text and "shape_v1" not in text.split(
+        "NOT EXPORTED")[1]
+
+
+def test_final_exports_when_all_rounds_merged_counting_both(out, tmp_path, capsys):
+    t1 = _round(out, "shape", 1, _two_changes(), [_frame("f1.png", [])])
+    t2 = _round(out, "position", 2, {"f1.png": {"3": {"before": _snap(_label("3")), "after": None}}},
+                [_frame("f1.png", [])])
+    _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [])]))
+    _merge(out, t1, tmp_path)
+    _merge(out, t2, tmp_path)
+    assert cli.main(["final", "--out", str(out)]) == 0
+    assert (out / "final" / f"{STEM}_qa_2026_10_17.json").exists()
+    assert f"{STEM}: 3 changes" in capsys.readouterr().out
+
+
+def test_viewb_marks_unmerged_rounds(out, repo, tmp_path):
+    t1 = _round(out, "shape", 1, _two_changes(), [_frame("f1.png", [])])
+    _round(out, "position", 2, {"f1.png": {"3": {"before": _snap(_label("3")), "after": None}}},
+           [_frame("f1.png", [])])
+    _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [])]))
+    _merge(out, t1, tmp_path)
+    (r,) = build_rows(out, repo)
+    merged = {c["round"]: c["merged"] for c in r["changes"]}
+    assert merged == {"shape_v1": True, "position_v2": False}
+
+
+def test_merge_marker_written(out, tmp_path):
+    t1 = _round(out, "shape", 1, {}, [_frame("f1.png", [])])
+    _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [])]))
+    assert _merge(out, t1, tmp_path) == 1
+    (m,) = json.loads((out / "rounds" / "merged.json").read_text())
+    assert m["stem"] == STEM and m["tag"] == t1 and m["merged_frames"] == 1
+    assert m["reviewed_path"] and m["timestamp"]
+
+
+def test_final_refuses_originals_dir(out, tmp_path, monkeypatch):
     from annotation_qa import data
-    _round(out, "shape", 1, {}, [])
+    tag = _round(out, "shape", 1, {}, [])
     _write(out / "work" / f"{STEM}.json", _export([]))
+    _merge(out, tag, tmp_path)
     monkeypatch.setattr(data, "ORIGINALS_DIR", out / "final")
     with pytest.raises(ValueError):
         cli.main(["final", "--out", str(out)])

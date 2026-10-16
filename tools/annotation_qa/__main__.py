@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     mg = sub.add_parser("merge", help="merge a reviewed export into the working copy")
     mg.add_argument("--stem", required=True)
     mg.add_argument("--reviewed", type=Path, required=True)
+    mg.add_argument("--round", required=True, help="round tag, e.g. <stem>_fix_<type>_v<N>")
     mg.add_argument("--out", type=Path, default=DEFAULT_OUT)
     vb = sub.add_parser("viewb", help="serve the review page (View B is at /viewb)")
     vb.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -66,10 +67,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "final":
         from annotation_qa.final import finalize
-        counts = finalize(a.out)
+        counts, unmerged = finalize(a.out)
         for stem, n in sorted(counts.items()):
             print(f"{stem}: {n} changes -> final/{stem}_qa_2026_10_17.json")
-        if not counts:
+        for stem, tags in sorted(unmerged.items()):
+            print(f"NOT EXPORTED {stem} - unmerged rounds: {', '.join(tags)}")
+        if not counts and not unmerged:
             print("no fix rounds found; nothing copied")
         return 0
     if a.cmd == "viewb":
@@ -93,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "merge":
         from annotation_qa.merge import merge_reviewed
-        print(f"merged {merge_reviewed(a.stem, a.reviewed, a.out)} frames")
+        print(f"merged {merge_reviewed(a.stem, a.reviewed, a.out, round_tag=a.round)} frames")
         return 0
     if a.cmd == "review":
         from annotation_qa.review_server import serve
