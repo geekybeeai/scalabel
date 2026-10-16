@@ -94,12 +94,12 @@ def test_subset_keeps_reviewer_frames_and_caps_random(tmp_path, fake_detector):
     root = tmp_path / "root"
     _img(root, "items/a.png")
     frames = [_frame(f"f{i}.png") for i in range(60)]
-    frames += [_frame("x208199.png"), _frame("MLC 1 a.png")]
+    frames += [_frame("items/b/208199_verification.png"), _frame("MLC 1_verification_z20.png")]
     exp = _write_export(tmp_path / "ex.json", frames)
     out = tmp_path / "out"
     run_scan([exp], root, out, ["fake"], subset="reviewer+random20")
     names = [i.frame_name for i in read_issues(out / "issues_fake.jsonl")]
-    assert {"x208199.png", "MLC 1 a.png"} <= set(names)
+    assert {"items/b/208199_verification.png", "MLC 1_verification_z20.png"} <= set(names)
     assert len(names) == 22
     out2 = tmp_path / "out2"
     run_scan([exp], root, out2, ["fake"], subset="reviewer+random20")
@@ -201,3 +201,138 @@ def test_duplicate_key_keeps_first(tmp_path, monkeypatch):
     s = run_scan([exp], root, out, ["fake"])
     assert [i.reason for i in read_issues(out / "issues_fake.jsonl")] == ["first"]
     assert s.counts["fake"] == 1
+
+
+# ---- reviewer frames (I8) ----
+def test_reviewer_match_is_a_basename_prefix():
+    from annotation_qa.data import reviewer_match
+    d = "items/Full_Verfication/batchwise_data/b/images/"
+    assert reviewer_match(d + "565_verification.png") == "565_verification"
+    assert reviewer_match(d + "113652_211565_verification.png") is None  # the false hit
+    assert reviewer_match(d + "MLC 1_verification_z20.png") == "MLC 1"
+    assert reviewer_match(d + "MLC 10_verification.png") is None
+    assert reviewer_match(d + "208199_verification.png") == "208199"
+    assert reviewer_match(d + "100292_200553_verification.png") == "100292_200553"
+
+
+# ---- partial output, meta, CLI (M3, M4, C1) ----
+def test_interrupted_scan_keeps_previous_results(tmp_path, monkeypatch, fake_detector):
+    root = tmp_path / "root"
+    _img(root, "items/a.png")
+    exp = _write_export(tmp_path / "ex.json", [_frame(f"f{i}.png") for i in range(3)])
+    out = tmp_path / "out"
+    run_scan([exp], root, out, ["fake"])
+    before = (out / "issues_fake.jsonl").read_text()
+    assert len(before.splitlines()) == 3
+
+    def boom(ctx):
+        if ctx.frame["name"] == "f1.png":
+            raise KeyboardInterrupt
+        return fake_detector(ctx)
+    monkeypatch.setitem(REGISTRY, "fake", boom)
+    with pytest.raises(KeyboardInterrupt):
+        run_scan([exp], root, out, ["fake"])
+    assert (out / "issues_fake.jsonl").read_text() == before
+    assert (out / "issues_fake.jsonl.partial").exists()
+
+
+def test_scan_writes_meta_with_sha1_of_scanned_file(tmp_path, fake_detector):
+    from annotation_qa.issues import file_sha1, read_meta
+    root = tmp_path / "root"
+    _img(root, "items/a.png")
+    exp = _write_export(tmp_path / "ex.json", [_frame("a.png")])
+    out = tmp_path / "out"
+    run_scan([exp], root, out, ["fake"])
+    meta = read_meta(out, "fake")
+    assert meta["ex"]["sha1"] == file_sha1(exp) and meta["ex"]["scanned_at"]
+    (out / "work").mkdir()
+    work = _write_export(out / "work" / "ex.json", [_frame("w.png")])
+    run_scan([exp], root, out, ["fake"])
+    assert read_meta(out, "fake")["ex"]["sha1"] == file_sha1(work)
+
+
+def test_cli_subset_needs_explicit_out(tmp_path, export_with_one_missing_image, fake_detector,
+                                       capsys):
+    exp, root = export_with_one_missing_image
+    rc = main(["scan", "--exports", str(exp), "--root", str(root), "--types", "fake",
+               "--subset", "reviewer+random20"])
+    assert rc == 2 and "explicit --out" in capsys.readouterr().out
+
+
+def test_cli_scan_reports_errors_and_exits_1(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "root"
+    _img(root, "items/a.png")
+    exp = _write_export(tmp_path / "ex.json", [_frame("a.png")])
+
+    def det(ctx):
+        raise RuntimeError("boom")
+    monkeypatch.setitem(REGISTRY, "fake", det)
+    rc = main(["scan", "--exports", str(exp), "--root", str(root), "--out", str(tmp_path / "o"),
+               "--types", "fake"])
+    text = capsys.readouterr().out
+    assert rc == 1 and "errors=1" in text and "boom" in text
+
+
+# ---- incremental re-detection (I11) ----
+def _merged_env(tmp_path, monkeypatch):
+    """A full scan of 3 frames, then a merged round touching f1 only."""
+    from annotation_qa import fix as fixmod
+    from annotation_qa.merge import merge_reviewed
+    root = tmp_path / "root"
+    _img(root, "items/a.png")
+    orig_dir = tmp_path / "orig"
+    orig_dir.mkdir()
+    exp = _write_export(orig_dir / "ex.json", [_frame(f"f{i}.png") for i in range(3)])
+    monkeypatch.setattr(fixmod, "ORIGINALS_DIR", orig_dir)
+    calls = []
+
+    def det(ctx):
+        calls.append(ctx.frame["name"])
+        lab = ctx.frame["labels"][0]
+        return [Issue("fake", ctx.export.stem, ctx.frame["name"], lab["id"], lab["category"],
+                      .9, f"cat={lab['category']}", (200.0, 100.0), None, False)]
+    monkeypatch.setitem(REGISTRY, "fake", det)
+    out = tmp_path / "out"
+    run_scan([exp], root, out, ["fake"])
+    tag = "ex_fix_fake_v1"
+    (out / "rounds").mkdir()
+    _write_export(out / "rounds" / f"{tag}_items.json", [_frame("f1.png")])
+    (out / "rounds" / f"{tag}_changes.json").write_text("{}")
+    rev = _write_export(tmp_path / "rev.json",
+                        [_frame("f1.png", labels=[_label(1, "dashed_white_line")])])
+    merge_reviewed("ex", rev, out, round_tag=tag)
+    calls.clear()
+    return exp, root, out, calls
+
+
+def test_since_merge_rescans_only_merged_frames(tmp_path, monkeypatch):
+    from annotation_qa.issues import file_sha1, read_meta
+    exp, root, out, calls = _merged_env(tmp_path, monkeypatch)
+    s = run_scan([exp], root, out, ["fake"], since_merge=True)
+    assert calls == ["f1.png"] and s.frames == 1
+    got = {i.frame_name: i.reason for i in read_issues(out / "issues_fake.jsonl")}
+    assert got == {"f0.png": "cat=solid_single_line", "f1.png": "cat=dashed_white_line",
+                   "f2.png": "cat=solid_single_line"}
+    assert read_meta(out, "fake")["ex"]["sha1"] == file_sha1(out / "work" / "ex.json")
+    # nothing merged since: a second run re-detects nothing and keeps everything
+    run_scan([exp], root, out, ["fake"], since_merge=True)
+    assert calls == ["f1.png"]
+    assert len(read_issues(out / "issues_fake.jsonl")) == 3
+
+
+def test_since_merge_then_fix_is_not_stale(tmp_path, monkeypatch):
+    from annotation_qa import fix as fixmod
+    from annotation_qa.fix import _staleness
+    from annotation_qa.issues import read_meta
+    exp, root, out, calls = _merged_env(tmp_path, monkeypatch)
+    assert _staleness(out, "fake", "ex", read_meta(out, "fake"))  # merge made it stale
+    main(["scan", "--exports", str(exp), "--root", str(root), "--out", str(out),
+          "--types", "fake", "--since-merge"])
+    assert _staleness(out, "fake", "ex", read_meta(out, "fake")) is None
+    assert fixmod  # (ORIGINALS_DIR patched by _merged_env)
+
+
+def test_since_merge_needs_a_previous_scan(tmp_path, fake_detector):
+    exp = _write_export(tmp_path / "ex.json", [_frame("a.png")])
+    with pytest.raises(ValueError, match="full scan first"):
+        run_scan([exp], tmp_path, tmp_path / "o", ["fake"], since_merge=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -38,8 +39,29 @@ def save_export(exp: Export, path: Path) -> None:
     if target == ORIGINALS_DIR or ORIGINALS_DIR in target.parents:
         raise ValueError(f"refusing to write under the originals dir: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "w") as f:
+    tmp = target.with_name(target.name + ".tmp")
+    with open(tmp, "w") as f:
         json.dump({"frames": exp.frames, "config": exp.config}, f)
+    os.replace(tmp, target)  # atomic: a crash never leaves a half-written export
+
+
+# The 8 frames the downstream reviewer flagged, as basename prefixes.
+REVIEWER_FRAMES = ["208199", "207851", "MLC 1", "100865_201054", "565_verification",
+                   "860_verification", "105193_204737", "100292_200553"]
+
+
+def reviewer_match(frame_name: str) -> str | None:
+    """The reviewer-frame id whose prefix starts the frame's basename, else None.
+
+    The prefix must not be followed by another digit, so "MLC 1" matches
+    "MLC 1_verification_z20.png" but not "MLC 10_..." and "565_verification"
+    does not match "113652_211565_verification.png".
+    """
+    base = Path(frame_name).name
+    for sub in REVIEWER_FRAMES:
+        if base.startswith(sub) and not base[len(sub):len(sub) + 1].isdigit():
+            return sub
+    return None
 
 
 def iter_polys(frame: dict) -> Iterator[tuple[dict, int, dict]]:

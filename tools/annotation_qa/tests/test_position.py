@@ -99,7 +99,7 @@ def test_multi_poly_label_one_issue_with_worst_poly_index(tmp_path):
     assert i.fix["poly_index"] == 1
 
 
-def test_calibration_frame_97944():
+def test_calibration_frame_97944(tmp_path):
     from annotation_qa.context import FrameContext
     from annotation_qa.data import Export
     from annotation_qa.imaging import FrameImage
@@ -112,7 +112,15 @@ def test_calibration_frame_97944():
                "poly2d": l["poly2d"]} for l in fx["labels"]]
     frame = {"name": fx["frame_name"], "url": fx["url"], "labels": labels}
     ctx = FrameContext(Export(Path("x.json"), [frame], {}), frame,
-                       FrameImage(img_path, REPO / "local-data/items/Full_Verfication/qa_2026_10_17/roi_cache"))
+                       FrameImage(img_path, tmp_path / "roi_cache"))  # never the real OUT
     flagged = {i.label_id for i in detect(ctx)}
     assert set(fx["real"]) <= flagged  # shift or hand fix, either is fine
     assert not (set(fx["false_alarm"]) & flagged)
+
+
+def test_peak_at_window_edge_is_not_an_issue(tmp_path):
+    # the stripe is 26 px away: at offset -25 the profile is still rising, not a peak
+    assert detect(line_ctx(tmp_path, stripe_image(), [hpoly(226)])) == []
+    # 24 px away is a real local maximum inside the window
+    [i] = detect(line_ctx(tmp_path, stripe_image(), [hpoly(224)]))
+    assert abs(i.features["off"]) == 24

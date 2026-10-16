@@ -245,8 +245,8 @@ def test_merge_marker_written(out, tmp_path):
 
 def test_final_refuses_originals_dir(out, tmp_path, monkeypatch):
     from annotation_qa import data
-    tag = _round(out, "shape", 1, {}, [])
-    _write(out / "work" / f"{STEM}.json", _export([]))
+    tag = _round(out, "shape", 1, {}, [_frame("f1.png", [])])
+    _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [])]))
     _merge(out, tag, tmp_path)
     monkeypatch.setattr(data, "ORIGINALS_DIR", out / "final")
     with pytest.raises(ValueError):

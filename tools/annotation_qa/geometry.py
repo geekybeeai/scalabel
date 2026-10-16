@@ -116,6 +116,18 @@ def _fit_controls(p0, p3, u, targets, c1_old, c2_old):
     return sol[0], sol[1]
 
 
+def _spans(poly: dict, verts: np.ndarray, cum: np.ndarray):
+    """[(kind, vertex_indices, start dense index, start arc, end arc)] per segment."""
+    out, count = [], 1
+    for kind, idx in _segments(poly):
+        sub = {"vertices": verts[list(idx)].tolist(),
+               "types": "LCCL" if kind == "C" else "LL", "closed": False}
+        i0 = count - 1
+        count += len(dense(sub)) - 1
+        out.append((kind, idx, i0, cum[min(i0, len(cum) - 1)], cum[min(count - 1, len(cum) - 1)]))
+    return out
+
+
 def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
     """Return a copy of ``poly`` moved by signed perpendicular ``offsets``.
 
@@ -135,16 +147,11 @@ def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
     if len(offsets) != len(s):
         raise ValueError(f"expected {len(s)} offsets, got {len(offsets)}")
 
-    # arc position at the end of each segment along the dense curve
     cum = _arc(pts)
-    segs = list(_segments(poly))
-    ends, starts, count = [], [], 1
-    for kind, idx in segs:
-        sub = {"vertices": verts[list(idx)].tolist(),
-               "types": "LCCL" if kind == "C" else "LL", "closed": False}
-        starts.append(count - 1)
-        count += len(dense(sub)) - 1
-        ends.append(cum[min(count - 1, len(cum) - 1)])
+    spans = _spans(poly, verts, cum)
+    segs = [(k, idx) for k, idx, _, _, _ in spans]
+    starts = [i0 for _, _, i0, _, _ in spans]
+    ends = [e for _, _, _, _, e in spans]
 
     def vec_at(si: float):
         """Offset vector at arc position ``si``; mitred at corners."""
@@ -189,3 +196,184 @@ def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
     out = copy.deepcopy(poly)
     out["vertices"] = new.tolist()
     return out
+
+
+# ---- partial shifts (the position fix on part of a line) ----
+SHIFT_RESIDUAL_MAX = 2.0  # px between the shifted curve and its target, anywhere
+BREAK_TOL = 0.5  # px: Douglas-Peucker tolerance for the inserted break vertices
+SHARP_COS = float(np.cos(np.radians(25.0)))  # corner samples: normal turns more than this
+
+
+class ShiftNotRepresentable(ValueError):
+    """The requested offsets cannot be reached by moving this poly's vertices."""
+
+
+def _dp(points: np.ndarray, tol: float) -> list[int]:
+    """Douglas-Peucker: indices (into ``points``) of the interior points to keep."""
+    keep: list[int] = []
+    stack = [(0, len(points) - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        seg = points[b] - points[a]
+        rel = points[a + 1:b] - points[a]
+        ln = float(np.hypot(*seg))
+        if ln < 1e-9:
+            d = np.hypot(rel[:, 0], rel[:, 1])
+        else:
+            d = np.abs(seg[0] * rel[:, 1] - seg[1] * rel[:, 0]) / ln
+        k = int(np.argmax(d))
+        if d[k] > tol:
+            m = a + 1 + k
+            keep.append(m)
+            stack += [(a, m), (m, b)]
+    return sorted(keep)
+
+
+def _split_cubic(p0, p1, p2, p3, ts):
+    """de Casteljau: split one cubic at increasing parameters ``ts`` (0<t<1).
+
+    Returns the vertex list after p0: [c1, c2, mid, c1, c2, mid, ..., c1, c2, p3]."""
+    out, prev = [], 0.0
+    for t in ts:
+        u = (t - prev) / (1.0 - prev)  # parameter inside the remaining piece
+        a, b, c = p0 + u * (p1 - p0), p1 + u * (p2 - p1), p2 + u * (p3 - p2)
+        d, e = a + u * (b - a), b + u * (c - b)
+        m = d + u * (e - d)
+        out += [a, d, m]
+        p0, p1, p2, prev = m, e, c, t
+    return out + [p1, p2, p3]
+
+
+MIN_PIECE = 4  # resampled points per Bezier piece, so its controls can be fitted
+
+
+def insert_breakpoints(poly: dict, offsets: np.ndarray, step: float = 3.0,
+                       tol: float = BREAK_TOL) -> dict:
+    """Copy of ``poly`` with break vertices where the shift target bends: where the
+    offset becomes non-zero or zero again (the edges of the flagged runs) and where
+    it otherwise kinks. L segments get plain L vertices on the segment; a Bezier is
+    split (de Casteljau) into pieces of the same curve. The drawn line is unchanged,
+    so ``offsets`` (one per resampled point) still describe the result."""
+    verts = np.asarray(poly["vertices"], dtype=float)
+    n = len(verts)
+    types = poly.get("types") or "L" * n
+    pts = dense(poly)
+    r = _resample(pts, step)
+    if r is None:
+        raise ValueError("poly too short to shift")
+    s, P, N = r
+    offsets = np.asarray(offsets, dtype=float)
+    if len(offsets) != len(s):
+        raise ValueError(f"expected {len(s)} offsets, got {len(offsets)}")
+    T = P + offsets[:, None] * N
+    nz = np.abs(offsets) > 1e-6
+    cum = _arc(pts)
+    line_ins: dict[int, list[int]] = {}  # vertex index b -> samples inserted before it
+    curve_ins: dict[int, list[float]] = {}  # Bezier start index -> split parameters
+    for kind, idx, i0, s0, s1 in _spans(poly, verts, cum):
+        if kind == "L" and idx[1] == 0:  # the closing seam of a ring: leave it
+            continue
+        k = np.flatnonzero((s > s0 + 0.5 * step) & (s < s1 - 0.5 * step))
+        if not len(k):
+            continue
+        ja, jb = int(np.argmin(np.abs(s - s0))), int(np.argmin(np.abs(s - s1)))
+        chain = np.concatenate([[ja], k, [jb]])
+        if kind == "L":  # straight: keep the target's corners
+            picked = {int(chain[i]) for i in _dp(T[chain], tol)}
+        else:  # curved: keep the offset profile's corners
+            picked = {int(chain[i]) for i in _dp(np.stack([s[chain], offsets[chain]], 1), tol)}
+        for j in k:  # zero <-> non-zero transitions: keep the zero side
+            if nz[j] != nz[j - 1]:
+                picked.add(int(j - 1) if nz[j] else int(j))
+        picked = sorted(j for j in picked if k[0] <= j <= k[-1])
+        if kind == "L":
+            if picked:
+                line_ins[idx[1]] = picked
+            continue
+        keep, last = [], ja  # Bezier pieces need MIN_PIECE samples each
+        for j in picked:
+            if j - last >= MIN_PIECE and jb - j >= MIN_PIECE:
+                keep.append(j)
+                last = j
+        if keep:
+            sub = {"vertices": verts[list(idx)].tolist(), "types": "LCCL", "closed": False}
+            i1 = i0 + len(dense(sub)) - 1  # dense samples i0..i1 are uniform in t
+            ts = np.interp(s[keep], cum[i0:i1 + 1], np.linspace(0.0, 1.0, i1 - i0 + 1))
+            ts = [float(t) for t in ts if 1e-3 < t < 1 - 1e-3]
+            if ts:
+                curve_ins[idx[0]] = sorted(set(ts))
+    if not line_ins and not curve_ins:
+        return copy.deepcopy(poly)
+    new_v: list[list[float]] = []
+    new_t: list[str] = []
+    i = 0
+    while i < n:
+        for j in line_ins.get(i, []):
+            new_v.append(P[j].tolist())
+            new_t.append("L")
+        new_v.append(list(poly["vertices"][i]))
+        new_t.append(types[i])
+        if i in curve_ins and i + 3 <= n - 1:  # (a curve wrapping a ring's seam stays whole)
+            pieces = _split_cubic(*(verts[i + q] for q in range(4)), curve_ins[i])
+            for q, v in enumerate(pieces[:-1]):
+                new_v.append(np.asarray(v).tolist())
+                new_t.append("L" if q % 3 == 2 else "C")
+            i += 3  # the original end point comes next
+            continue
+        i += 1
+    out = copy.deepcopy(poly)
+    out["vertices"], out["types"] = new_v, "".join(new_t)
+    return out
+
+
+def _dist_to_polyline(q: np.ndarray, line: np.ndarray, chunk: int = 64) -> np.ndarray:
+    """Distance from each point of ``q`` to the polyline ``line``."""
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    l2 = np.maximum((ab ** 2).sum(axis=1), 1e-12)
+    out = np.empty(len(q))
+    for c in range(0, len(q), chunk):
+        qq = q[c:c + chunk, None, :]
+        t = np.clip(((qq - a) * ab).sum(axis=2) / l2, 0.0, 1.0)
+        d = np.linalg.norm(a + t[..., None] * ab - qq, axis=2)
+        out[c:c + chunk] = d.min(axis=1)
+    return out
+
+
+def shift_residual(before: dict, after: dict, offsets: np.ndarray, step: float = 3.0) -> float:
+    """Largest distance (px) from a target point P + offset * N of ``before`` to the
+    drawn curve of ``after``. Samples on a sharp corner (where the normal itself is
+    ambiguous) are left out."""
+    r = _resample(dense(before), step)
+    if r is None:
+        return 0.0
+    _s, P, N = r
+    T = P + np.asarray(offsets, dtype=float)[:, None] * N
+    keep = np.ones(len(T), bool)
+    if len(N) >= 3:
+        keep[1:-1] = (N[:-2] * N[2:]).sum(axis=1) >= SHARP_COS
+    line = dense(after)
+    if len(line) < 2 or not keep.any():
+        return 0.0
+    return float(_dist_to_polyline(T[keep], np.asarray(line, dtype=float)).max())
+
+
+def partial_shift(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
+    """``shift_poly`` that also works when only part of the line is offset: break
+    vertices are inserted first, then the residual against the target is checked.
+    Raises ShiftNotRepresentable when it is over SHIFT_RESIDUAL_MAX anywhere."""
+    offsets = np.asarray(offsets, dtype=float)
+    split = insert_breakpoints(poly, offsets, step)
+    s_old = _resample(dense(poly), step)[0]
+    s_new = _resample(dense(split), step)[0]
+    # splitting a Bezier refines its dense polyline, which can move the resampled
+    # points a hair along the curve: carry the offsets over by arc fraction
+    offs = np.interp(s_new * (s_old[-1] / s_new[-1]), s_old, offsets)
+    new = shift_poly(split, offs, step)
+    res = shift_residual(poly, new, offsets, step)
+    if res > SHIFT_RESIDUAL_MAX:
+        raise ShiftNotRepresentable(
+            f"partial shift not representable — redraw by hand (residual {res:.1f} px)")
+    return new

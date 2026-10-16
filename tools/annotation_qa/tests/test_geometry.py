@@ -69,3 +69,45 @@ def test_shift_closed_uniform():
 
 def test_shift_closed_smooth():
     assert _max_err(CLOSED, lambda n: 8 * np.sin(np.linspace(0, np.pi, n))) <= 1.5
+
+
+# ---- partial shifts (I2) ----
+def _box(m, lo, hi, off, width=15):
+    per = np.zeros(m)
+    per[lo:hi] = off
+    return np.convolve(np.pad(per, width // 2, mode="edge"), np.ones(width) / width, mode="valid")
+
+
+def test_insert_breakpoints_keeps_the_drawn_curve():
+    from annotation_qa.geometry import _dist_to_polyline, insert_breakpoints
+    poly = {"vertices": [[0, 0], [200, 0], [400, 200], [600, 200], [800, 200]],
+            "types": "LCCLL", "closed": False}
+    pts, _ = resample(dense(poly))
+    m = len(pts)
+    new = insert_breakpoints(poly, _box(m, m // 5, m // 2, 10.0))
+    assert len(new["vertices"]) > len(poly["vertices"])
+    assert new["types"].count("C") > poly["types"].count("C")  # the Bezier was split
+    d = np.asarray(dense(new), float)
+    assert _dist_to_polyline(np.asarray(dense(poly), float), d).max() < 0.3
+    assert _dist_to_polyline(d, np.asarray(dense(poly), float)).max() < 0.3
+
+
+def test_partial_shift_on_bezier_lands_on_target():
+    from annotation_qa.geometry import partial_shift, shift_residual
+    poly = {"vertices": [[0, 0], [300, 0], [500, 300], [800, 300]], "types": "LCCL", "closed": False}
+    pts, nrm = resample(dense(poly))
+    m = len(pts)
+    offs = _box(m, m // 3, 2 * m // 3, -9.0)
+    new = partial_shift(poly, offs)
+    assert shift_residual(poly, new, offs) < 2.0
+    assert np.allclose(new["vertices"][0], [0, 0], atol=1.0)
+    assert np.allclose(new["vertices"][-1], [800, 300], atol=1.0)
+
+
+def test_partial_shift_step_offset_is_not_representable():
+    from annotation_qa.geometry import ShiftNotRepresentable, partial_shift
+    poly = {"vertices": [[0, 0], [300, 0], [500, 300], [800, 300]], "types": "LCCL", "closed": False}
+    m = len(resample(dense(poly))[0])
+    offs = 8.0 * (-1.0) ** np.arange(m)  # flips every sample: finer than any Bezier piece
+    with pytest.raises(ShiftNotRepresentable, match="redraw by hand"):
+        partial_shift(poly, offs)

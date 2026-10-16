@@ -102,7 +102,8 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
         peak, off = float(p[k]), int(prof.offsets[k])
         if np.isnan(near):
             continue
-        if near < NEAR_MAX and peak >= PEAK_MIN and abs(off) > NEAR_R:
+        # |off| == R: the profile is still rising at the window edge, not a local maximum
+        if near < NEAR_MAX and peak >= PEAK_MIN and NEAR_R < abs(off) < R:
             flagged.append((a, b, float(near), peak, off))
     if len(flagged) < MIN_FLAGGED_STRETCHES:
         return None

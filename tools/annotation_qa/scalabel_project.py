@@ -6,8 +6,13 @@ import json
 import uuid
 from email import message_from_bytes
 from pathlib import Path
-from urllib import request
+from urllib import error, request
+from urllib.parse import quote
 
+from annotation_qa.data import REPO_ROOT
+
+PROJECTS_DIR = REPO_ROOT / "local-data/scalabel/projects"  # where the server stores projects
+TASK_SIZE = 50  # same as the original projects, so View A/B task links work the same way
 CATEGORIES = [
     "center_turn_lane", "solid_single_line", "curb_road_edge",
     "dashed_white_line", "double_yellow_line", "without_curb_road_edge",
@@ -43,17 +48,33 @@ def parse_multipart(content_type: str, body: bytes) -> tuple[dict[str, str], dic
     return fields, files
 
 
-def create(items_file: Path, project_name: str, server: str = "http://localhost:8686") -> str:
-    """POST /postProject with an image + polyline2d project; return the dashboard URL."""
+class ProjectExists(Exception):
+    """A project with this name is already stored by the server; nothing was sent."""
+
+
+class ProjectCreateError(Exception):
+    """The server refused or failed the request; the message carries its response body."""
+
+
+def create(items_file: Path, project_name: str, server: str = "http://localhost:8686",
+           projects_dir: Path | None = None) -> str:
+    """POST /postProject with an image + polyline2d project; return the dashboard URL.
+
+    Raises ProjectExists when ``projects_dir/<name>`` exists (the server's storage),
+    ProjectCreateError (with the server's response body) when the POST fails.
+    """
     items_file = Path(items_file)
+    existing = Path(projects_dir or PROJECTS_DIR) / project_name
+    if existing.exists():
+        raise ProjectExists(f"project {project_name} already exists ({existing})")
     data = items_file.read_bytes()
-    n_frames = len(json.loads(data).get("frames", []))
+    json.loads(data)  # a broken items file must not reach the server
     fields = {
         "project_name": project_name,
         "item_type": "image",
         "label_type": "polyline2d",
         "page_title": "2D Lane",
-        "task_size": str(n_frames),
+        "task_size": str(TASK_SIZE),
         "instructions": INSTRUCTIONS,
         "demo_mode": "false",
         "auto_correct": "false",
@@ -65,6 +86,12 @@ def create(items_file: Path, project_name: str, server: str = "http://localhost:
     })
     req = request.Request(server.rstrip("/") + "/postProject", data=body,
                           headers={"Content-Type": ctype}, method="POST")
-    with request.urlopen(req, timeout=300) as resp:
-        resp.read()
-    return f"{server.rstrip('/')}/dashboard?project_name={project_name}"
+    try:
+        with request.urlopen(req, timeout=300) as resp:
+            resp.read()
+    except error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace").strip()
+        raise ProjectCreateError(f"HTTP {e.code} from {server}: {detail or e.reason}") from e
+    except (error.URLError, OSError) as e:
+        raise ProjectCreateError(f"cannot reach {server}: {e}") from e
+    return f"{server.rstrip('/')}/dashboard?project_name={quote(project_name)}"
