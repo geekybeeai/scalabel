@@ -441,7 +441,9 @@ def viewb_html(css: str) -> str:
 .txt{{flex:0 0 220px;width:220px;min-width:0;overflow-wrap:anywhere;font-size:13px}}
 .chg figure{{flex:1 1 0;min-width:0;max-width:calc((100% - 240px)/2);margin:0}}
 .chg figcaption{{font-size:11px;color:#666}}
-.chg img{{display:block;width:100%;height:auto;object-fit:contain}}
+#rows .card{{width:100%;box-sizing:border-box}}
+#rows .meta{{max-width:none;flex:1 1 auto;min-width:0;width:100%}}
+.chg img{{display:block;width:100%;max-width:100%;max-height:none;height:auto;object-fit:contain}}
 @media (max-width:999px){{.chg{{flex-direction:column}}.txt{{flex:none;width:auto}}.chg figure{{max-width:none;width:100%}}}}
 </style></head><body>
 <header><a href="/">&larr; View A</a> &nbsp; <b>View B: final review</b> &nbsp; <select id="round"></select>
