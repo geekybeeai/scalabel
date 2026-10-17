@@ -121,7 +121,7 @@ def test_project_link_uses_task_index(out, repo):
     _write(repo / "local-data/scalabel/projects" / tag / "project.json",
            {"config": {"taskSize": 1}})
     (p,) = build_rows(out, repo)[0]["projects"]
-    assert p["link"].endswith(f"project_name={tag}&task_index=1")
+    assert p["link"].endswith(f"project_name={tag}&task_index=1&item=1")
 
 
 def _serve(out, repo):
@@ -410,3 +410,59 @@ def test_prerender_renders_everything(out, repo, capsys):
     cv2.imwrite(str(repo / "local-data" / "f1.png"), np.full((200, 200, 3), 90, np.uint8))
     _three_changes(out)
     assert prerender(out, repo) == 6 and prerender(out, repo) == 0
+
+
+def _many(out, n, taskSize=None, repo=None, hand=()):
+    frames = [_frame(f"f{i}.png", []) for i in range(n)]
+    ch = {f"f{i}.png": {"a b": {"before": _snap(_label("a b")), "after": None}}
+          for i in (0, 49, 50, 51) if i < n}
+    tag = _round(out, "shape", 1, ch, frames)
+    if taskSize:
+        _write(repo / "local-data/scalabel/projects" / tag / "project.json",
+               {"config": {"taskSize": taskSize}})
+    return tag
+
+
+def test_link_task_index_and_item(out, repo):
+    tag = _many(out, 60, 50, repo)
+    rows = {r["frame_name"]: r for r in build_rows(out, repo)}
+    for i, (t, k) in {0: (0, 1), 49: (0, 50), 50: (1, 1), 51: (1, 2)}.items():
+        (p,) = rows[f"f{i}.png"]["projects"]
+        assert p["link"] == (f"http://localhost:8686/label?project_name={tag}"
+                             f"&task_index={t}&item={k}")
+        assert (p["task_index"], p["item"]) == (t, k)
+
+
+def test_link_default_task_size_and_label_encoded(out, repo):
+    _many(out, 60)  # no project.json -> 50
+    rows = {r["frame_name"]: r for r in build_rows(out, repo)}
+    (c,) = rows["f50.png"]["changes"]
+    assert "task_index=1&item=1&label=a%20b" in c["link"]
+
+
+def test_hand_frame_links(out, repo):
+    tag = _round(out, "position", 1, {}, [_frame("x.png", []), _frame("h.png", [_label("1")])])
+    rows = {r["frame_name"]: r for r in build_rows(out, repo)}
+    (p,) = rows["h.png"]["projects"]
+    assert p["link"].endswith(f"project_name={tag}&task_index=0&item=2")
+
+
+def test_round_order_available_and_page_script(out, repo):
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    from annotation_qa.viewb import viewb_html
+    _many(out, 60, 50, repo)
+    rows = build_rows(out, repo)
+    ordered = sorted([r for r in rows if r["changes"]], key=lambda r: r["projects"][0]["index"])
+    assert [r["frame_name"] for r in ordered] == ["f0.png", "f49.png", "f50.png", "f51.png"]
+    html = viewb_html("")
+    assert 'id="round"' in html and "idxOf" in html and "isContentEditable" in html
+    if not shutil.which("node"):
+        pytest.skip("node not installed")
+    for js in re.findall(r"<script>(.*?)</script>", html, re.S):
+        p = Path(tempfile.mkdtemp()) / "p.js"
+        p.write_text(js)
+        assert subprocess.run(["node", "--check", str(p)]).returncode == 0

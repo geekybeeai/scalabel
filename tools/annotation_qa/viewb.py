@@ -19,7 +19,7 @@ import logging
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import cv2
 import numpy as np
@@ -32,6 +32,7 @@ from annotation_qa.rounds import merged_tags, round_files  # noqa: F401 - re-exp
 
 log = logging.getLogger(__name__)
 SCALABEL = "http://localhost:8686"
+TASK_SIZE = 50  # the review-project creator's task size
 RENDER_SLOTS = threading.Semaphore(2)  # concurrent crop renders (images are up to ~190 MP)
 SAME_TOL = 0.05  # px: Scalabel's export may reformat numbers
 
@@ -144,15 +145,19 @@ def _crop_name(*parts: str) -> str:
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
 
-def _project_link(repo_root: Path, tag: str, index: int) -> str:
+def _project_link(repo_root: Path, tag: str, index: int) -> dict:
+    """Deep link to frame ``index`` (0-based, items-file order) of a review project."""
     size = 0
     try:
         size = int(json.loads((Path(repo_root) / "local-data/scalabel/projects" / tag
                                / "project.json").read_text())["config"]["taskSize"])
     except Exception:  # noqa: BLE001
         pass
-    task = index // size if size > 0 else 0
-    return f"{SCALABEL}/label?project_name={tag}&task_index={task}"
+    if size <= 0:
+        size = TASK_SIZE
+    task, item = index // size, index % size + 1
+    return {"link": f"{SCALABEL}/label?project_name={quote(tag, safe='')}&task_index={task}&item={item}",
+            "index": index, "task_index": task, "item": item}
 
 
 def _work_frames(out: Path, stem: str) -> dict[str, tuple[int, dict]]:
@@ -206,8 +211,11 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                         c["shipped"] = describe(rec.get("before"), now)
                 rw["changes"].append(c)
             if fname in items:
-                rw["projects"].append({"round": r["round"], "project": r["tag"],
-                                       "link": _project_link(repo_root, r["tag"], items[fname][0])})
+                pl = _project_link(repo_root, r["tag"], items[fname][0])
+                rw["projects"].append({"round": r["round"], "project": r["tag"], **pl})
+                for c in rw["changes"]:
+                    if c["round"] == r["round"] and "link" not in c:
+                        c["link"] = pl["link"] + "&label=" + quote(str(c["label_id"]), safe="")
         for fname, (idx, frame) in items.items():
             pre = _labels(frame)
             if is_merged and fname in cur:
@@ -223,7 +231,7 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
             done = _labels(_work_frames(out, r["stem"]).get(fname, (0, frame))[1]) != pre
             rw["hand"].append({"round": r["round"], "done": done})
             rw["projects"].append({"round": r["round"], "project": r["tag"],
-                                   "link": _project_link(repo_root, r["tag"], idx)})
+                                   **_project_link(repo_root, r["tag"], idx)})
     return sorted(rows.values(),
                   key=lambda r: (-len(r["changes"]), r["export_stem"], r["frame_name"]))
 
@@ -339,22 +347,41 @@ const edits=r=>r.review_edits.map(e=>'<div><span class="badge">edited in review<
  +(e.added.length?'added '+e.added.map(esc).join(', '):'')+(e.added.length&&e.deleted.length?'; ':'')
  +(e.deleted.length?'deleted '+e.deleted.map(esc).join(', '):'')+'</div>').join('');
 const flag=c=>c.review?` <span class="badge">${esc(c.review)}</span>`+(c.shipped?' ships as: '+esc(c.shipped):''):'';
-(async()=>{const rows=await (await fetch('/viewb/rows')).json();
- $('#n').textContent=rows.length+' edited frames';
- $('#rows').innerHTML=rows.map(r=>`<div class="card"><div class="meta"><div><b>${esc(r.export_stem)}</b></div>
+const card=r=>`<div class="card" data-i="${r._i}"><div class="meta"><div><b>${esc(r.export_stem)}</b></div>
  <div>${esc(r.frame_name)} &middot; ${r.changes.length} changes</div>
- <div>${r.projects.map(p=>`<a href="${esc(p.link)}" target="_blank">${esc(p.project)}</a>`).join('<br>')}</div>
+ <div>${r.projects.map(p=>`<a href="${esc(p.link)}" target="_blank">${esc(p.project)} (task ${p.task_index}, frame ${p.item})</a>`).join('<br>')}</div>
  ${r.hand.length?'<div><span class="badge">draw by hand</span> '+r.hand.map(h=>esc(h.round)+': '+(h.done?'done':'not done')).join(', ')+'</div>':''}
  ${edits(r)}
- <table>${r.changes.map(c=>`<tr><td>${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}</td><td>label ${esc(c.label_id)}</td><td>${esc(c.what)}${flag(c)}</td>
+ <table>${r.changes.map(c=>`<tr><td>${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}</td><td>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}</td><td>${esc(c.what)}${flag(c)}</td>
  <td><img loading="lazy" src="${esc(c.before_crop)}" title="before"></td><td><img loading="lazy" src="${esc(c.after_crop)}" title="${c.merged?'after review (ships)':'after (proposed)'}"></td></tr>`).join('')}</table>
- </div></div>`).join('');})();
+ </div></div>`;
+let ALL=[],cur=-1;
+const idxOf=(r,t)=>{const p=r.projects.find(p=>p.project===t);return p?p.index:1e9};
+function show(){const t=$('#round').value;
+ let rows=ALL.filter(r=>!t||r.projects.some(p=>p.project===t));
+ if(t)rows=rows.slice().sort((a,b)=>idxOf(a,t)-idxOf(b,t));
+ $('#n').textContent=rows.length+' edited frames'+(t?' (in Scalabel item order)':'');
+ $('#rows').innerHTML=rows.map(card).join('');cur=-1;}
+function go(d){const cs=[...document.querySelectorAll('#rows .card')];if(!cs.length)return;
+ cur=Math.max(0,Math.min(cs.length-1,cur+d));
+ cs.forEach((c,i)=>c.style.outline=i===cur?'3px solid #38f':'');
+ cs[cur].scrollIntoView({block:'start',behavior:'smooth'});}
+document.addEventListener('keydown',e=>{
+ const t=e.target&&e.target.tagName;if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT'||(e.target&&e.target.isContentEditable)||e.ctrlKey||e.metaKey||e.altKey)return;
+ const k=e.key.toLowerCase();
+ if(k==='j')go(1);else if(k==='k')go(-1);
+ else if(k==='o'){const c=document.querySelectorAll('#rows .card')[cur];if(!c)return;
+  const a=c.querySelector('a.open')||c.querySelector('.meta a');if(a)window.open(a.href,'_blank');}});
+(async()=>{ALL=await (await fetch('/viewb/rows')).json();ALL.forEach((r,i)=>r._i=i);
+ const tags=[...new Set(ALL.flatMap(r=>r.projects.map(p=>p.project)))].sort();
+ $('#round').innerHTML='<option value="">all rounds</option>'+tags.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('');
+ $('#round').onchange=show;show();})();
 """
 
 
 def viewb_html(css: str) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Annotation QA View B</title>
 <style>{css}table img{{max-width:420px}}td{{padding:4px 8px;vertical-align:top}}</style></head><body>
-<header><a href="/">&larr; View A</a> &nbsp; <b>View B: final review</b> &nbsp; <span id="n"></span>
-&nbsp; (each change: before left, after right; merged rounds show what will ship)</header><div id="rows"></div>
+<header><a href="/">&larr; View A</a> &nbsp; <b>View B: final review</b> &nbsp; <select id="round"></select> <span id="n"></span>
+&nbsp; (each change: before left, after right; merged rounds show what will ship; J/K next/prev frame, O open in Scalabel)</header><div id="rows"></div>
 <script>{VIEWB_JS}</script></body></html>"""
