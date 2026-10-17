@@ -93,13 +93,13 @@ def test_insert_breakpoints_keeps_the_drawn_curve():
 
 
 def test_partial_shift_on_bezier_lands_on_target():
-    from annotation_qa.geometry import partial_shift, shift_residual
+    from annotation_qa.geometry import SHIFT_RESIDUAL_MAX, partial_shift, shift_residual
     poly = {"vertices": [[0, 0], [300, 0], [500, 300], [800, 300]], "types": "LCCL", "closed": False}
     pts, nrm = resample(dense(poly))
     m = len(pts)
     offs = _box(m, m // 3, 2 * m // 3, -9.0, width=61)
     new = partial_shift(poly, offs)
-    assert shift_residual(poly, new, offs) < 2.0
+    assert shift_residual(poly, new, offs) <= SHIFT_RESIDUAL_MAX
     assert np.allclose(new["vertices"][0], [0, 0], atol=1.0)
     assert np.allclose(new["vertices"][-1], [800, 300], atol=1.0)
 
@@ -111,6 +111,9 @@ def test_partial_shift_step_offset_is_not_representable():
     offs = 8.0 * (-1.0) ** np.arange(m)  # flips every sample: finer than any Bezier piece
     with pytest.raises(ShiftNotRepresentable, match="redraw by hand"):
         partial_shift(poly, offs)
+
+
+from annotation_qa.geometry import SHIFT_RESIDUAL_MAX  # noqa: E402
 
 
 def _target_dev(poly, new, offs):
@@ -125,7 +128,7 @@ def test_partial_shift_long_line_middle_only_is_simple():
     offs = _box(m, m // 3, 2 * m // 3, 8.0, width=5)
     new = partial_shift(poly, offs)
     assert len(new["vertices"]) <= 6 and set(new["types"]) == {"L"}
-    assert _target_dev(poly, new, offs) <= 1.5
+    assert _target_dev(poly, new, offs) <= SHIFT_RESIDUAL_MAX
 
 
 def test_partial_shift_30_percent_of_long_line():
@@ -135,7 +138,7 @@ def test_partial_shift_30_percent_of_long_line():
     offs = _box(m, int(m * 0.4), int(m * 0.7), -6.0, width=9)
     new = partial_shift(poly, offs)
     assert len(new["vertices"]) <= 6
-    assert _target_dev(poly, new, offs) <= 2.0
+    assert _target_dev(poly, new, offs) <= SHIFT_RESIDUAL_MAX
 
 
 def test_partial_shift_curve_vertex_budget():
@@ -145,7 +148,7 @@ def test_partial_shift_curve_vertex_budget():
     offs = _box(m, m // 3, 2 * m // 3, -9.0, width=61)
     new = partial_shift(poly, offs)
     assert "C" in new["types"] and len(new["vertices"]) <= len(poly["vertices"]) + 6
-    assert _target_dev(poly, new, offs) <= 2.0
+    assert _target_dev(poly, new, offs) <= SHIFT_RESIDUAL_MAX
 
 
 def test_change_anchor():

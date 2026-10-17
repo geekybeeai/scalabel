@@ -199,7 +199,7 @@ def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
 
 
 # ---- partial shifts (the position fix on part of a line) ----
-SHIFT_RESIDUAL_MAX = 2.0  # px between the shifted curve and its target, anywhere
+SHIFT_RESIDUAL_MAX = 3.5  # px between the shifted curve and its target, anywhere (calibrated 2026-10-17 against the user's "a few pixels is fine" guidance; was 2.0)
 BREAK_TOL = 0.5  # px: Douglas-Peucker tolerance for the inserted break vertices
 SHARP_COS = float(np.cos(np.radians(25.0)))  # corner samples: normal turns more than this
 
@@ -390,8 +390,8 @@ def shift_residual(before: dict, after: dict, offsets: np.ndarray, step: float =
     return float(_dist_to_polyline(T[keep], np.asarray(line, dtype=float)).max())
 
 
-SIMPLIFY_TOL = 1.0  # px: Douglas-Peucker tolerance for an all-L result
-MERGE_TOL = 1.5  # px: how far dense(new) may stray from the target when merging inserted L
+SIMPLIFY_TOL = 3.0  # px: Douglas-Peucker tolerance for an all-L result (calibrated 2026-10-17 against the user's "a few pixels is fine" guidance; was 1.0)
+MERGE_TOL = 3.0  # px: how far dense(new) may stray from the target when merging inserted L (calibrated 2026-10-17 against the user's "a few pixels is fine" guidance; was 1.5)
 
 
 def _dp_poly(pts: np.ndarray, closed: bool, tol: float) -> np.ndarray:

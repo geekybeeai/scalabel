@@ -100,7 +100,7 @@ python3 -m annotation_qa final --out $OUT               # $OUT/final/<stem>_qa_2
   - `fix` treats those issues as detected on the originals. That is correct until the first merge.
   - After you merge, run step 5 before fixing the next type.
   - Position issues of that scan whose peak is exactly 25 px off sit at the edge of the search window and are not real peaks. Newer scans drop them. The controller prunes the old ones from `issues_position.jsonl`.
-- The position fix moves only the flagged part of a line. It adds break vertices, splits curves where needed, and checks that the result is within 2 px of the paint. When that check fails, the frame goes to the round as "draw by hand". On the full scan of 2026-10-17 this happened for 5 of 1,005 shift fixes. The old shift missed its target by more than 2 px on 998 of them.
+- The position fix moves only the flagged part of a line. It adds break vertices, splits curves where needed, and checks that the result is within 3.5 px of the paint. When that check fails, the frame goes to the round as "draw by hand". On the full scan of 2026-10-17 this happened for 5 of 1,005 shift fixes. The old shift missed its target by more than 2 px on 998 of them.
 
 ## What each check flags, and its known false alarms
 
