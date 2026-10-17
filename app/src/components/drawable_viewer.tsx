@@ -186,6 +186,7 @@ export abstract class DrawableViewer<
               this.forceUpdate()
             }
           }}
+          data-viewer-container="true"
           // overflow hidden: zoom/pan are CSS offsets on the absolutely
           // positioned canvases, so without a clip a zoomed canvas paints
           // over the toolbar row above (Save & Close vanished behind it).

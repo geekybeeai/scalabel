@@ -109,6 +109,8 @@ class PlayerControl extends Component<Props> {
    */
   public render(): React.ReactFragment {
     const { classes } = this.props
+    // Keep the counter in sync with the store (e.g. deep-link navigation)
+    this.currentFrame = this.state.user.select.item + 1
     let playIcon
     if (this.playing) {
       playIcon = fa.faPause

@@ -17,6 +17,7 @@ import { configureStore } from "./configure_store"
 import Session from "./session"
 import { makeSyncMiddleware } from "./sync_middleware"
 import { Synchronizer } from "./synchronizer"
+import { applyDeepLinkWhenReady, parseDeepLink } from "./deep_link"
 import { handleInvalidPage } from "./util"
 
 /**
@@ -96,6 +97,9 @@ export function initSessionForTask(
 
   // Set HTML listeners
   setBodyListeners(store)
+
+  // Optional deep link (?item=<1-based frame>&label=<label id>)
+  applyDeepLinkWhenReady(parseDeepLink(window.location.search))
 }
 
 /**
