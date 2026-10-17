@@ -474,3 +474,54 @@ def test_round_order_available_and_page_script(out, repo):
         p = Path(tempfile.mkdtemp()) / "p.js"
         p.write_text(js)
         assert subprocess.run(["node", "--check", str(p)]).returncode == 0
+
+
+# ---- category-change crops ----
+def _cat_crop(highlight):
+    from types import SimpleNamespace
+    from annotation_qa.imaging import FrameImage
+    from annotation_qa.render import issue_crop
+
+    class Img:
+        def crop(self, x0, y0, x1, y1):
+            return np.full((y1 - y0, x1 - x0, 3), 90, np.uint8)
+    lab = _label("1")
+    iss = SimpleNamespace(anchor=(100, 100), label_id="1", related_label_ids=[],
+                          highlight_category=highlight,
+                          panel_tag=f"after: {highlight}" if highlight else None)
+    return issue_crop(Img(), {"labels": [lab]}, iss)
+
+
+def _count(img, bgr):
+    return int((img == np.array(bgr, np.uint8)).all(axis=2).sum())
+
+
+def test_category_change_crop_uses_category_colours():
+    red = _cat_crop("curb_road_edge")
+    green = _cat_crop("without_curb_road_edge")
+    assert _count(red, (0, 0, 255)) > 100 and _count(red, (0, 220, 0)) == 0
+    assert _count(green, (0, 220, 0)) > 100 and _count(green, (0, 0, 255)) == 0
+    assert _count(red, (255, 0, 255)) == 0
+    assert _count(red, (255, 255, 255)) > 100  # outline and tag text
+
+
+def test_geometry_change_crop_stays_magenta():
+    img = _cat_crop(None)
+    assert _count(img, (255, 0, 255)) > 100 and _count(img, (0, 0, 255)) == 0
+
+
+def test_category_change_specs_and_cache_key(out, repo, tmp_path):
+    from annotation_qa import viewb
+    assert viewb.RENDER_VERSION != "v1"
+    a = _label("1", "without_curb_road_edge")
+    b = _label("1", "curb_road_edge")
+    tag = _round(out, "curb_soft", 1, {"f1.png": {"1": {"before": _snap(a), "after": _snap(b)}}},
+                 [_frame("f1.png", [b])])
+    specs = viewb.frame_specs(out, STEM, "f1.png")
+    sb, sa = specs[(tag, "1", "before")], specs[(tag, "1", "after")]
+    assert sb["issue"].highlight_category == "without_curb_road_edge"
+    assert sa["issue"].highlight_category == "curb_road_edge"
+    assert sb["issue"].panel_tag == "before: without_curb_road_edge"
+    assert sa["issue"].panel_tag == "after: curb_road_edge"
+    assert viewb.class_change(_snap(a), _snap(b)) == "soft edge → CURB"
+    assert viewb.class_change(_snap(b), _snap(a)) == "curb → SOFT EDGE"

@@ -27,7 +27,7 @@ import numpy as np
 from annotation_qa.data import image_path, load_export
 from annotation_qa.geometry import _dist_to_polyline, change_anchor, dense
 from annotation_qa.imaging import FrameImage
-from annotation_qa.render import issue_crop
+from annotation_qa.render import RENDER_VERSION, issue_crop
 from annotation_qa.rounds import merged_tags, round_files  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
@@ -117,6 +117,20 @@ def _moved_curve(before: dict, after: dict) -> float | None:
         worst = max(worst, float(_dist_to_polyline(da, db).max()),
                     float(_dist_to_polyline(db, da).max()))
     return worst
+
+
+_CLASS_WORD = {"curb_road_edge": "CURB", "without_curb_road_edge": "SOFT EDGE"}
+
+
+def _word(cat: str) -> str:
+    return _CLASS_WORD.get(cat) or cat.replace("_", " ").upper()
+
+
+def class_change(before: dict | None, after: dict | None) -> str:
+    """"soft edge → CURB" style text when the category changed, else ""."""
+    if not before or not after or before["category"] == after["category"]:
+        return ""
+    return f"{_word(before['category']).lower()} → {_word(after['category'])}"
 
 
 def describe(before: dict | None, after: dict | None) -> str:
@@ -243,6 +257,7 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                      "verdict": vd.get("verdict", "unverified"),
                      "reasons": vd.get("reasons") or ["not verified yet (run: python3 -m "
                                                       "annotation_qa verify --round <tag>)"],
+                     "class_change": class_change(rec.get("before"), rec.get("after")),
                      "what": describe(rec.get("before"), rec.get("after")),
                      "anchor": rec.get("anchor") or change_anchor(rec.get("before"), rec.get("after")),
                      "merged": is_merged, "review": "", "shipped": "",
@@ -319,10 +334,16 @@ def frame_specs(out: Path, stem: str, frame_name: str) -> dict[tuple[str, str, s
                     if rec.get(side) is not None:
                         labels.append({"id": lid, **rec[side]})
                 frame = {"name": frame_name, "url": base["url"], "labels": labels}
-                key = json.dumps([frame["url"], labels, anchor, lid], sort_keys=True)
+                key = json.dumps([RENDER_VERSION, frame["url"], labels, anchor, lid],
+                                 sort_keys=True)
+                b_, a_ = rec.get("before"), rec.get("after")
+                cat = (rec.get(side) or {}).get("category")
+                hl = cat if (b_ and a_ and b_["category"] != a_["category"]) else None
                 specs[(r["tag"], lid, side)] = {
                     "frame": frame,
-                    "issue": SimpleNamespace(anchor=anchor, label_id=lid, related_label_ids=[]),
+                    "issue": SimpleNamespace(
+                        anchor=anchor, label_id=lid, related_label_ids=[], highlight_category=hl,
+                        panel_tag=f"{side}: {cat}" if hl else None),
                     "dest": out / "viewb" / f"{_crop_name(key)}.jpg"}
     return specs
 
@@ -404,7 +425,7 @@ const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><
  <div>${r.projects.map(p=>`<a href="${esc(p.link)}" target="_blank">${esc(p.project)} (task ${p.task_index}, frame ${p.item})</a>`).join('<br>')}</div>
  ${r.hand.length?'<div><span class="badge">draw by hand</span> '+r.hand.map(h=>esc(h.round)+': '+(h.done?'done':'not done')).join(', ')+'</div>':''}
  ${edits(r)}
- <div class="chgs">${r.changes.map(c=>`<div class="chg"><div class="txt">${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}<br>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}<br>${vbadge(c)}<br>${esc(c.what)}${flag(c)}</div>
+ <div class="chgs">${r.changes.map(c=>`<div class="chg"><div class="txt">${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}<br>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}<br>${vbadge(c)}<br>${c.class_change?`<b style="font-size:15px">${esc(c.class_change)}</b><br>`:''}${esc(c.what)}${flag(c)}</div>
  <figure><figcaption>before</figcaption><a href="${esc(c.before_crop)}" target="_blank"><img loading="lazy" src="${esc(c.before_crop)}" title="before"></a></figure><figure><figcaption>after</figcaption><a href="${esc(c.after_crop)}" target="_blank"><img loading="lazy" src="${esc(c.after_crop)}" title="${c.merged?'after review (ships)':'after (proposed)'}"></a></figure></div>`).join('')}</div>
  </div></div>`;
 let ROWS=[],cur=-1;

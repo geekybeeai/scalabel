@@ -20,6 +20,21 @@ from draw_poly2d import COLORS, DEFAULT_COLOR  # noqa: E402
 MAGENTA = (255, 0, 255)
 CYAN = (255, 255, 0)
 GAP = 8
+RENDER_VERSION = "v2"
+CATEGORY_HILITE = {"curb_road_edge": (0, 0, 255), "without_curb_road_edge": (0, 220, 0)}
+
+
+def hilite_color(category):
+    """Bright colour used for the changed label when its category changed."""
+    return CATEGORY_HILITE.get(category) or COLORS.get(category, DEFAULT_COLOR)
+
+
+def _tag(panel, text):
+    """White text on a dark box, top-left of a panel."""
+    (w, h), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+    cv2.rectangle(panel, (0, 0), (w + 12, h + base + 10), (30, 30, 30), -1)
+    cv2.putText(panel, text, (6, h + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
+                cv2.LINE_AA)
 
 
 def _draw_label(canvas, label, origin, zoom, color, width):
@@ -58,6 +73,13 @@ def issue_crop(image: FrameImage, frame: dict, issue, half: int = 90, zoom: int 
             _draw_label(right, lab, origin, zoom, CYAN, 3)
     for lab in labels:
         if lab["id"] == issue.label_id:
-            _draw_label(right, lab, origin, zoom, MAGENTA, 3)
+            hl = getattr(issue, "highlight_category", None)
+            if hl:
+                _draw_label(right, lab, origin, zoom, (255, 255, 255), 6)
+                _draw_label(right, lab, origin, zoom, hilite_color(hl), 4)
+            else:
+                _draw_label(right, lab, origin, zoom, MAGENTA, 3)
+    if getattr(issue, "panel_tag", None):
+        _tag(right, issue.panel_tag)
     gap = np.full((left.shape[0], GAP, 3), 40, np.uint8)
     return np.hstack([left, gap, right])
