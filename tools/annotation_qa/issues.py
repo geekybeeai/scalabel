@@ -7,13 +7,14 @@ import json
 import logging
 import os
 import random
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 # Calibration (spec: "in a random sample of 30 issues per type, at least about
-# two thirds should be real"). The sample is the fixed seed-0 draw /calibrate shows.
+# two thirds should be real"). The sample is the seed-0 draw /calibrate shows, persisted on first draw.
 CALIBRATION_N = 30
 CALIBRATION_MIN_ANSWERED = 20
 
@@ -139,23 +140,63 @@ def file_sha1(path: Path) -> str:
 
 
 # ---- calibration gate ----
-def calibration_sample(issues: list[Issue]) -> list[Issue]:
-    """The fixed calibration sample: 30 issues drawn with seed 0 from the key-sorted list."""
+def calibration_sample_path(out: Path, issue_type: str) -> Path:
+    return Path(out) / "calibration" / f"sample_{issue_type}.json"
+
+
+def _draw_sample_keys(issues: list[Issue]) -> list[str]:
+    """The first draw: 30 keys with seed 0 from the key-sorted list (all when fewer)."""
     mine = sorted(issues, key=lambda i: i.key)
     if len(mine) > CALIBRATION_N:
         mine = random.Random(0).sample(mine, CALIBRATION_N)
-    return mine
+    return [i.key for i in mine]
 
 
-def calibration_status(issues: list[Issue], marks: dict[str, str]) -> dict:
+def calibration_keys(out: Path, issue_type: str, issues: list[Issue]) -> list[str]:
+    """The type's persisted calibration sample keys (R25); drawn and written on first use.
+
+    OUT/calibration/sample_<type>.json is written atomically the first time (never for a type
+    with no issues) so a later rescan cannot change which issues the user's marks must cover.
+    """
+    path = calibration_sample_path(out, issue_type)
+    try:
+        keys = json.loads(path.read_text())["keys"]
+        if isinstance(keys, list):
+            return [str(k) for k in keys]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    keys = _draw_sample_keys(issues)
+    if keys:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(
+            {"type": issue_type, "keys": keys,
+             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+             "n_issues_at_draw": len(issues)}, indent=1))
+        os.replace(tmp, path)
+    return keys
+
+
+def calibration_sample(out: Path, issue_type: str, issues: list[Issue]) -> list[Issue]:
+    """The live issues of the persisted sample (vanished keys have nothing to show)."""
+    by_key = {i.key: i for i in issues}
+    return [by_key[k] for k in calibration_keys(out, issue_type, issues) if k in by_key]
+
+
+def calibration_status(out: Path, issue_type: str, issues: list[Issue],
+                       marks: dict[str, str]) -> dict:
     """Answered k/n, real count, precision and PASS / FAIL / NOT CALIBRATED.
 
-    PASS needs precision >= 2/3 over the answered issues of the sample, with at
-    least 20 answered (or all of them when the type has fewer than 20 issues).
+    The sample is the persisted one. A key counts while its issue is live or it has a mark
+    (the answer stays valid); an unanswered key whose issue vanished leaves the denominator.
+    PASS needs precision >= 2/3 over the answered keys, with at least 20 answered (or all
+    of them when fewer than 20 count).
     """
-    sample = calibration_sample(issues)
-    n = len(sample)
-    answers = [marks.get(i.key) for i in sample]
+    live = {i.key for i in issues}
+    keys = [k for k in calibration_keys(out, issue_type, issues)
+            if k in live or marks.get(k) in ("real", "false")]
+    n = len(keys)
+    answers = [marks.get(k) for k in keys]
     answers = [a for a in answers if a in ("real", "false")]
     k, real = len(answers), answers.count("real")
     need = min(CALIBRATION_MIN_ANSWERED, n)

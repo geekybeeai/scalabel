@@ -412,9 +412,9 @@ def test_no_round_files_for_stem_without_changes(env):
 
 
 # ---- I10: calibration gate ----
-def _real_refusal(issues, marks, issue_type):
+def _real_refusal(issues, marks, issue_type, out):
     from annotation_qa.issues import calibration_status, format_calibration
-    st = calibration_status(issues, marks)
+    st = calibration_status(out, issue_type, issues, marks)
     return None if st["status"] == "PASS" else format_calibration(issue_type, st)
 
 
@@ -423,32 +423,83 @@ def _many(out, n_issues, answers):
     from annotation_qa.issues import calibration_sample
     iss = [_issue("exportA", "f3.png", f"q{k}", "shape", {"op": "delete"}) for k in range(n_issues)]
     write_issues(out / "issues_shape.jsonl", iss)
-    sample = calibration_sample(iss)
+    sample = calibration_sample(out, "shape", iss)
     write_marks(out / "marks.json", {i.key: a for i, a in zip(sample, answers)})
     return iss
 
 
-def test_calibration_status_numbers():
+def _old_sample(iss):
+    """The pre-R25 algorithm, kept here to pin the first draw."""
+    import random
+    mine = sorted(iss, key=lambda i: i.key)
+    return random.Random(0).sample(mine, 30) if len(mine) > 30 else mine
+
+
+def test_calibration_status_numbers(tmp_path):
     from annotation_qa.issues import calibration_sample, calibration_status
     iss = [_issue("e", "f", f"q{k}", "shape") for k in range(50)]
-    sample = calibration_sample(iss)
-    assert len(sample) == 30 and sample == calibration_sample(list(reversed(iss)))
-    st = calibration_status(iss, {i.key: "real" for i in sample[:5]})
+    sample = calibration_sample(tmp_path, "shape", iss)
+    assert len(sample) == 30 and sample == _old_sample(iss)  # first draw = old algorithm
+    assert sample == calibration_sample(tmp_path, "shape", list(reversed(iss)))
+    st = calibration_status(tmp_path, "shape", iss, {i.key: "real" for i in sample[:5]})
     assert st["status"] == "NOT CALIBRATED" and st["answered"] == 5 and st["n"] == 30
     marks = {i.key: ("real" if k < 14 else "false") for k, i in enumerate(sample[:20])}
-    st = calibration_status(iss, marks)
+    st = calibration_status(tmp_path, "shape", iss, marks)
     assert st["status"] == "PASS" and st["real"] == 14 and st["precision"] == pytest.approx(0.7)
     marks = {i.key: ("real" if k < 13 else "false") for k, i in enumerate(sample[:20])}
-    assert calibration_status(iss, marks)["status"] == "FAIL"  # 13/20 < 2/3
+    assert calibration_status(tmp_path, "shape", iss, marks)["status"] == "FAIL"  # 13/20 < 2/3
     # marks outside the fixed sample do not count
     others = [i for i in iss if i not in sample]
-    assert calibration_status(iss, {i.key: "real" for i in others})["answered"] == 0
+    assert calibration_status(tmp_path, "shape", iss,
+                              {i.key: "real" for i in others})["answered"] == 0
     # a type with fewer than 20 issues is judged once all of them are answered
     few = iss[:3]
-    assert calibration_status(few, {few[0].key: "real", few[1].key: "real"})["status"] == \
-        "NOT CALIBRATED"
-    assert calibration_status(few, {i.key: "real" for i in few})["status"] == "PASS"
+    d = tmp_path / "few"
+    assert calibration_status(d, "shape", few, {few[0].key: "real", few[1].key: "real"})[
+        "status"] == "NOT CALIBRATED"
+    assert calibration_status(d, "shape", few, {i.key: "real" for i in few})["status"] == "PASS"
 
+
+def test_sample_persisted_file_and_stable_after_issue_change(tmp_path):
+    from annotation_qa.issues import calibration_sample, calibration_status
+    iss = [_issue("e", "f", f"q{k}", "shape") for k in range(50)]
+    sample = calibration_sample(tmp_path, "shape", iss)
+    meta = json.loads((tmp_path / "calibration" / "sample_shape.json").read_text())
+    assert meta["type"] == "shape" and meta["keys"] == [i.key for i in sample]
+    assert meta["n_issues_at_draw"] == 50 and meta["created"]
+    marks = {i.key: "real" for i in sample[:25]}
+    before = calibration_status(tmp_path, "shape", iss, marks)
+    changed = iss[10:] + [_issue("e", "f", f"new{k}", "shape") for k in range(40)]  # rescan
+    assert [i.key for i in calibration_sample(tmp_path, "shape", changed)] == \
+        [i.key for i in sample if i in changed]
+    live_keys = {i.key for i in changed}
+    after = calibration_status(tmp_path, "shape", changed, marks)
+    assert after["answered"] == 25 and after["status"] == before["status"] == "PASS"
+    assert after["n"] == len([i for i in sample if i.key in live_keys or i.key in marks])
+
+
+def test_vanished_answered_counts_unanswered_dropped(tmp_path):
+    from annotation_qa.issues import calibration_sample, calibration_status
+    iss = [_issue("e", "f", f"q{k}", "shape") for k in range(30)]
+    sample = calibration_sample(tmp_path, "shape", iss)
+    gone_answered, gone_open = sample[0], sample[1]
+    live = [i for i in iss if i not in (gone_answered, gone_open)]
+    marks = {gone_answered.key: "real"}
+    st = calibration_status(tmp_path, "shape", live, marks)
+    assert st["n"] == 29 and st["answered"] == 1 and st["real"] == 1  # open one dropped
+    marks.update({i.key: "real" for i in live[:19]})
+    st = calibration_status(tmp_path, "shape", live, marks)
+    assert st["answered"] == 20 and st["need"] == 20 and st["status"] == "PASS"
+
+
+def test_fix_gate_uses_persisted_sample(tmp_path):
+    from annotation_qa.issues import calibration_sample
+    iss = [_issue("e", "f", f"q{k}", "shape") for k in range(50)]
+    sample = calibration_sample(tmp_path, "shape", iss)
+    marks = {i.key: "real" for i in sample[:20]}
+    assert _real_refusal(iss, marks, "shape", tmp_path) is None
+    rescanned = iss[5:] + [_issue("e", "f", f"n{k}", "shape") for k in range(30)]
+    assert _real_refusal(rescanned, marks, "shape", tmp_path) is None  # not reset
 
 def test_fix_refused_unless_calibrated(env, monkeypatch):
     orig, out, _ = env

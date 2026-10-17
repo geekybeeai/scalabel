@@ -28,7 +28,7 @@ python3 -m annotation_qa scan --exports $EXP --out $OUT \
 python3 -m annotation_qa review --out $OUT        # http://localhost:8790/
 ```
 
-1. Open `/calibrate?type=T` and answer YES/NO for the fixed sample of 30. Each tab and the calibrate page show `answered k/n, real r, precision p` and **PASS / FAIL / NOT CALIBRATED**.
+1. Open `/calibrate?type=T` and answer YES/NO for the fixed sample of 30 (drawn once and kept in `calibration/sample_<type>.json`, so a later `scan --since-merge` does not change it). Each tab and the calibrate page show `answered k/n, real r, precision p` and **PASS / FAIL / NOT CALIBRATED**.
    - PASS means precision of at least 2/3 with at least 20 answered. A type with fewer than 20 issues needs all of them answered.
 2. On the type's tab, mark cards **Real** or **False alarm**. You can also bulk-mark everything at or above a confidence as real; the page asks you to confirm the count first.
 3. Only issues marked real are fixed.

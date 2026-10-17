@@ -153,7 +153,7 @@ def test_calibration_status_endpoint(tmp_path, repo):
     out.mkdir()
     iss = [_issue("shape", i, 0.5) for i in range(40)]
     (out / "issues_shape.jsonl").write_text("".join(json.dumps(i.__dict__) + "\n" for i in iss))
-    sample = calibration_sample(iss)
+    sample = calibration_sample(out, "shape", iss)
     write_marks(out / "marks.json", {i.key: ("real" if k < 15 else "false")
                                      for k, i in enumerate(sample[:21])})
     root, orig = repo

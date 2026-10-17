@@ -100,9 +100,10 @@ def _snapshot(label: dict | None) -> dict | None:
     return {"category": label["category"], "poly2d": copy.deepcopy(label.get("poly2d"))}
 
 
-def calibration_refusal(issues: list[Issue], marks: dict[str, str], issue_type: str) -> str | None:
+def calibration_refusal(issues: list[Issue], marks: dict[str, str], issue_type: str,
+                        out: Path) -> str | None:
     """None when the type's calibration sample PASSes, else the numbers (I10)."""
-    st = calibration_status(issues, marks)
+    st = calibration_status(out, issue_type, issues, marks)
     if st["status"] == "PASS":
         return None
     return (format_calibration(issue_type, st)
@@ -141,7 +142,7 @@ def _staleness(out: Path, issue_type: str, stem: str, meta: dict | None) -> str 
 def _guards(issue_type: str, out: Path, version: int, stems: list[str],
             issues: list[Issue], marks: dict[str, str]) -> list[str]:
     reasons = []
-    cal = calibration_refusal(issues, marks, issue_type)
+    cal = calibration_refusal(issues, marks, issue_type, out)
     if cal:
         reasons.append(cal)
     merged = rounds.merged_tags(out)

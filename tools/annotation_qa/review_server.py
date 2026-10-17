@@ -97,12 +97,12 @@ class ReviewState:
 
     def calibration(self, t: str) -> list[dict]:
         """The fixed calibration sample of type ``t`` (the one `fix` is gated on)."""
-        return [self.card(i, {}) for i in calibration_sample(self.issues(t).get(t, []))]
+        return [self.card(i, {}) for i in calibration_sample(self.out, t, self.issues(t).get(t, []))]
 
     def calibration_status(self) -> dict[str, dict]:
         """type -> answered k/n, real, precision and PASS / FAIL / NOT CALIBRATED."""
         marks = read_marks(self.out / "marks.json")
-        return {t: calibration_status(v, marks) for t, v in self.issues().items() if v}
+        return {t: calibration_status(self.out, t, v, marks) for t, v in self.issues().items() if v}
 
     def save(self, new: dict[str, str]) -> int:
         with self.lock:
