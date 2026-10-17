@@ -16,7 +16,12 @@ export interface DeepLink {
   item: number | null
   /** Label id, or null when not requested */
   label: string | null
+  /** Image-pixel focus point, or null when absent/invalid */
+  point: { x: number; y: number } | null
 }
+
+/** Side (image px) of the window shown when focusing on an x/y point */
+export const POINT_WINDOW = 400
 
 /**
  * Parse the optional `item` (1-based) and `label` query params
@@ -36,7 +41,16 @@ export function parseDeepLink(search: string): DeepLink {
   const labelParam = params.get(QueryArg.LABEL)
   const label =
     labelParam !== null && labelParam.trim() !== "" ? labelParam.trim() : null
-  return { item, label }
+  const num = (v: string | null): number | null => {
+    if (v === null || !/^-?\d+(\.\d+)?$/.test(v.trim())) {
+      return null
+    }
+    return parseFloat(v.trim())
+  }
+  const x = num(params.get("x"))
+  const y = num(params.get("y"))
+  const point = x !== null && y !== null ? { x, y } : null
+  return { item, label, point }
 }
 
 /**
@@ -131,6 +145,38 @@ export function bboxToViewport(
 }
 
 /**
+ * Viewport centred on an image point showing about `windowPx` image px
+ * across (clamped to [fit image, MAX_SCALE]).
+ *
+ * @param x
+ * @param y
+ * @param imageW
+ * @param imageH
+ * @param rectW
+ * @param rectH
+ * @param windowPx
+ */
+export function pointToViewport(
+  x: number,
+  y: number,
+  imageW: number,
+  imageH: number,
+  rectW: number,
+  rectH: number,
+  windowPx: number = POINT_WINDOW
+): { viewScale: number; displayLeft: number; displayTop: number } {
+  const h = windowPx / 2
+  return bboxToViewport(
+    [x - h, y - h, x + h, y + h],
+    imageW,
+    imageH,
+    rectW,
+    rectH,
+    0
+  )
+}
+
+/**
  * Apply the deep link once the task, frame image and viewer are ready.
  * Only changes selection and view; never touches labels or task data.
  * Must be called after Session.store is set.
@@ -190,27 +236,52 @@ export function applyDeepLinkWhenReady(link: DeepLink): void {
       link.label !== null && link.label in items[target].labels
         ? link.label
         : null
-    if (labelId === null) {
+    const image = Session.images[target]?.[config.sensor]
+    const point =
+      link.point !== null &&
+      image !== undefined &&
+      link.point.x >= 0 &&
+      link.point.y >= 0 &&
+      link.point.x <= image.width &&
+      link.point.y <= image.height
+        ? link.point
+        : null
+    if (labelId === null && point === null) {
       return
     }
-    Session.dispatch(changeSelect({ labels: { [target]: [labelId] } }))
-    const bbox = getLabelBBox(items[target], labelId)
-    const image = Session.images[target]?.[config.sensor]
+    if (labelId !== null) {
+      Session.dispatch(changeSelect({ labels: { [target]: [labelId] } }))
+    }
+    const bbox = labelId !== null ? getLabelBBox(items[target], labelId) : null
     const container = document.querySelector("[data-viewer-container]")
-    if (bbox === null || image === undefined || container === null) {
+    if (
+      (bbox === null && point === null) ||
+      image === undefined ||
+      container === null
+    ) {
       return
     }
     const rect = container.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) {
       return
     }
-    const vp = bboxToViewport(
-      bbox,
-      image.width,
-      image.height,
-      rect.width,
-      rect.height
-    )
+    const vp =
+      point !== null
+        ? pointToViewport(
+            point.x,
+            point.y,
+            image.width,
+            image.height,
+            rect.width,
+            rect.height
+          )
+        : bboxToViewport(
+            bbox as [number, number, number, number],
+            image.width,
+            image.height,
+            rect.width,
+            rect.height
+          )
     Session.dispatch(changeViewerConfig(viewerId, { ...config, ...vp }))
   }
   Session.subscribe(attempt)

@@ -4,7 +4,8 @@
 import {
   bboxToViewport,
   getLabelBBox,
-  parseDeepLink
+  parseDeepLink,
+  pointToViewport
 } from "../../src/common/deep_link"
 import { ItemType } from "../../src/types/state"
 
@@ -12,17 +13,31 @@ describe("parseDeepLink", () => {
   test("item is 1-based and converted to an index", () => {
     expect(parseDeepLink("?project_name=p&item=6&label=abc")).toEqual({
       item: 5,
-      label: "abc"
+      label: "abc",
+      point: null
     })
   })
   test("both params are optional / invalid ignored", () => {
     expect(parseDeepLink("?project_name=p")).toEqual({
       item: null,
-      label: null
+      label: null,
+      point: null
     })
-    expect(parseDeepLink("?item=0&label=")).toEqual({ item: null, label: null })
-    expect(parseDeepLink("?item=x")).toEqual({ item: null, label: null })
-    expect(parseDeepLink("?item=3")).toEqual({ item: 2, label: null })
+    expect(parseDeepLink("?item=0&label=")).toEqual({
+      item: null,
+      label: null,
+      point: null
+    })
+    expect(parseDeepLink("?item=x")).toEqual({
+      item: null,
+      label: null,
+      point: null
+    })
+    expect(parseDeepLink("?item=3")).toEqual({
+      item: 2,
+      label: null,
+      point: null
+    })
   })
 })
 
@@ -78,5 +93,28 @@ describe("bboxToViewport", () => {
     const vp = bboxToViewport([0, 0, 10, 10], 8000, 6000, 1000, 800)
     expect(vp.displayLeft).toBeCloseTo(0)
     expect(vp.displayTop).toBeCloseTo(0)
+  })
+})
+
+describe("x/y point", () => {
+  test("parse valid and invalid", () => {
+    expect(parseDeepLink("?item=2&x=10.5&y=300").point).toEqual({
+      x: 10.5,
+      y: 300
+    })
+    expect(parseDeepLink("?x=10").point).toBeNull()
+    expect(parseDeepLink("?x=a&y=3").point).toBeNull()
+  })
+  test("pointToViewport shows ~400px window, centred, clamped", () => {
+    const vp = pointToViewport(1000, 500, 2000, 1000, 1000, 500)
+    // fit = 0.5 css px / img px; wanted = 500/400 = 1.25 -> scale 2.5
+    expect(vp.viewScale).toBeCloseTo(2.5)
+    // centre: rectW/2 - cx*ratio = 500 - 1000*1.25
+    expect(vp.displayLeft).toBeCloseTo(-750)
+    expect(vp.displayTop).toBeCloseTo(-375)
+    const far = pointToViewport(1000, 500, 100000, 50000, 1000, 500)
+    expect(far.viewScale).toBe(60)
+    const wide = pointToViewport(1000, 500, 200, 100, 1000, 500, 4000)
+    expect(wide.viewScale).toBe(1)
   })
 })
