@@ -92,7 +92,7 @@ def test_issues_api_sorted_with_link_and_other_count(server):
     assert [i["confidence"] for i in items] == [0.9, 0.8, 0.5]
     first = items[0]
     assert first["others"] == 3 and first["frame_no"] == 1  # f1.png is index 2 -> task 1, frame 1
-    assert first["link"] == "http://localhost:8686/label?project_name=proj&task_index=1&item=1&label=0"
+    assert first["link"] == "http://localhost:8686/label?project_name=proj&task_index=1&item=1&label=0&x=1&y=2"
     assert first["project_found"] is True
     assert first["crop"].startswith("/crops/shape/")
 

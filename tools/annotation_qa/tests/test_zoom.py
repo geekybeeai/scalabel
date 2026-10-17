@@ -119,6 +119,7 @@ def test_link_has_item_and_label(server):
     assert "&item=1&label=2" in c["link"]  # c.png is index 2, taskSize 2 -> frame 1 of task 1
     assert "task_index=1" in c["link"] and "label=" not in c["frame_link"]
     assert c["frame_link"].endswith("&item=1")
+    assert c["link"].endswith("&x=200&y=100") and "&x=" not in c["frame_link"]
 
 
 def test_grouping_order_and_numbering(server, env):

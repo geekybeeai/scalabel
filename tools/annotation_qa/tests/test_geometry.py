@@ -97,7 +97,7 @@ def test_partial_shift_on_bezier_lands_on_target():
     poly = {"vertices": [[0, 0], [300, 0], [500, 300], [800, 300]], "types": "LCCL", "closed": False}
     pts, nrm = resample(dense(poly))
     m = len(pts)
-    offs = _box(m, m // 3, 2 * m // 3, -9.0)
+    offs = _box(m, m // 3, 2 * m // 3, -9.0, width=61)
     new = partial_shift(poly, offs)
     assert shift_residual(poly, new, offs) < 2.0
     assert np.allclose(new["vertices"][0], [0, 0], atol=1.0)
@@ -111,3 +111,51 @@ def test_partial_shift_step_offset_is_not_representable():
     offs = 8.0 * (-1.0) ** np.arange(m)  # flips every sample: finer than any Bezier piece
     with pytest.raises(ShiftNotRepresentable, match="redraw by hand"):
         partial_shift(poly, offs)
+
+
+def _target_dev(poly, new, offs):
+    from annotation_qa.geometry import shift_residual
+    return shift_residual(poly, new, offs)
+
+
+def test_partial_shift_long_line_middle_only_is_simple():
+    from annotation_qa.geometry import partial_shift
+    poly = {"vertices": [[0, 0], [600, 0]], "types": "LL", "closed": False}
+    m = len(resample(dense(poly))[0])
+    offs = _box(m, m // 3, 2 * m // 3, 8.0, width=5)
+    new = partial_shift(poly, offs)
+    assert len(new["vertices"]) <= 6 and set(new["types"]) == {"L"}
+    assert _target_dev(poly, new, offs) <= 1.5
+
+
+def test_partial_shift_30_percent_of_long_line():
+    from annotation_qa.geometry import partial_shift
+    poly = {"vertices": [[0, 0], [3000, 0]], "types": "LL", "closed": False}
+    m = len(resample(dense(poly))[0])
+    offs = _box(m, int(m * 0.4), int(m * 0.7), -6.0, width=9)
+    new = partial_shift(poly, offs)
+    assert len(new["vertices"]) <= 6
+    assert _target_dev(poly, new, offs) <= 2.0
+
+
+def test_partial_shift_curve_vertex_budget():
+    from annotation_qa.geometry import partial_shift
+    poly = {"vertices": [[0, 0], [300, 0], [500, 300], [800, 300]], "types": "LCCL", "closed": False}
+    m = len(resample(dense(poly))[0])
+    offs = _box(m, m // 3, 2 * m // 3, -9.0, width=61)
+    new = partial_shift(poly, offs)
+    assert "C" in new["types"] and len(new["vertices"]) <= len(poly["vertices"]) + 6
+    assert _target_dev(poly, new, offs) <= 2.0
+
+
+def test_change_anchor():
+    from annotation_qa.geometry import change_anchor
+    line = {"vertices": [[0, 0], [100, 0]], "types": "LL", "closed": False}
+    moved = {"vertices": [[0, 0], [50, 0], [50, 20], [60, 20], [60, 0], [100, 0]],
+             "types": "LLLLLL", "closed": False}
+    b = {"category": "a", "poly2d": [line]}
+    x, y = change_anchor(b, {"category": "a", "poly2d": [moved]})
+    assert 50 <= x <= 60 and y == 0
+    for a in (None, {"category": "b", "poly2d": [line]}):
+        mx, my = change_anchor(b, a)
+        assert abs(mx - 50) <= 3 and my == 0

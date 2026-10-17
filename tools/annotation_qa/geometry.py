@@ -249,8 +249,32 @@ def _split_cubic(p0, p1, p2, p3, ts):
 MIN_PIECE = 4  # resampled points per Bezier piece, so its controls can be fitted
 
 
+MAX_BEZIER_PIECES = 3  # a Bezier is never split into more pieces than this
+
+
+def _cap_splits(keep: list[int], chain: np.ndarray, s: np.ndarray, offsets: np.ndarray,
+                k: int) -> list[int]:
+    """At most ``k`` of the sample indices ``keep``: greedily the one the offset profile
+    (arc length -> offset, linearly interpolated between the chosen ones) fits worst."""
+    chosen: list[int] = []
+    ends = [int(chain[0]), int(chain[-1])]
+    while len(chosen) < k and len(chosen) < len(keep):
+        knots = sorted(ends + chosen)
+        approx = np.interp(s[chain], s[knots], offsets[knots])
+        err = np.abs(approx - offsets[chain])
+        best = max((j for j in keep if j not in chosen),
+                   key=lambda j: err[int(np.searchsorted(chain, j))])
+        chosen.append(best)
+    return sorted(chosen)
+
+
 def insert_breakpoints(poly: dict, offsets: np.ndarray, step: float = 3.0,
                        tol: float = BREAK_TOL) -> dict:
+    return _insert(poly, offsets, step, tol)[0]
+
+
+def _insert(poly: dict, offsets: np.ndarray, step: float = 3.0,
+            tol: float = BREAK_TOL) -> tuple[dict, list[bool]]:
     """Copy of ``poly`` with break vertices where the shift target bends: where the
     offset becomes non-zero or zero again (the edges of the flagged runs) and where
     it otherwise kinks. L segments get plain L vertices on the segment; a Bezier is
@@ -297,6 +321,8 @@ def insert_breakpoints(poly: dict, offsets: np.ndarray, step: float = 3.0,
             if j - last >= MIN_PIECE and jb - j >= MIN_PIECE:
                 keep.append(j)
                 last = j
+        if len(keep) > MAX_BEZIER_PIECES - 1:
+            keep = _cap_splits(keep, chain, s, offsets, MAX_BEZIER_PIECES - 1)
         if keep:
             sub = {"vertices": verts[list(idx)].tolist(), "types": "LCCL", "closed": False}
             i1 = i0 + len(dense(sub)) - 1  # dense samples i0..i1 are uniform in t
@@ -305,27 +331,31 @@ def insert_breakpoints(poly: dict, offsets: np.ndarray, step: float = 3.0,
             if ts:
                 curve_ins[idx[0]] = sorted(set(ts))
     if not line_ins and not curve_ins:
-        return copy.deepcopy(poly)
+        return copy.deepcopy(poly), [False] * n
     new_v: list[list[float]] = []
     new_t: list[str] = []
+    ins: list[bool] = []
     i = 0
     while i < n:
         for j in line_ins.get(i, []):
             new_v.append(P[j].tolist())
             new_t.append("L")
+            ins.append(True)
         new_v.append(list(poly["vertices"][i]))
         new_t.append(types[i])
+        ins.append(False)
         if i in curve_ins and i + 3 <= n - 1:  # (a curve wrapping a ring's seam stays whole)
             pieces = _split_cubic(*(verts[i + q] for q in range(4)), curve_ins[i])
             for q, v in enumerate(pieces[:-1]):
                 new_v.append(np.asarray(v).tolist())
                 new_t.append("L" if q % 3 == 2 else "C")
+                ins.append(False)
             i += 3  # the original end point comes next
             continue
         i += 1
     out = copy.deepcopy(poly)
     out["vertices"], out["types"] = new_v, "".join(new_t)
-    return out
+    return out, ins
 
 
 def _dist_to_polyline(q: np.ndarray, line: np.ndarray, chunk: int = 64) -> np.ndarray:
@@ -360,12 +390,60 @@ def shift_residual(before: dict, after: dict, offsets: np.ndarray, step: float =
     return float(_dist_to_polyline(T[keep], np.asarray(line, dtype=float)).max())
 
 
+SIMPLIFY_TOL = 1.0  # px: Douglas-Peucker tolerance for an all-L result
+MERGE_TOL = 1.5  # px: how far dense(new) may stray from the target when merging inserted L
+
+
+def _dp_poly(pts: np.ndarray, closed: bool, tol: float) -> np.ndarray:
+    pts = np.asarray(pts, dtype=float)
+    if not closed:
+        return pts[[0] + _dp(pts, tol) + [len(pts) - 1]]
+    if len(pts) <= 3:
+        return pts
+    far = int(np.argmax(np.hypot(*(pts - pts[0]).T)))
+    a, b = pts[:far + 1], np.vstack([pts[far:], pts[:1]])
+    ia = [0] + _dp(a, tol) + [far]
+    ib = [far] + [far + k for k in _dp(b, tol)]
+    return pts[ia + ib[1:]]
+
+
+def _simplify(poly: dict, new: dict, offsets: np.ndarray, ins: list[bool], step: float) -> dict:
+    """Fewer vertices for a successful shift, while the residual stays in bounds."""
+    types = poly.get("types") or "L" * len(poly["vertices"])
+    if "C" not in types:
+        for tol in (SIMPLIFY_TOL, 0.5):
+            cand = copy.deepcopy(new)
+            v = _dp_poly(np.asarray(new["vertices"], float), bool(new.get("closed")), tol)
+            if len(v) >= len(new["vertices"]):
+                break
+            cand["vertices"], cand["types"] = v.tolist(), "L" * len(v)
+            if shift_residual(poly, cand, offsets, step) <= SHIFT_RESIDUAL_MAX:
+                return cand
+        return new
+    cur_v, cur_t, cur_i = list(new["vertices"]), str(new["types"]), list(ins)
+    j = 0
+    while j < len(cur_v):  # one pass: drop inserted L vertices that cost < MERGE_TOL
+        if cur_i[j] and cur_t[j] == "L":
+            cand = copy.deepcopy(new)
+            cand["vertices"] = cur_v[:j] + cur_v[j + 1:]
+            cand["types"] = cur_t[:j] + cur_t[j + 1:]
+            if shift_residual(poly, cand, offsets, step) <= MERGE_TOL:
+                cur_v, cur_t, cur_i = cand["vertices"], cand["types"], cur_i[:j] + cur_i[j + 1:]
+                continue
+        j += 1
+    out = copy.deepcopy(new)
+    out["vertices"], out["types"] = cur_v, cur_t
+    return out
+
+
 def partial_shift(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
     """``shift_poly`` that also works when only part of the line is offset: break
-    vertices are inserted first, then the residual against the target is checked.
-    Raises ShiftNotRepresentable when it is over SHIFT_RESIDUAL_MAX anywhere."""
+    vertices are inserted first, then the residual against the target is checked,
+    then the result is simplified (all-L: Douglas-Peucker; curves: merge the inserted
+    vertices that are not needed). Raises ShiftNotRepresentable when it is over
+    SHIFT_RESIDUAL_MAX anywhere."""
     offsets = np.asarray(offsets, dtype=float)
-    split = insert_breakpoints(poly, offsets, step)
+    split, ins = _insert(poly, offsets, step)
     s_old = _resample(dense(poly), step)[0]
     s_new = _resample(dense(split), step)[0]
     # splitting a Bezier refines its dense polyline, which can move the resampled
@@ -376,4 +454,47 @@ def partial_shift(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
     if res > SHIFT_RESIDUAL_MAX:
         raise ShiftNotRepresentable(
             f"partial shift not representable — redraw by hand (residual {res:.1f} px)")
-    return new
+    final = _simplify(poly, new, offsets, ins, step)
+    if shift_residual(poly, final, offsets, step) > SHIFT_RESIDUAL_MAX:
+        return new
+    return final
+
+
+def change_anchor(before: dict | None, after: dict | None) -> list[int] | None:
+    """[x, y] (ints) where a change is: the point of the BEFORE curve farthest from the
+    AFTER curve; the before-label's dense midpoint for a delete or a category-only change
+    (nothing moved); the after midpoint for an added label. Snapshots are
+    ``{"category", "poly2d"}``. None when there is no geometry."""
+    def polys(s):
+        out = []
+        for p in (s or {}).get("poly2d") or []:
+            if len(p.get("vertices") or []) < 2:
+                continue
+            d = np.asarray(dense(p), float)
+            r = _resample(d, max(3.0, float(_arc(d)[-1]) / 3000.0))
+            out.append(r[1] if r is not None else d)
+        return out
+
+    def mid(ps):
+        if not ps:
+            return None
+        p = max(ps, key=lambda q: float(_arc(q)[-1]))
+        c = _arc(p)
+        k = int(np.searchsorted(c, c[-1] / 2.0))
+        return [int(round(p[min(k, len(p) - 1)][0])), int(round(p[min(k, len(p) - 1)][1]))]
+
+    pb, pa = polys(before), polys(after)
+    if not pb:
+        return mid(pa)
+    if not pa:
+        return mid(pb)
+    best, at = 0.0, None
+    for p in pb:
+        q = p
+        d = np.min([_dist_to_polyline(q, a) for a in pa if len(a) >= 2] or [np.zeros(len(q))], axis=0)
+        k = int(np.argmax(d))
+        if d[k] > best:
+            best, at = float(d[k]), q[k]
+    if at is None or best < 0.05:
+        return mid(pb)
+    return [int(round(at[0])), int(round(at[1]))]

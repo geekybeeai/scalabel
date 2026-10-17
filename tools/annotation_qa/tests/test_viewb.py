@@ -440,6 +440,14 @@ def test_link_default_task_size_and_label_encoded(out, repo):
     assert "task_index=1&item=1&label=a%20b" in c["link"]
 
 
+def test_change_link_carries_anchor(out, repo):
+    frames = [_frame("f0.png", [])]
+    rec = {"before": _snap(_label("7")), "after": None, "anchor": [123, 45]}
+    _round(out, "shape", 1, {"f0.png": {"7": rec}}, frames)
+    (c,) = build_rows(out, repo)[0]["changes"]
+    assert c["anchor"] == [123, 45] and c["link"].endswith("&label=7&x=123&y=45")
+
+
 def test_hand_frame_links(out, repo):
     tag = _round(out, "position", 1, {}, [_frame("x.png", []), _frame("h.png", [_label("1")])])
     rows = {r["frame_name"]: r for r in build_rows(out, repo)}

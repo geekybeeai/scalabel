@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 
 from annotation_qa.data import image_path, load_export
-from annotation_qa.geometry import _dist_to_polyline, dense
+from annotation_qa.geometry import _dist_to_polyline, change_anchor, dense
 from annotation_qa.imaging import FrameImage
 from annotation_qa.render import issue_crop
 from annotation_qa.rounds import merged_tags, round_files  # noqa: F401 - re-exported
@@ -200,6 +200,7 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                 q = urlencode({"stem": r["stem"], "frame": fname, "label": lid, "round": r["tag"]})
                 c = {"round": r["round"], "issue_type": r["type"], "label_id": lid,
                      "what": describe(rec.get("before"), rec.get("after")),
+                     "anchor": rec.get("anchor") or change_anchor(rec.get("before"), rec.get("after")),
                      "merged": is_merged, "review": "", "shipped": "",
                      "before_crop": f"/viewb/crop?{q}&side=before",
                      "after_crop": f"/viewb/crop?{q}&side=after"}
@@ -216,6 +217,8 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                 for c in rw["changes"]:
                     if c["round"] == r["round"] and "link" not in c:
                         c["link"] = pl["link"] + "&label=" + quote(str(c["label_id"]), safe="")
+                        if c.get("anchor"):
+                            c["link"] += f"&x={c['anchor'][0]}&y={c['anchor'][1]}"
         for fname, (idx, frame) in items.items():
             pre = _labels(frame)
             if is_merged and fname in cur:

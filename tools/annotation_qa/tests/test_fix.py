@@ -75,6 +75,7 @@ def test_apply_only_real_marked(env):
     rec = ch["f1.png"]["a"]
     assert rec["before"]["category"] == "solid_single_line"
     assert rec["after"]["category"] == "curb_road_edge"
+    assert isinstance(rec["anchor"], list) and len(rec["anchor"]) == 2
     assert (out / "work" / "exportA.json").exists()
 
 

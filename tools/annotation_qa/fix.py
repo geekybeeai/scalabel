@@ -13,7 +13,7 @@ import numpy as np
 
 from annotation_qa import rounds
 from annotation_qa.data import ORIGINALS_DIR, load_export, save_export
-from annotation_qa.geometry import ShiftNotRepresentable, _segments, partial_shift
+from annotation_qa.geometry import ShiftNotRepresentable, _segments, change_anchor, partial_shift
 from annotation_qa.issues import (Issue, calibration_status, file_sha1, format_calibration,
                                   load_issues_tolerant, read_marks, read_meta)
 
@@ -244,6 +244,7 @@ def apply(issue_type: str, out: Path, version: int, force: bool = False) -> FixR
                 iss.label_id, {"before": _snapshot(
                     next(l for l in before[iss.frame_name]["labels"] if l["id"] == iss.label_id))})
             rec["after"] = _snapshot(after)
+            rec["anchor"] = change_anchor(rec["before"], rec["after"])
             if iss.frame_name not in changed:
                 changed.append(iss.frame_name)
         hand = [n for n in hand if n not in changed]

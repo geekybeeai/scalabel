@@ -86,6 +86,7 @@ class ReviewState:
             project_found=found,
             link=f"{SCALABEL}/label?project_name={project}&task_index={task}" + (
                 f"&item={frame_no}&label={quote(str(issue.label_id), safe='')}"
+                f"&x={int(round(issue.anchor[0]))}&y={int(round(issue.anchor[1]))}"
                 if frame_no else ""),
             frame_link=f"{SCALABEL}/label?project_name={project}&task_index={task}" + (
                 f"&item={frame_no}" if frame_no else ""),
