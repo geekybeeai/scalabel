@@ -9,12 +9,13 @@ import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from annotation_qa.data import ORIGINALS_DIR, REPO_ROOT
 from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_sample,  # noqa: F401
                                   calibration_status, load_issues_tolerant, read_marks,
                                   write_marks)
+from annotation_qa import locator, zoom
 from annotation_qa.viewb import build_rows, render_crop, viewb_html
 
 log = logging.getLogger(__name__)
@@ -81,23 +82,62 @@ class ReviewState:
             frame_no=frame_no,
             project=project,
             project_found=found,
-            link=f"{SCALABEL}/label?project_name={project}&task_index={task}",
+            link=f"{SCALABEL}/label?project_name={project}&task_index={task}" + (
+                f"&item={frame_no}&label={quote(str(issue.label_id), safe='')}"
+                if frame_no else ""),
+            frame_link=f"{SCALABEL}/label?project_name={project}&task_index={task}" + (
+                f"&item={frame_no}" if frame_no else ""),
+            locator="/locator?key=" + quote(issue.key, safe=""),
+            n=0, group_size=1, other_types=0, overview="",
             crop=f"/crops/{issue.issue_type}/"
                  f"{hashlib.sha1(issue.key.encode()).hexdigest()[:12]}.jpg",
         )
         return d
+
+    @staticmethod
+    def grouped(mine: list[Issue]) -> list[list[Issue]]:
+        """Issues of one type grouped by frame: most issues first, then highest confidence.
+
+        Inside a group: confidence desc. A card's number is its 1-based place in its group;
+        the frame overview numbers its circles with the same list."""
+        groups: dict[tuple[str, str], list[Issue]] = {}
+        for i in mine:
+            groups.setdefault((i.export_stem, i.frame_name), []).append(i)
+        for g in groups.values():
+            g.sort(key=lambda i: (-i.confidence, i.key))
+        return sorted(groups.values(), key=lambda g: (
+            -len(g), -g[0].confidence, g[0].export_stem, g[0].frame_name))
+
+    def frame_issues(self, t: str, stem: str, frame: str) -> list[Issue]:
+        for g in self.grouped(self.issues(t).get(t, [])):
+            if (g[0].export_stem, g[0].frame_name) == (stem, frame):
+                return g
+        return []
+
+    def find_issue(self, key: str) -> Issue | None:
+        t = key.rsplit("|", 1)[-1]
+        return next((i for i in self.issues(t).get(t, []) if i.key == key), None)
 
     def cards(self, t: str) -> list[dict]:
         allv = [i for v in self.issues().values() for i in v]
         counts: dict[tuple[str, str], int] = {}
         for i in allv:
             counts[(i.export_stem, i.frame_name)] = counts.get((i.export_stem, i.frame_name), 0) + 1
-        mine = self.issues(t).get(t, [])
-        return [self.card(i, counts) for i in sorted(mine, key=lambda i: -i.confidence)]
+        res = []
+        for g in self.grouped(self.issues(t).get(t, [])):
+            ov = ("/locator/frame?" + "&".join(f"{k}={quote(v, safe='')}" for k, v in (
+                ("type", t), ("stem", g[0].export_stem), ("frame", g[0].frame_name))))
+            for n, i in enumerate(g, 1):
+                d = self.card(i, counts)
+                d.update(n=n, group_size=len(g), overview=ov,
+                         other_types=counts[(i.export_stem, i.frame_name)] - len(g))
+                res.append(d)
+        return res
 
     def calibration(self, t: str) -> list[dict]:
         """The fixed calibration sample of type ``t`` (the one `fix` is gated on)."""
-        return [self.card(i, {}) for i in calibration_sample(self.out, t, self.issues(t).get(t, []))]
+        return [dict(self.card(i, {}), n=n) for n, i in enumerate(
+            calibration_sample(self.out, t, self.issues(t).get(t, [])), 1)]
 
     def calibration_status(self) -> dict[str, dict]:
         """type -> answered k/n, real, precision and PASS / FAIL / NOT CALIBRATED."""
@@ -169,6 +209,42 @@ def _handler(state: ReviewState):
                     self._send(p.read_bytes(), "image/jpeg")
                 else:
                     self._send(b"not found", "text/plain", 404)
+            elif u.path == "/zoom":
+                issue = state.find_issue((q.get("key") or [""])[0])
+                if issue is None:
+                    self._send(b"not found", "text/plain", 404)
+                    return
+                try:
+                    p = zoom.render_zoom(state.out, state.repo_root, state.originals, issue,
+                                         (q.get("raw") or [""])[0] == "1")
+                except Exception as e:  # noqa: BLE001
+                    log.warning("zoom render failed for %s: %s", issue.key, e)
+                    p = None
+                if p is not None and p.is_file():
+                    self._send(p.read_bytes(), "image/jpeg")
+                else:
+                    self._send(b"not found", "text/plain", 404)
+            elif u.path in ("/locator", "/locator/frame"):
+                if u.path == "/locator":
+                    issue = state.find_issue((q.get("key") or [""])[0])
+                    grp, width = ([issue] if issue else []), 260
+                    marks = [(i.anchor, None) for i in grp]
+                else:
+                    grp = state.frame_issues(t, (q.get("stem") or [""])[0],
+                                             (q.get("frame") or [""])[0])
+                    width = 700
+                    marks = [(i.anchor, str(n)) for n, i in enumerate(grp, 1)]
+                body = None
+                if grp:
+                    try:
+                        body = locator.render(state.out, state.repo_root, state.originals,
+                                              grp[0].export_stem, grp[0].frame_name, marks, width)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("locator failed: %s", e)
+                if body:
+                    self._send(body, "image/jpeg")
+                else:
+                    self._send(b"not found", "text/plain", 404)
             elif u.path.startswith("/crops/"):
                 base = (state.out / "crops").resolve()
                 p = (base / unquote(u.path[len("/crops/"):])).resolve()
@@ -235,6 +311,20 @@ header{background:#fff;padding:8px 16px;border-bottom:1px solid #ddd;position:st
  border-left:8px solid #ccc}
 .card.real{border-color:#d33}.card.false{border-color:#2a9d4a}
 .card img{max-width:640px;max-height:480px;object-fit:contain;background:#000}
+.card.col{flex-direction:column;gap:8px}
+.card.col img.crop{width:100%;max-width:1400px;max-height:none;height:auto;cursor:zoom-in}
+.card.col .row{display:flex;gap:16px;align-items:flex-start}
+.card.col img.loc{width:260px;max-width:260px;max-height:none;flex:none}
+.ghead{margin:20px 16px 0;padding:10px 12px;background:#fff;border-radius:8px;border-top:4px solid #2b5fd9}
+.ghead img{display:block;margin-top:8px;width:700px;max-width:100%;max-height:none}
+.num{display:inline-block;min-width:22px;text-align:center;background:#d33;color:#fff;border-radius:11px;
+ padding:1px 6px;font-weight:bold;margin-right:6px}
+#lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:10;overflow:auto;color:#eee}
+#lb .bar2{position:sticky;top:0;background:#111;padding:8px 16px;z-index:1}
+#lb .bar2 button,#lb .bar2 a{margin-right:8px;font-size:13px;padding:6px 10px;background:#333;color:#fff;
+ border-radius:6px;text-decoration:none;display:inline-block}
+#lb img{display:block;margin:8px auto;max-width:96vw;max-height:calc(100vh - 90px);object-fit:contain;cursor:zoom-in}
+#lb img.full{max-width:none;max-height:none;cursor:zoom-out}
 .meta{max-width:520px}.meta div{margin:3px 0}
 .badge{background:#f90;color:#fff;border-radius:4px;padding:1px 6px;font-size:12px}
 button{padding:8px 14px;border:0;border-radius:6px;cursor:pointer;font-size:14px}
@@ -260,17 +350,22 @@ async function show(t){cur=t;document.querySelectorAll('.tab').forEach(e=>e.clas
 function more(){const end=Math.min(items.length,shown+PAGE);let h='';
  for(let i=shown;i<end;i++)h+=card(items[i],i);shown=end;$('#cards').insertAdjacentHTML('beforeend',h);
  $('#more').style.display=shown<items.length?'':'none';$('#more').textContent='show more ('+(items.length-shown)+' left)';}
+function ghead(it){return `<div class="ghead"><b>${esc(it.frame_name)}</b> &middot; ${esc(it.export_stem)}<br>
+ ${it.group_size} issues in this frame (this type) &middot; ${it.other_types} other types
+ &middot; <a href="${it.frame_link}" target="_blank">Open frame in Scalabel</a>
+ <img loading="lazy" src="${it.overview}"></div>`;}
 function card(it,i){const m=marks[it.key]||'';
- return `<div class="card ${m}" id="c${i}"><img loading="lazy" src="${it.crop}"><div class="meta">
- <div><b>${esc(it.export_stem)}</b></div><div>frame ${esc(it.frame_name)}${it.frame_no?' (frame '+it.frame_no+' in task)':''}</div>
+ return (it.n==1?ghead(it):'')+`<div class="card col ${m}" id="c${i}"><img class="crop" loading="lazy" src="${it.crop}" onclick="lbOpen(${i})">
+ <div class="row"><img class="loc" loading="lazy" src="${it.locator}"><div class="meta">
+ <div><span class="num">${it.n}</span><b>${esc(it.export_stem)}</b></div><div>frame ${esc(it.frame_name)}${it.frame_no?' (frame '+it.frame_no+' in task)':''}</div>
  <div>label ${esc(it.label_id)} &middot; ${esc(it.category)} &middot; conf ${it.confidence.toFixed(2)}</div>
  <div>${esc(it.reason)}</div><div>this frame has ${it.others} other issues</div>
  ${it.hand_fix?'<div><span class="badge">draw by hand</span></div>':''}
  <div><a href="${it.link}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}</div>
  <div style="margin-top:8px"><button class="r" onclick="mark(${i},'real')">Real</button>
- <button class="f" onclick="mark(${i},'false')">False alarm</button></div></div></div>`;}
+ <button class="f" onclick="mark(${i},'false')">False alarm</button></div></div></div></div>`;}
 async function mark(i,v){const it=items[i];try{await post('/marks',{[it.key]:v});}catch(e){return;}
- marks[it.key]=v;$('#c'+i).className='card '+v;calib();}
+ marks[it.key]=v;$('#c'+i).className='card col '+v;calib();}
 async function bulk(){const c=parseFloat($('#conf').value);if(isNaN(c))return;
  let d;try{d=await post('/marks/bulk',{issue_type:cur,min_confidence:c,dry_run:true});}catch(e){return;}
  if(!d.count){$('#msg').textContent='nothing to mark';return;}
@@ -278,6 +373,48 @@ async function bulk(){const c=parseFloat($('#conf').value);if(isNaN(c))return;
  let r;try{r=await post('/marks/bulk',{issue_type:cur,min_confidence:c});}catch(e){return;}
  await show(cur);$('#msg').textContent='marked '+r.saved+' as real';}
 document.addEventListener('DOMContentLoaded',()=>{if(TABS.length)show(TABS[0][0]);});
+"""
+
+
+LB_HTML = """<div id="lb"><div class="bar2"><b id="lbcap"></b> &nbsp;
+<button onclick="lbRawToggle()" id="lbraw">raw only (R)</button><button onclick="lbOpenSc()">Open in Scalabel (O)</button>
+<span id="lbans"></span><button onclick="lbClose()">close (Esc)</button>
+<span id="lbhelp" style="font-size:12px"></span></div><div id="lbmsg" style="text-align:center;padding:8px"></div>
+<img id="lbimg" alt=""></div>"""
+
+LB_JS = """
+let lbI=-1,lbRaw=false;
+function lbShow(i){lbI=i;const it=items[i];const im=$('#lbimg');$('#lb').style.display='block';
+ $('#lbmsg').textContent='rendering (the first view of a crop can take a few seconds)...';im.style.visibility='hidden';
+ im.onload=()=>{$('#lbmsg').textContent='';im.style.visibility='visible';};
+ im.onerror=()=>{$('#lbmsg').textContent='could not render this crop';};
+ im.src='/zoom?key='+encodeURIComponent(it.key)+(lbRaw?'&raw=1':'');
+ $('#lbcap').textContent=(i+1)+' / '+items.length+' \u00b7 '+it.category+' \u00b7 label '+it.label_id+' \u00b7 '+it.reason+(marks[it.key]?' \u00b7 ['+marks[it.key]+']':'');
+ $('#lbraw').textContent=lbRaw?'labelled (R)':'raw only (R)';
+ $('#lbhelp').textContent=(typeof LB_ANSWER==='function'?'Y = YES, N = NO, ':'')+'\u2190/\u2192 move, click image = actual size';
+ const c=document.getElementById('c'+i);if(c)c.scrollIntoView({block:'center'});}
+function lbOpen(i){lbShow(i);}
+function lbClose(){lbI=-1;$('#lb').style.display='none';$('#lbimg').removeAttribute('src');}
+function lbRawToggle(){if(lbI>=0){lbRaw=!lbRaw;lbShow(lbI);}}
+function lbOpenSc(){if(lbI>=0)window.open(items[lbI].link,'_blank');}
+$('#lbimg').onclick=e=>e.target.classList.toggle('full');
+async function lbAnswer(i,v){try{await LB_ANSWER(i,v);}catch(e){return false;}return true;}
+document.addEventListener('keydown',async e=>{
+ if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName||'')))return;
+ const k=e.key.toLowerCase(),open=lbI>=0;
+ if(open){
+  if(k==='escape')lbClose();
+  else if(k==='arrowleft'&&lbI>0){e.preventDefault();lbShow(lbI-1);}
+  else if(k==='arrowright'&&lbI<items.length-1){e.preventDefault();lbShow(lbI+1);}
+  else if(k==='r')lbRawToggle();
+  else if(k==='o')lbOpenSc();
+  else if((k==='y'||k==='n')&&typeof LB_ANSWER==='function'){
+   if(await lbAnswer(lbI,k==='y'?'real':'false')){if(lbI<items.length-1)lbShow(lbI+1);else lbClose();}}
+ }else if((k==='y'||k==='n')&&typeof LB_ANSWER==='function'){
+  const f=items.findIndex(it=>!marks[it.key]);if(f<0)return;
+  if(await lbAnswer(f,k==='y'?'real':'false')){const nx=items.findIndex(it=>!marks[it.key]);
+   const c=document.getElementById('c'+(nx<0?f:nx));if(c)c.scrollIntoView({block:'center',behavior:'smooth'});}}
+});
 """
 
 
@@ -293,7 +430,7 @@ def index_html(types: dict[str, int]) -> str:
 &nbsp;|&nbsp; Calibrate: {calib} &nbsp;|&nbsp; <a href="/viewb">View B (final review)</a></div>
 <div class="bar" id="cal"></div></header>
 <div id="cards"></div><div style="margin:16px"><button id="more" onclick="more()">show more</button></div>
-<script>{js}</script></body></html>"""
+{LB_HTML}<script>{js}{LB_JS}</script></body></html>"""
 
 
 CAL_JS = """
@@ -306,14 +443,17 @@ async function count(){const k=items.filter(i=>marks[i.key]).length;$('#prog').t
  $('#status').textContent=`${s.status}: real ${s.real} of ${s.answered} answered, precision ${p} (PASS needs >= 2/3 with >= ${s.need} answered)`;}
 async function answer(i,v){const it=items[i];
  const r=await fetch('/marks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[it.key]:v})});
- if(!r.ok){alert('Not saved ('+r.status+'); try again');return;}
- marks[it.key]=v;$('#c'+i).className='card '+v;count();}
+ if(!r.ok){alert('Not saved ('+r.status+'); try again');throw new Error('save failed');}
+ marks[it.key]=v;$('#c'+i).className='card col '+v;count();}
+window.LB_ANSWER=answer;
 (async()=>{marks=await (await fetch('/marks')).json();items=await (await fetch('/calibrate/items?type='+T)).json();
- $('#cards').innerHTML=items.map((it,i)=>`<div class="card ${marks[it.key]||''}" id="c${i}"><div>
- <img loading="lazy" src="${it.crop}" style="max-width:900px;max-height:700px"><div>${esc(it.reason)}</div>
- <div>${esc(it.category)} &middot; ${esc(it.frame_name)} &middot; label ${esc(it.label_id)}</div>
- <div class="big"><button class="r" onclick="answer(${i},'real')">YES &mdash; real mistake</button>
- <button class="f" onclick="answer(${i},'false')">NO &mdash; false alarm</button></div></div></div>`).join('');count();})();
+ $('#cards').innerHTML=items.map((it,i)=>`<div class="card col ${marks[it.key]||''}" id="c${i}">
+ <img class="crop" loading="lazy" src="${it.crop}" onclick="lbOpen(${i})"><div class="row">
+ <img class="loc" loading="lazy" src="${it.locator}"><div><div><span class="num">${i+1}</span>${esc(it.reason)}</div>
+ <div>${esc(it.category)} &middot; ${esc(it.frame_name)} &middot; label ${esc(it.label_id)}
+ &middot; <a href="${it.link}" target="_blank">Open in Scalabel</a></div>
+ <div class="big"><button class="r" onclick="answer(${i},'real')">YES &mdash; real mistake (Y)</button>
+ <button class="f" onclick="answer(${i},'false')">NO &mdash; false alarm (N)</button></div></div></div></div>`).join('');count();})();
 """
 
 
@@ -322,4 +462,4 @@ def calibrate_html(t: str) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Calibrate {safe}</title>
 <style>{CSS}</style></head><body><header><a href="/">&larr; back</a> &nbsp; Calibrate: {safe}
 &nbsp; <b id="prog"></b> &nbsp; <b id="status"></b> <b id="done" style="display:none;color:#2a9d4a">All done - thank you!</b></header>
-<div id="cards"></div><script>{CAL_JS % json.dumps(safe)}</script></body></html>"""
+<div id="cards"></div>{LB_HTML}<script>{CAL_JS % json.dumps(safe)}{LB_JS}</script></body></html>"""

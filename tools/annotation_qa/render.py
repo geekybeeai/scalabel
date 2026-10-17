@@ -31,8 +31,11 @@ def _draw_label(canvas, label, origin, zoom, color, width):
         cv2.polylines(canvas, [p.reshape(-1, 1, 2)], bool(poly.get("closed")), color, width)
 
 
-def issue_crop(image: FrameImage, frame: dict, issue, half: int = 90, zoom: int = 3) -> np.ndarray:
-    """Raw | 8 px gap | labelled, each (2*half*zoom) square; black where off-canvas."""
+def issue_crop(image: FrameImage, frame: dict, issue, half: int = 90, zoom: int = 3,
+               raw_only: bool = False) -> np.ndarray:
+    """Raw | 8 px gap | labelled, each (2*half*zoom) square; black where off-canvas.
+
+    ``raw_only`` returns just the raw panel (no labels)."""
     ax, ay = int(round(issue.anchor[0])), int(round(issue.anchor[1]))
     x0, y0 = ax - half, ay - half
     raw = np.zeros((2 * half, 2 * half, 3), np.uint8)
@@ -41,6 +44,8 @@ def issue_crop(image: FrameImage, frame: dict, issue, half: int = 90, zoom: int 
         ox, oy = max(-x0, 0), max(-y0, 0)
         raw[oy:oy + c.shape[0], ox:ox + c.shape[1]] = c
     left = cv2.resize(raw, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_NEAREST)
+    if raw_only:
+        return left
     right = left.copy()
     origin = np.array([x0, y0], dtype=float)
     related = set(issue.related_label_ids)

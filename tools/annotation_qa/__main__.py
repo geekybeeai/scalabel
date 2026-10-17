@@ -79,6 +79,10 @@ def main(argv: list[str] | None = None) -> int:
     vb.add_argument("--out", type=Path, default=DEFAULT_OUT)
     vb.add_argument("--port", type=int, default=8790)
     vb.add_argument("--prerender", action="store_true", help="render every crop before serving")
+    pz = sub.add_parser("prerender-zoom", help="render the lightbox zoom crops ahead of time")
+    pz.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    pz.add_argument("--calibration-only", action="store_true",
+                    help="only the frozen calibration samples (OUT/calibration/sample_<type>.json)")
     br = sub.add_parser("bar", help="check the 8 reviewer frames have real-marked issues")
     br.add_argument("--out", type=Path, default=DEFAULT_OUT)
     fn = sub.add_parser("final", help="write one corrected export per batch to OUT/final")
@@ -102,6 +106,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"NOT EXPORTED {stem} - unmerged rounds: {', '.join(tags)}")
         if not counts and not unmerged:
             print("no exports found; nothing copied")
+        return 0
+    if a.cmd == "prerender-zoom":
+        import time
+        from annotation_qa.data import ORIGINALS_DIR
+        from annotation_qa.zoom import prerender
+        t0 = time.time()
+        n = prerender(a.out, REPO_ROOT, ORIGINALS_DIR, a.calibration_only)
+        print(f"rendered {n} zoom crops in {time.time() - t0:.0f}s", flush=True)
         return 0
     if a.cmd == "viewb":
         from annotation_qa.review_server import serve

@@ -83,6 +83,13 @@ python3 -m annotation_qa final --out $OUT               # $OUT/final/<stem>_qa_2
   - batches with no rounds are copied as they are (0 changes);
   - a batch with an unmerged round is left out, with a loud `NOT EXPORTED` message.
 
+## Review UI: lightbox, keys, prerender, deep link
+
+- View A groups cards by frame (most issues first) under a header with a numbered overview of the whole frame; every card has a locator thumbnail. `/calibrate` keeps its fixed order.
+- Click a crop to open the lightbox (high-detail render from `/zoom`, cached in `OUT/zoom/`). `Esc` closes, left/right arrows move, `R` toggles raw only, `O` opens the issue in Scalabel. On `/calibrate`, `Y` = YES and `N` = NO, with or without the lightbox, then it advances.
+- Ahead of time: `python3 -m annotation_qa prerender-zoom --out $OUT [--calibration-only]` (one image decode per frame; also makes the locator thumbnails).
+- "Open in Scalabel" opens a new tab with `&item=<frame in task>&label=<label id>`; a Scalabel build that does not know these params ignores them.
+
 ## Notes
 
 - This branch imports the **untracked** `scalabel/tools/draw_poly2d.py` (it holds the curve sampling). Keep that file.
