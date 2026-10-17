@@ -1,0 +1,104 @@
+# annotation_qa: find and fix lane / road-edge label mistakes
+
+Spec: `docs/superpowers/specs/2026-10-17-annotation-qa-design.md`. Run everything from `tools/`:
+
+```bash
+cd tools
+OUT=../local-data/items/Full_Verfication/qa_2026_10_17
+EXP=../local-data/items/Full_Verfication/Annotation_Reviewed_by_Roshan/2026_10_15_export
+```
+
+The originals in `$EXP` and the existing Scalabel projects are never written. Fixes go to copies in `$OUT/work/`.
+
+## 1. Scan (find, no edits)
+
+```bash
+python3 -m annotation_qa calibrate-yellow --exports $EXP --out $OUT   # once, BEFORE yellow_structure
+python3 -m annotation_qa scan --exports $EXP --out $OUT \
+  --types curb_soft,position,shape,duplicates,solid_dashed,yellow_structure   # about 2.7 h for all
+```
+
+- A scan into `$OUT` replaces that type's results: `issues_<type>.jsonl`. While it runs it writes `issues_<type>.jsonl.partial`, and it only replaces the old file when it finishes, so an interrupted run keeps the old results.
+- `--subset reviewer+random20` (the 8 reviewer frames plus 20 random frames per export) needs its own `--out`.
+- The exit code is 1 when the scan logged errors. The errors are printed and also kept in `$OUT/scan_summary.json`.
+
+## 2. Triage one type
+
+```bash
+python3 -m annotation_qa review --out $OUT        # http://localhost:8790/
+```
+
+1. Open `/calibrate?type=T` and answer YES/NO for the fixed sample of 30. Each tab and the calibrate page show `answered k/n, real r, precision p` and **PASS / FAIL / NOT CALIBRATED**.
+   - PASS means precision of at least 2/3 with at least 20 answered. A type with fewer than 20 issues needs all of them answered.
+2. On the type's tab, mark cards **Real** or **False alarm**. You can also bulk-mark everything at or above a confidence as real; the page asks you to confirm the count first.
+3. Only issues marked real are fixed.
+
+## 3. Fix, then review in Scalabel
+
+```bash
+python3 -m annotation_qa fix --type T --version 1 --out $OUT --create-projects
+```
+
+- This writes `$OUT/work/<stem>_fix_T_v1.json`, `$OUT/rounds/<stem>_fix_T_v1_{items,changes}.json`, and one Scalabel project per batch, named `<stem>_fix_T_v1` (with auto-correct off and task size 50).
+- A project only holds the frames that changed, plus "draw by hand" frames, which are left unchanged for you to fix.
+- `fix` **refuses** and writes nothing when:
+  - the type is not PASS;
+  - an earlier round of that batch is not merged;
+  - the round tag already exists (use the next `--version`);
+  - the issues were detected on an older working copy (re-scan first, step 5).
+
+  `--force` overrides each of these.
+- If creating a project fails, the server's answer is printed and the other batches carry on. Re-create one with `python3 -m annotation_qa project --round <stem>_fix_T_v1 --out $OUT`. Names that already exist are skipped.
+
+Review each project at `http://localhost:8686/dashboard?project_name=<stem>_fix_T_v1`. Fix what is wrong, then export the project's labels to a JSON file.
+
+## 4. Merge each batch's reviewed export
+
+```bash
+python3 -m annotation_qa merge --stem <stem> --reviewed <exported.json> --round <stem>_fix_T_v1 --out $OUT
+```
+
+`merge` refuses, and writes nothing, unless the export's frames and urls are exactly that round's frames. The Random and TMI batches share frame names, so this check matters. Your export replaces those frames' labels in `$OUT/work/<stem>.json`.
+
+## 5. Re-detect on the merged copy, then do the next type
+
+```bash
+python3 -m annotation_qa scan --since-merge --exports $EXP --out $OUT --types <next types>
+```
+
+- This only re-scans the frames merged since each type's last scan (minutes, not hours). It replaces just those frames' issues and records the new working-copy sha1, so `fix` accepts them.
+- Then go back to step 2 for the next type. Order of the spec: curb_soft, position, shape, duplicates, solid_dashed, yellow_structure.
+
+## 6. Final review and deliverable
+
+```bash
+python3 -m annotation_qa bar --out $OUT                 # each reviewer frame has a real-marked issue?
+python3 -m annotation_qa viewb --out $OUT --prerender   # http://localhost:8790/viewb
+python3 -m annotation_qa final --out $OUT               # $OUT/final/<stem>_qa_2026_10_17.json
+```
+
+- View B lists every edited frame. For merged rounds, "after" is what will ship.
+- It flags "changed in review" or "reverted", and lists labels added or deleted in review.
+- `final` writes one export per batch:
+  - batches with no rounds are copied as they are (0 changes);
+  - a batch with an unmerged round is left out, with a loud `NOT EXPORTED` message.
+
+## Notes
+
+- This branch imports the **untracked** `scalabel/tools/draw_poly2d.py` (it holds the curve sampling). Keep that file.
+- **The yellow width check is off on this data.** `calibration/yellow_stats.json` has `width_usable=false`: the double-yellow median FWHM is 10 px against 8 px for single yellow (threshold 9). The centre-turn-lane pair-distance median is 59.6 px.
+- The test project `zz_annotation_qa_test_1frame` was created in Scalabel during the build. You can delete it.
+- The full scan of 2026-10-17 started before scan metadata existed, so it wrote no `issues_<type>.meta.json` files.
+  - `fix` treats those issues as detected on the originals. That is correct until the first merge.
+  - After you merge, run step 5 before fixing the next type.
+  - Position issues of that scan whose peak is exactly 25 px off sit at the edge of the search window and are not real peaks. Newer scans drop them. The controller prunes the old ones from `issues_position.jsonl`.
+- The position fix moves only the flagged part of a line. It adds break vertices, splits curves where needed, and checks that the result is within 2 px of the paint. When that check fails, the frame goes to the round as "draw by hand". On the full scan of 2026-10-17 this happened for 5 of 1,005 shift fixes. The old shift missed its target by more than 2 px on 998 of them.
+
+## What each check flags, and its known false alarms
+
+- **curb_soft**: curb vs soft edge, judged from the strip just outside the edge (a near concrete band or a sharp step means curb; dirt or grass means soft). About 1/3 to 1/2 of soft→curb flags are real. Beige sand, the back edge of a sidewalk and concrete aprons at grade read as curb. Planters, islands, rings and deep shadow are handled, but check them.
+- **position**: painted lines only; road edges are not checked. It flags only when at least 2 stretches of about 60 px have no paint under the line (ridge below 10) and a stripe (ridge 25 or more) lies within ±25 px. It misses drifts shorter than 2 stretches. Offsets that disagree between stretches become "draw by hand".
+- **shape**: spikes (turn-backs with an arm under 25 px), self-crossings, and painted fragments under 30 px with no paint under them. Long-armed V gore tips are treated as valid. Self-crossing can flag intentional out-and-back outlines.
+- **duplicates**: two labels within 4 px and running the same direction (within about 20°). It misses duplicates that cross at a larger angle. In a chain, the longest piece is kept.
+- **solid_dashed**: a solid label over dashes (white only) or a dashed label over continuous paint. It needs at least 4 dashes and skips lines that are more than 25% unknown or have dark gaps. Junction and stop-bar gaps are the usual false "dashed". Yellow solid/dashed mix-ups are never flagged.
+- **yellow_structure**: a centre turn lane with no partner on the other side, or no dashed yellow beside it (judged only when the line is on yellow paint). The double-yellow width check is off (see Notes). Very faded yellow is not flagged.
