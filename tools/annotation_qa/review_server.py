@@ -17,6 +17,8 @@ from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_sample,  # n
                                   calibration_status, load_issues_tolerant, read_marks,
                                   write_marks)
 from annotation_qa import comments as cm, locator, zoom
+from annotation_qa import reverts as rv
+from annotation_qa.rounds import merged_tags, round_files
 from annotation_qa.exclude import read_excluded
 from annotation_qa.viewb import build_rows, render_crop, select_rows, viewb_html
 
@@ -176,6 +178,24 @@ class ReviewState:
             cm.write_comments(self.out, comments)
             return len(comments)
 
+    def set_revert(self, tag: str, frame: str, label: str, revert: bool) -> bool:
+        """Record (or undo) a View B revert; ValueError unless the change exists in that round."""
+        rnd = next((r for r in round_files(self.out) if r["tag"] == tag), None)
+        if rnd is None:
+            raise ValueError(f"unknown round {tag!r}")
+        try:
+            changes = json.loads(rnd["changes"].read_text())
+        except (OSError, ValueError) as e:
+            raise ValueError(f"cannot read changes of {tag}: {e}")
+        if frame not in changes:
+            raise ValueError(f"unknown frame {frame!r} in round {tag}")
+        if label not in changes[frame]:
+            raise ValueError(f"unknown label {label!r} in frame {frame!r} of round {tag}")
+        if (rnd["stem"], tag) in merged_tags(self.out):
+            raise ValueError(f"round {tag} is already merged; a revert only applies at merge time")
+        with self.lock:
+            return rv.set_revert(self.out, tag, frame, label, revert)
+
     def comments_html(self) -> str:
         comments = cm.read_comments(self.out)
         by_type: dict[str, list[tuple[str, dict]]] = {}
@@ -262,6 +282,9 @@ def _handler(state: ReviewState):
             elif u.path == "/viewb/view":
                 self._json(select_rows(build_rows(state.out, state.repo_root),
                                        (q.get("round") or [""])[0], (q.get("show") or ["needs"])[0]))
+            elif u.path == "/viewb/reverts":
+                tag = (q.get("round") or [""])[0]
+                self._json(rv.round_reverts(state.out, tag) if tag else rv.read_reverts(state.out))
             elif u.path == "/viewb/crop":
                 p = render_crop(state.out, state.repo_root, *(
                     (q.get(k) or [""])[0] for k in ("stem", "frame", "label", "round", "side")))
@@ -337,6 +360,13 @@ def _handler(state: ReviewState):
                             or not isinstance(body.get("text"), str):
                         raise ValueError("expected {key: str, text: str}")
                     self._json({"saved": True, "count": state.set_comment(body["key"], body["text"])})
+                elif self.path == "/viewb/revert":
+                    if not isinstance(body, dict) or not all(
+                            isinstance(body.get(k), str) for k in ("round", "frame", "label")) \
+                            or not isinstance(body.get("revert"), bool):
+                        raise ValueError("expected {round: str, frame: str, label: str, revert: bool}")
+                    self._json({"reverted": state.set_revert(
+                        body["round"], body["frame"], body["label"], body["revert"])})
                 elif self.path == "/marks/bulk":
                     dry = bool(body.get("dry_run"))
                     n = state.bulk(body["issue_type"], float(body["min_confidence"]), dry)

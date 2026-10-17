@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from pathlib import Path
 
 from annotation_qa.data import load_export, save_export
 from annotation_qa.fix import working_copy
 from annotation_qa.rounds import record_merge
+from annotation_qa.reverts import round_reverts
 
 
 class MergeRefused(ValueError):
@@ -21,6 +23,62 @@ def _url(frame: dict) -> str:
 def _few(names) -> str:
     names = sorted(names)
     return ", ".join(names[:3]) + (f" (+{len(names) - 3} more)" if len(names) > 3 else "")
+
+
+def apply_reverts(frames: list[dict], old_labels: dict[str, list], out: Path, round_tag: str,
+                  merged: set[str]) -> tuple[int, int]:
+    """Undo the tool changes the user marked "Revert" in View B; return (applied, conflicts).
+
+    Only labels the user left as the tool's AFTER are restored; a label edited or deleted in
+    Scalabel keeps the user's version (warning). A label the tool deleted is re-added.
+    """
+    from annotation_qa.viewb import _same, _snapshot  # lazy: viewb pulls in cv2 and rendering
+    reverts = round_reverts(out, round_tag)
+    if not reverts:
+        return 0, 0
+    try:
+        changes = json.loads((Path(out) / "rounds" / f"{round_tag}_changes.json").read_text())
+    except (OSError, ValueError):
+        return 0, 0
+    applied = conflicts = 0
+    by_name = {f["name"]: f for f in frames}
+    for fname, labs in reverts.items():
+        frame = by_name.get(fname)
+        if frame is None or fname not in merged:
+            continue
+        for lid in labs:
+            rec = (changes.get(fname) or {}).get(lid)
+            if not rec or rec.get("before") is None:
+                continue  # unknown change, or an added label (nothing to restore)
+            before, after = rec["before"], rec.get("after")
+            cur = next((l for l in frame["labels"] if str(l.get("id")) == lid), None)
+            if after is None:
+                if cur is None:
+                    tmpl = next((l for l in old_labels.get(fname, []) if str(l.get("id")) == lid), None)
+                    new = dict(tmpl) if tmpl else {"id": lid, "attributes": {}, "manualShape": True,
+                                                   "box2d": None, "box3d": None}
+                    new.update(category=before["category"], poly2d=before["poly2d"])
+                    frame["labels"].append(new)
+                    applied += 1
+                else:
+                    conflicts += 1
+                    print(f"WARNING: {fname}: label {lid} was re-added in Scalabel; "
+                          "Scalabel edit wins over the revert")
+            elif cur is None:
+                conflicts += 1
+                print(f"WARNING: {fname}: label {lid} was deleted in Scalabel; left deleted "
+                      "(the revert is not applied)")
+            elif _same(_snapshot(cur), after):
+                cur["category"] = before["category"]
+                cur["poly2d"] = before["poly2d"]
+                applied += 1
+            elif _same(_snapshot(cur), before):
+                applied += 1  # already the original
+            else:
+                conflicts += 1
+                print(f"WARNING: {fname}: label {lid} was edited in Scalabel; "
+                      "Scalabel edit wins over the revert")
+    return applied, conflicts
 
 
 def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag: str) -> int:
@@ -59,9 +117,11 @@ def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag
     work_path = working_copy(export_stem, out)
     work = load_export(work_path)
     n, merged = 0, []
+    old_labels: dict[str, list] = {}
     for frame in work.frames:
         rf = reviewed.get(frame["name"])
         if rf is not None and _url(rf) == _url(frame):
+            old_labels[frame["name"]] = frame.get("labels") or []
             frame["labels"] = rf.get("labels") or []
             merged.append(frame["name"])
             n += 1
@@ -69,6 +129,8 @@ def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag
         lost = set(reviewed) - set(merged)
         raise MergeRefused(f"{len(lost)} reviewed frame(s) are not in the working copy of "
                            f"{export_stem}: {_few(lost)}")
+    applied, conflicts = apply_reverts(work.frames, old_labels, out, round_tag, set(merged))
     save_export(work, work_path)
-    record_merge(out, export_stem, round_tag, Path(reviewed_export), merged)
+    record_merge(out, export_stem, round_tag, Path(reviewed_export), merged,
+                 {"reverted_applied": applied, "reverted_conflicts": conflicts})
     return n

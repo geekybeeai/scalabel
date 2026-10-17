@@ -94,6 +94,7 @@ python3 -m annotation_qa final --out $OUT               # $OUT/final/<stem>_qa_2
 ```
 
 - View B lists every edited frame. For merged rounds, "after" is what will ship.
+- View B **Revert** (button, or `X` on the current/focused change) marks a tool change to undo without opening Scalabel. Nothing is written to Scalabel: marks go to `OUT/reverts.json` and `merge` applies them. A label still equal to the tool's result gets the original category and geometry back (a tool-deleted label is re-added); a label you edited or deleted in Scalabel keeps your version (warning printed). The merge marker records `reverted_applied` / `reverted_conflicts`; `final` counts applied reverts as no change. Reverting is only possible before the round is merged.
 - It flags "changed in review" or "reverted", and lists labels added or deleted in review.
 - `final` writes one export per batch:
   - batches with no rounds are copied as they are (0 changes);

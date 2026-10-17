@@ -66,13 +66,15 @@ def _write_markers(out: Path, entries: list[dict]) -> None:
     os.replace(tmp, path)
 
 
-def record_merge(out: Path, stem: str, tag: str, reviewed: Path, frames: list[str]) -> None:
+def record_merge(out: Path, stem: str, tag: str, reviewed: Path, frames: list[str],
+                 extra: dict | None = None) -> None:
     """Append a marker (atomic), so `final`, `fix` and `scan --since-merge` know what was merged."""
     path = _markers_path(out)
     entries = json.loads(path.read_text()) if path.exists() else []
     entries.append({"stem": stem, "tag": tag, "reviewed_path": str(reviewed),
                     "merged_frames": len(frames), "frames": sorted(frames),
-                    "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds")})
+                    "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+                    **(extra or {})})
     _write_markers(out, entries)
 
 
