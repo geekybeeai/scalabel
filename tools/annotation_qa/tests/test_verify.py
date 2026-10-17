@@ -142,6 +142,18 @@ def test_set_category_curb_soft(repo, out, cat, to, feats, want):
     assert verify._set_category(_issue("curb_soft", feats, cat, to), rec)["verdict"] == want
 
 
+def test_curb_soft_long_uniform_bright_strip_is_check(repo, out):
+    b, a = _label("1", _hline(100), "without_curb_road_edge"), _label("1", _hline(100), "curb_road_edge")
+    rec = {"before": _snap(b), "after": _snap(a)}
+    feats = {"near_band_votes": 15, "share": 1.0, "cad_soft": True, "outside_texture": 17.0}
+    v = verify._set_category(_issue("curb_soft", feats, "without_curb_road_edge", "curb_road_edge"), rec)
+    assert v["verdict"] == "check"
+    assert "long uniform bright strip" in v["reasons"][0]
+    # texture just above the cut-off, or a shorter strip, keeps the normal ok rule
+    for f in ({**feats, "outside_texture": 17.5}, {**feats, "near_band_votes": 14}):
+        assert verify._set_category(_issue("curb_soft", f, "without_curb_road_edge", "curb_road_edge"), rec)["verdict"] == "ok"
+
+
 def test_set_category_other_types_and_via_run(repo, out):
     b, a = _label("1", _hline(100), SOLID), _label("1", _hline(100), "dashed_white_line")
     rec = {"before": _snap(b), "after": _snap(a)}

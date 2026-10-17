@@ -292,6 +292,10 @@ def _set_category(issue, rec) -> dict:
         f.get("cad_soft")
     facts = f"near_band_votes {nb}, share {share:.2f}, n_votes {nv}, cad_soft {cad}"
     if to == "curb_road_edge":
+        if nb >= 15 and f.get("outside_texture", float("inf")) <= 17:
+            return {"verdict": "check", "reasons": [
+                "long uniform bright strip — may be a concrete road or sidewalk, not a curb",
+                facts]}
         ok = (nb >= 3 and share >= 0.9) or cad is False
     else:
         ok = nv >= 8 and cad is not False
