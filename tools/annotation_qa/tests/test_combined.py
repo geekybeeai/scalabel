@@ -180,3 +180,20 @@ def test_ops_text_and_highlight_colours(env):
     # both sides use the class colour of their own side (no magenta)
     assert specs[(tag, "a", "before")]["issue"].highlight_category == "without_curb_road_edge"
     assert specs[(tag, "a", "after")]["issue"].highlight_category == "curb_road_edge"
+
+
+def test_exclude_combined_round_keys_match_issues(env):
+    from annotation_qa.exclude import exclude_round, read_excluded
+    orig, out, frames = env
+    lab = frames[0]["labels"][0]
+    cat = _issue("exportA", "f1.png", "a", SOFT, {"op": "set_category", "to": "curb_road_edge"})
+    sh = _issue("exportA", "f1.png", "a", PAINT, _shift_fix(lab, 4.0))
+    _setup(out, [cat, sh])
+    tag = apply(f"{SOFT},{PAINT}", out, 1, name="edges").tags[0]
+    assert tag == "exportA_fix_edges_v1"
+    (out / "rounds" / f"{tag}_verify.json").write_text(json.dumps(
+        {"f1.png": {"a": {"verdict": "bad", "reasons": ["moved wrong"]}}}))
+    assert exclude_round(out, tag, "bad") == 2  # one key per real issue type, not "edges"
+    assert set(read_excluded(out)) == {cat.key, sh.key}
+    assert all(v["round"] == tag for v in read_excluded(out).values())
+    assert exclude_round(out, tag, "bad") == 0  # idempotent

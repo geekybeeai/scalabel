@@ -38,14 +38,19 @@ def exclude_round(out: Path, tag: str, verdict: str = "bad") -> int:
     added = 0
     for frame, labels in verdicts.items():
         for label_id, v in labels.items():
-            if v.get("verdict") != verdict or label_id not in (changes.get(frame) or {}):
+            rec = (changes.get(frame) or {}).get(label_id)
+            if v.get("verdict") != verdict or rec is None:
                 continue
-            key = f"{m['stem']}|{frame}|{label_id}|{m['type']}"
-            if key in cur:
-                continue
-            cur[key] = {"reason": REASON, "round": tag, "verdict": verdict,
-                        "reasons": list(v.get("reasons") or [])}
-            added += 1
+            # a combined round (e.g. "edges") lists its real issue types per change; a
+            # single-type round has no issue_types, so the tag's type is the only one
+            types = rec["issue_types"] if "issue_types" in rec else [m["type"]]
+            for t in types:
+                key = f"{m['stem']}|{frame}|{label_id}|{t}"
+                if key in cur:
+                    continue
+                cur[key] = {"reason": REASON, "round": tag, "verdict": verdict,
+                            "reasons": list(v.get("reasons") or [])}
+                added += 1
     if added:
         p = excluded_path(out)
         tmp = p.with_name(p.name + ".tmp")
