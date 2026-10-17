@@ -92,7 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     fn = sub.add_parser("final", help="write one corrected export per batch to OUT/final")
     fn.add_argument("--out", type=Path, default=DEFAULT_OUT)
     rf = sub.add_parser("refilter", help="re-apply the calibrated rule to stored issues")
-    rf.add_argument("--type", required=True, choices=["position", "curb_soft", "edge_position"])
+    rf.add_argument("--type", required=True, choices=["position", "curb_soft", "edge_position",
+                                                      "edge_on_paint"])
     rf.add_argument("--out", type=Path, default=DEFAULT_OUT)
     vf = sub.add_parser("verify", help="auto-verify the changes of a fix round")
     vf.add_argument("--round", default=None, help="round tag")

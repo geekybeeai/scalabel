@@ -36,3 +36,6 @@ REGISTRY["yellow_structure"] = yellow_structure.detect
 from annotation_qa.detectors import edge_position  # noqa: E402
 
 REGISTRY["edge_position"] = edge_position.detect
+from annotation_qa.detectors import edge_on_paint  # noqa: E402
+
+REGISTRY["edge_on_paint"] = edge_on_paint.detect

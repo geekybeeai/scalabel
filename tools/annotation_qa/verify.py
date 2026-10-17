@@ -5,7 +5,8 @@ Writes OUT/rounds/<tag>_verify.json = {frame_name: {label_id: {"verdict": "ok"|"
 Hand frames appear as {frame_name: {"__hand__": {"verdict": "check", ...}}}.
 
 ``shift`` changes are scored on the paint ridge of the part that moved (before vs after) --
-road edges on the road-boundary strength of ``edge_position`` instead -- plus a
+road edges on the road-boundary strength of ``edge_position`` instead (``edge_on_paint``
+shifts on how much of the moved part is still drawn on paint) -- plus a
 neighbour-overlap and a new-kink test; ``set_category`` changes are judged from the
 features stored with the issue; deletes / vertex drops are always "check".
 """
@@ -38,6 +39,8 @@ EDGE_CATS = ("curb_road_edge", "without_curb_road_edge")
 # road-edge shifts (edge_position): boundary strength at the line, FLOOR = 40
 EDGE_OK_SCORE, EDGE_OK_GAIN = 40.0, 20.0
 EDGE_BAD_SCORE, EDGE_BAD_GAIN = 20.0, 5.0
+# edge_on_paint shifts: share of the moved part's stretches still drawn on paint
+PAINT_OK_BEFORE, PAINT_OK_AFTER, PAINT_BAD_AFTER = 0.4, 0.2, 0.5
 
 
 def verdict_path(out: Path, tag: str) -> Path:
@@ -110,7 +113,8 @@ def _fmt(x) -> str:
 
 
 def _verdict_shift_poly(img: FrameImage, cat: str, channel: str | None, bpoly: dict, apoly: dict,
-                        neighbours) -> dict:
+                        neighbours, issue_type: str | None = None,
+                        frame: dict | None = None) -> dict:
     B, A = np.asarray(dense(bpoly), float), np.asarray(dense(apoly), float)
     Pb, Nb = resample(B)
     Pa, Na = resample(A)
@@ -126,6 +130,9 @@ def _verdict_shift_poly(img: FrameImage, cat: str, channel: str | None, bpoly: d
     turn_a = float(_turns(Pa)[_dilate(moved_a, KINK_K)].max())
     turn_b = float(_turns(Pb)[_dilate(moved_b, KINK_K)].max())
     kink = turn_a > KINK_DEG and turn_b <= KINK_DEG
+    if cat in EDGE_CATS and issue_type == "edge_on_paint":
+        return _verdict_on_paint(img, bpoly, apoly, Pb, Nb, A, moved_b, moved_a, max_move,
+                                 neigh, kink, turn_a, turn_b, frame)
     if cat in EDGE_CATS:
         return _verdict_edge(img, bpoly, apoly, moved_b, moved_a, max_move, neigh, kink,
                              turn_a, turn_b)
@@ -208,6 +215,45 @@ def _verdict_edge(img, bpoly, apoly, moved_b, moved_a, max_move, neigh, kink,
     return {"verdict": "ok" if ok else "check", "reasons": reasons, **m}
 
 
+def _verdict_on_paint(img, bpoly, apoly, Pb, Nb, A, moved_b, moved_a, max_move, neigh, kink,
+                      turn_a, turn_b, frame=None) -> dict:
+    """An edge_on_paint shift: the share of the moved part's stretches that are still a
+    road edge drawn on paint (``edge_on_paint.line_score``), before vs after, and the
+    move must go AWAY from the road (onto the curb), with the before line's road side."""
+    from annotation_qa.detectors.edge_on_paint import line_score
+    before, ctx = line_score(img, bpoly, moved_b, frame=frame)
+    side = ctx[0] if ctx else None
+    after, _ = line_score(img, apoly, moved_a, ctx=ctx if side is not None else None)
+    u_move = float("nan")
+    if side is not None:
+        near = cKDTree(A).query(Pb[moved_b])[1]
+        along = ((A[near] - Pb[moved_b]) * Nb[moved_b]).sum(axis=1)
+        u_move = float(np.median(along)) * (1 if side == 0 else -1)
+    m = {"channel": "on_paint", "before_score": before, "after_score": after,
+         "u_move": u_move, "max_move": max_move, "neighbour_frac": neigh,
+         "turn_after": turn_a, "turn_before": turn_b, "moved_len": float(moved_b.sum() * 3.0)}
+    if np.isnan(after) or np.isnan(before) or np.isnan(u_move):
+        return {"verdict": "check", "reasons": ["on-paint score unavailable"], **m}
+    bad = []
+    if u_move <= 0:
+        bad.append(f"moved {abs(u_move):.1f} px toward the road, not onto the curb")
+    if after >= PAINT_BAD_AFTER:
+        bad.append(f"{after:.0%} of the moved part still on paint")
+    if after >= before:
+        bad.append(f"on-paint share {before:.0%} -> {after:.0%}: not better")
+    if neigh >= NEIGH_FRAC:
+        bad.append(f"{neigh:.0%} of the moved part lies on another label")
+    if kink:
+        bad.append(f"new {turn_a:.0f} deg turn in the moved part (before {turn_b:.0f})")
+    if bad:
+        return {"verdict": "bad", "reasons": bad, **m}
+    ok = after <= PAINT_OK_AFTER and before >= PAINT_OK_BEFORE and max_move <= OK_MOVE
+    reasons = [f"on-paint share {before:.0%} -> {after:.0%}",
+               f"moved {u_move:.1f} px away from the road", f"max move {max_move:.0f} px",
+               f"neighbour overlap {neigh:.0%}", f"max turn {turn_a:.0f} deg"]
+    return {"verdict": "ok" if ok else "check", "reasons": reasons, **m}
+
+
 _RANK = {"bad": 0, "check": 1, "ok": 2}
 
 
@@ -230,7 +276,8 @@ def _shift(img, cat, issue, rec, frame) -> dict:
     for b, a in zip(bp, ap):
         if b == a:
             continue
-        parts.append(_verdict_shift_poly(img, cat, channel, b, a, neigh))
+        parts.append(_verdict_shift_poly(img, cat, channel, b, a, neigh,
+                                         issue.issue_type if issue else None, frame))
     return _combine(parts) if parts else {"verdict": "check", "reasons": ["geometry unchanged"]}
 
 

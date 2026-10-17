@@ -73,6 +73,16 @@ def test_scan_skips_missing_image_and_continues(tmp_path, export_with_one_missin
     assert summary["frames"] == 1 and summary["counts"] == {"fake": 1} and len(summary["skipped"]) == 1
 
 
+def test_scan_summary_keeps_other_types_counts(tmp_path, export_with_one_missing_image,
+                                               fake_detector):
+    exp, root = export_with_one_missing_image
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "scan_summary.json").write_text(json.dumps({"counts": {"other": 7, "fake": 3}}))
+    run_scan([exp], root, out, ["fake"])
+    assert json.loads((out / "scan_summary.json").read_text())["counts"] == {"other": 7, "fake": 1}
+
+
 def test_scan_unknown_type_raises(tmp_path, export_with_one_missing_image):
     exp, root = export_with_one_missing_image
     with pytest.raises(ValueError):

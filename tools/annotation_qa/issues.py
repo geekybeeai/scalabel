@@ -21,7 +21,7 @@ CALIBRATION_MIN_ANSWERED = 20
 
 @dataclass
 class Issue:
-    issue_type: str  # curb_soft | position | shape | duplicates | solid_dashed | yellow_structure
+    issue_type: str  # a detectors.REGISTRY key: curb_soft, position, edge_on_paint, ...
     export_stem: str
     frame_name: str
     label_id: str

@@ -80,6 +80,10 @@ class Profile:
     ok: np.ndarray  # (M, 2R+1) bool: centre cell and both side cells inside ROI+canvas
     P: np.ndarray  # (M, 2)
     Nrm: np.ndarray  # (M, 2)
+    # ``profile(raw=True)`` only: the white / yellow scores themselves (not ridges) over
+    # ``offsets``, NaN outside ROI+canvas
+    white_raw: np.ndarray | None = None
+    yellow_raw: np.ndarray | None = None
 
 
 @dataclass
@@ -137,7 +141,8 @@ def _channels(crop: np.ndarray):
     return gray, sat, r, g, b
 
 
-def profile(img: FrameImage, poly: dict, R: int = 25, side_gap: int = 5) -> Profile | None:
+def profile(img: FrameImage, poly: dict, R: int = 25, side_gap: int = 5,
+            raw: bool = False) -> Profile | None:
     P, Nrm = _resampled(poly)
     if P is None:
         return None
@@ -167,7 +172,15 @@ def profile(img: FrameImage, poly: dict, R: int = 25, side_gap: int = 5) -> Prof
         left, mid, right = s[:, :2 * R + 1], s[:, centre], s[:, 2 * side_gap:]
         return np.where(ok, mid - np.maximum(left, right), np.nan)
 
-    return Profile(offsets, ridge(white), ridge(yellow), valid, ok, P, Nrm)
+    if not raw:
+        return Profile(offsets, ridge(white), ridge(yellow), valid, ok, P, Nrm)
+    okc = inside[:, centre]
+
+    def plain(score):
+        return np.where(okc, _sample(score, X, Y, x0, y0)[:, centre], np.nan)
+
+    return Profile(offsets, ridge(white), ridge(yellow), valid, ok, P, Nrm,
+                   plain(white), plain(yellow))
 
 
 def side_strips(img: FrameImage, poly: dict, near: int = 6, far: int = 20):

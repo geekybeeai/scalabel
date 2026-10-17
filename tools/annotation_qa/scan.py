@@ -59,9 +59,18 @@ def _subset(frames: list[dict], subset: str | None) -> list[dict]:
 
 
 def _save_summary(out: Path, s: ScanSummary) -> None:
+    """Write this run's summary; the counts of types this run did not scan are kept
+    from the previous summary, so a one-type scan does not wipe the others."""
     out.mkdir(parents=True, exist_ok=True)
-    (out / "scan_summary.json").write_text(json.dumps(
-        {"frames": s.frames, "skipped": s.skipped, "counts": s.counts, "errors": s.errors},
+    p = out / "scan_summary.json"
+    try:
+        old = json.loads(p.read_text()).get("counts") or {}
+        old = old if isinstance(old, dict) else {}
+    except (OSError, ValueError, AttributeError):
+        old = {}
+    counts = {**{k: v for k, v in old.items() if k not in s.counts}, **s.counts}
+    p.write_text(json.dumps(
+        {"frames": s.frames, "skipped": s.skipped, "counts": counts, "errors": s.errors},
         indent=1))
 
 
