@@ -140,17 +140,19 @@ def _staleness(out: Path, issue_type: str, stem: str, meta: dict | None) -> str 
     return None
 
 
-def _guards(issue_type: str, out: Path, version: int, stems: list[str],
-            issues: list[Issue], marks: dict[str, str]) -> list[str]:
+def _guards(types: list[str], name: str, out: Path, version: int,
+            by_stem: dict[str, list[Issue]], issues_by_type: dict[str, list[Issue]],
+            marks: dict[str, str]) -> list[str]:
     reasons = []
-    cal = calibration_refusal(issues, marks, issue_type, out)
-    if cal:
-        reasons.append(cal)
+    for t in types:  # every listed type must have passed its calibration
+        cal = calibration_refusal(issues_by_type[t], marks, t, out)
+        if cal:
+            reasons.append(cal)
     merged = rounds.merged_tags(out)
     all_rounds = rounds.round_files(out)
-    meta = read_meta(out, issue_type)
-    for stem in stems:
-        tag = rounds.round_tag(stem, issue_type, version)
+    metas = {t: read_meta(out, t) for t in types}
+    for stem in sorted(by_stem):
+        tag = rounds.round_tag(stem, name, version)
         open_ = [r["tag"] for r in all_rounds
                  if r["stem"] == stem and r["tag"] != tag and (stem, r["tag"]) not in merged]
         if open_:
@@ -162,24 +164,52 @@ def _guards(issue_type: str, out: Path, version: int, stems: list[str],
         if exists:
             reasons.append(f"{stem}: round {tag} already exists ({', '.join(exists)}); "
                            "use the next --version")
-        stale = _staleness(out, issue_type, stem, meta)
-        if stale:
-            reasons.append(stale)
+        for t in types:
+            if not any(i.issue_type == t for i in by_stem[stem]):
+                continue
+            stale = _staleness(out, t, stem, metas[t])
+            if stale:
+                reasons.append(stale)
     return reasons
 
 
-def apply(issue_type: str, out: Path, version: int, force: bool = False) -> FixResult:
-    """Apply the real-marked fixes of one type to the working copies, one round per stem.
+def split_types(issue_type: str | list[str]) -> list[str]:
+    """``"a,b"`` -> ["a", "b"] (order kept, duplicates and blanks dropped)."""
+    parts = issue_type.split(",") if isinstance(issue_type, str) else list(issue_type)
+    out: list[str] = []
+    for p in (x.strip() for x in parts):
+        if p and p not in out:
+            out.append(p)
+    if not out:
+        raise ValueError("no issue type given")
+    return out
 
-    Refuses (FixRefused, nothing written) when the type's calibration did not PASS,
+
+_GEOMETRY_OPS = ("shift", "drop_vertices")
+
+
+def apply(issue_type: str | list[str], out: Path, version: int, force: bool = False,
+          name: str | None = None) -> FixResult:
+    """Apply the real-marked fixes of one or more types to the working copies, one round per stem.
+
+    ``issue_type`` may list several types ("curb_soft,edge_on_paint"): a combined round,
+    tagged ``<stem>_fix_<name>_v<N>`` (``name`` defaults to the types joined by "+").
+    One type keeps the "first fix per label (by confidence) only" rule. Several types are
+    composed per label: set_category first, then the geometry fix; a delete wins over
+    everything; two geometry fixes of different types keep the higher-confidence one.
+
+    Refuses (FixRefused, nothing written) when a type's calibration did not PASS,
     a stem has an unmerged earlier round, the round tag exists already, or the
     issues were detected on a different version of the working copy. ``force``
     overrides every refusal (they are returned in ``FixResult.forced``).
     """
     out = Path(out)
-    issues = load_issues_tolerant(out / f"issues_{issue_type}.jsonl")
+    types = split_types(issue_type)
+    name = name or "+".join(types)
+    combined = len(types) > 1
+    issues_by_type = {t: load_issues_tolerant(out / f"issues_{t}.jsonl") for t in types}
     marks = read_marks(out / "marks.json")
-    real = [i for i in issues if marks.get(i.key) == "real"]
+    real = [i for t in types for i in issues_by_type[t] if marks.get(i.key) == "real"]
     by_stem: dict[str, list[Issue]] = {}
     for i in real:
         if i.fix is not None or i.hand_fix:
@@ -197,7 +227,7 @@ def apply(issue_type: str, out: Path, version: int, force: bool = False) -> FixR
             else:
                 kept.setdefault(stem, []).append(i)
     by_stem = kept
-    reasons = _guards(issue_type, out, version, sorted(by_stem), issues, marks)
+    reasons = _guards(types, name, out, version, by_stem, issues_by_type, marks)
     if reasons and not force:
         raise FixRefused(reasons)
     res.forced = reasons
@@ -208,61 +238,108 @@ def apply(issue_type: str, out: Path, version: int, force: bool = False) -> FixR
         changes: dict[str, dict[str, dict]] = {}
         changed: list[str] = []
         hand: list[str] = []
-        done_labels: set[tuple[str, str]] = set()
+        groups: dict[tuple[str, str], list[Issue]] = {}
         for iss in sorted(stem_issues, key=lambda i: -i.confidence):
-            frame = frames.get(iss.frame_name)
-            if frame is None:
+            if frames.get(iss.frame_name) is None:
                 continue
             if iss.hand_fix or iss.fix is None:
                 if iss.frame_name not in hand:
                     hand.append(iss.frame_name)
                 continue
-            where = f"{iss.key} ({iss.fix.get('op')})"
+            groups.setdefault((iss.frame_name, iss.label_id), []).append(iss)
 
-            def skip(why: str) -> None:
-                msg = f"{where}: {why}"
-                res.skipped.append(msg)
-                log.warning("skipped %s", msg)
-                print(f"warning: skipped {msg}", flush=True)
+        def skip(iss: Issue, why: str) -> None:
+            msg = f"{iss.key} ({iss.fix.get('op')}): {why}"
+            res.skipped.append(msg)
+            log.warning("skipped %s", msg)
+            print(f"warning: skipped {msg}", flush=True)
 
+        for (fname, lid), grp in groups.items():
+            frame = frames[fname]
             labels = frame.get("labels") or []
-            idx = next((k for k, l in enumerate(labels) if l["id"] == iss.label_id), None)
+            idx = next((k for k, l in enumerate(labels) if l["id"] == lid), None)
             if idx is None:
-                skip("label not found")
-                continue
-            if (iss.frame_name, iss.label_id) in done_labels:
-                skip("another fix already applied to this label")
+                for iss in grp:
+                    skip(iss, "label not found")
                 continue
             label = labels[idx]
-            try:
-                trial = copy.deepcopy(label)
-                keep_label = _apply_op(trial, iss.fix)
-            except ShiftNotRepresentable as e:  # goes to review as a draw-by-hand frame
-                skip(str(e))
-                if iss.frame_name not in hand:
-                    hand.append(iss.frame_name)
+            # one fix per type: the highest-confidence one that can be applied at all
+            reps: list[Issue] = []
+            for t in types:
+                cands = [i for i in grp if i.issue_type == t]
+                for k, iss in enumerate(cands):
+                    try:
+                        _apply_op(copy.deepcopy(label), iss.fix)
+                    except ShiftNotRepresentable as e:  # goes to review as a draw-by-hand frame
+                        skip(iss, str(e))
+                        if fname not in hand:
+                            hand.append(fname)
+                        continue
+                    except Exception as e:  # one bad issue must not abort the round
+                        skip(iss, f"{type(e).__name__}: {e}")
+                        continue
+                    reps.append(iss)
+                    for other in cands[k + 1:]:
+                        skip(other, "another fix already applied to this label")
+                    break
+            if not reps:
                 continue
-            except Exception as e:  # one bad issue must not abort the round
-                skip(f"{type(e).__name__}: {e}")
+            reps.sort(key=lambda i: -i.confidence)
+            plan = reps
+            if combined and len(reps) > 1:
+                dels = [i for i in reps if i.fix["op"] == "delete"]
+                if dels:
+                    plan = dels[:1]
+                    for i in reps:
+                        if i is not plan[0]:
+                            skip(i, f"label deleted by {plan[0].key}")
+                else:
+                    plan, geo = [], None
+                    for i in reps:
+                        if i.fix["op"] in _GEOMETRY_OPS:
+                            if geo is not None:
+                                skip(i, f"conflicting geometry fix (kept {geo.key})")
+                                continue
+                            geo = i
+                        plan.append(i)
+                    cats = [i for i in plan if i.fix["op"] == "set_category"]
+                    for i in cats[1:]:
+                        skip(i, f"conflicting category fix (kept {cats[0].key})")
+                    plan = cats[:1] + [i for i in plan if i.fix["op"] in _GEOMETRY_OPS]
+            elif not combined:
+                plan = reps[:1]
+            trial = copy.deepcopy(label)
+            applied: list[Issue] = []
+            keep_label = True
+            for iss in plan:
+                try:
+                    keep_label = _apply_op(trial, iss.fix)
+                except Exception as e:  # noqa: BLE001
+                    skip(iss, f"{type(e).__name__}: {e}")
+                    continue
+                applied.append(iss)
+            if not applied:
                 continue
-            done_labels.add((iss.frame_name, iss.label_id))
             if not keep_label:
                 del labels[idx]
                 after = None
             else:
                 labels[idx] = trial
                 after = trial
-            rec = changes.setdefault(iss.frame_name, {}).setdefault(
-                iss.label_id, {"before": _snapshot(
-                    next(l for l in before[iss.frame_name]["labels"] if l["id"] == iss.label_id))})
-            rec["after"] = _snapshot(after)
+            snap = _snapshot(next(l for l in before[fname]["labels"] if l["id"] == lid))
+            rec = {"before": snap, "after": _snapshot(after)}
             rec["anchor"] = change_anchor(rec["before"], rec["after"])
-            if iss.frame_name not in changed:
-                changed.append(iss.frame_name)
+            rec["issue_types"] = [i.issue_type for i in applied]
+            rec["ops"] = [i.fix["op"] for i in applied]
+            if not combined:
+                rec["issue_type"] = types[0]
+            changes.setdefault(fname, {})[lid] = rec
+            if fname not in changed:
+                changed.append(fname)
         hand = [n for n in hand if n not in changed]
         if not changed and not hand:
             continue  # nothing to review: no round files for this stem
-        tag = rounds.round_tag(stem, issue_type, version)
+        tag = rounds.round_tag(stem, name, version)
         if rounds.drop_markers(out, stem, tag):  # a forced rebuild needs a fresh merge
             print(f"warning: {tag} rebuilt; its old merge marker was removed", flush=True)
         save_export(exp, out / "work" / f"{tag}.json")

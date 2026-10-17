@@ -56,6 +56,18 @@ Review each project at `http://localhost:8686/dashboard?project_name=<stem>_fix_
 
 After `verify`, `python3 -m annotation_qa exclude --round <tag> --verdict bad` records the verifier-rejected auto-fixes in `OUT/excluded.json`. The next `fix --version <N+1>` skips them (listed as skipped, their frames stay out of the round unless another fix touches them) and View A marks them "auto-fix rejected", so you don't undo them by hand.
 
+### Combined rounds (review each frame once)
+
+```
+python3 -m annotation_qa fix --type curb_soft,edge_on_paint --version 1 [--name edges] --out $OUT
+```
+
+- Several types in one round, tagged `<stem>_fix_<name>_v<N>` (`--name` defaults to the types joined by `+`, e.g. `..._fix_edges_v1`). Every listed type must PASS its calibration (or `--force`); the guards run per stem over the whole round. Only issues marked real are applied.
+- Per label the fixes are composed: set_category first, then the geometry fix. A delete wins over everything and is recorded alone. Two geometry fixes of different types on one label keep the higher-confidence one; the other is listed as skipped ("conflicting geometry fix"). Inside one type the old "first fix by confidence only" rule still holds.
+- `changes.json` records `issue_types` and `ops` (parallel lists) next to before/after/anchor; single-type rounds also keep `issue_type`.
+- `verify` gives a combined change the worst verdict of its parts. View B shows the ops ("soft edge → CURB + moved 6 px") and draws the before side in its old class colour and the after side in its new one.
+- `project --round <tag>` and `merge` work as for any round.
+
 ## 4. Merge each batch's reviewed export
 
 ```bash

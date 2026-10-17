@@ -61,7 +61,11 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--out", type=Path, default=DEFAULT_OUT)
     rv.add_argument("--port", type=int, default=8790)
     fx = sub.add_parser("fix", help="apply accepted fixes and build review item files")
-    fx.add_argument("--type", required=True)
+    fx.add_argument("--type", required=True,
+                    help="issue type, or comma-separated types for a combined round "
+                         "(e.g. curb_soft,edge_on_paint)")
+    fx.add_argument("--name", default=None,
+                    help="type part of the round tag (default: the types joined by '+')")
     fx.add_argument("--out", type=Path, default=DEFAULT_OUT)
     fx.add_argument("--version", type=int, required=True)
     fx.add_argument("--create-projects", action="store_true")
@@ -175,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "fix":
         from annotation_qa.fix import FixRefused, apply
         try:
-            r = apply(a.type, a.out, a.version, force=a.force)
+            r = apply(a.type, a.out, a.version, force=a.force, name=a.name)
         except FixRefused as e:
             print(f"REFUSED: fix --type {a.type} --version {a.version}")
             for why in e.reasons:

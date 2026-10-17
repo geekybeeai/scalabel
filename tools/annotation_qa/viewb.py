@@ -133,6 +133,17 @@ def class_change(before: dict | None, after: dict | None) -> str:
     return f"{_word(before['category']).lower()} → {_word(after['category'])}"
 
 
+def ops_text(before: dict | None, after: dict | None) -> str:
+    """Combined ops of a change, e.g. "soft edge → CURB + moved 6 px" (class change first);
+    "" unless the category changed (a plain move is already in ``describe``)."""
+    cc = class_change(before, after)
+    if not cc:
+        return ""
+    rest = [p for p in describe(before, after).split(" + ")
+            if p != f"{before['category']} → {after['category']}"]
+    return " + ".join([cc] + rest)
+
+
 def describe(before: dict | None, after: dict | None) -> str:
     if after is None:
         return "deleted"
@@ -253,11 +264,14 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
             for lid, rec in labels.items():
                 q = urlencode({"stem": r["stem"], "frame": fname, "label": lid, "round": r["tag"]})
                 vd = verd.get(fname, {}).get(lid) or {}
-                c = {"round": r["round"], "tag": r["tag"], "issue_type": r["type"], "label_id": lid,
+                c = {"round": r["round"], "tag": r["tag"], "issue_type": r["type"],
+                     "issue_types": rec.get("issue_types") or [rec.get("issue_type") or r["type"]],
+                     "ops": rec.get("ops") or [], "label_id": lid,
                      "verdict": vd.get("verdict", "unverified"),
                      "reasons": vd.get("reasons") or ["not verified yet (run: python3 -m "
                                                       "annotation_qa verify --round <tag>)"],
                      "class_change": class_change(rec.get("before"), rec.get("after")),
+                     "ops_text": ops_text(rec.get("before"), rec.get("after")),
                      "what": describe(rec.get("before"), rec.get("after")),
                      "anchor": rec.get("anchor") or change_anchor(rec.get("before"), rec.get("after")),
                      "merged": is_merged, "review": "", "shipped": "",
@@ -425,7 +439,7 @@ const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><
  <div>${r.projects.map(p=>`<a href="${esc(p.link)}" target="_blank">${esc(p.project)} (task ${p.task_index}, frame ${p.item})</a>`).join('<br>')}</div>
  ${r.hand.length?'<div><span class="badge">draw by hand</span> '+r.hand.map(h=>esc(h.round)+': '+(h.done?'done':'not done')).join(', ')+'</div>':''}
  ${edits(r)}
- <div class="chgs">${r.changes.map(c=>`<div class="chg"><div class="txt">${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}<br>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}<br>${vbadge(c)}<br>${c.class_change?`<b style="font-size:15px">${esc(c.class_change)}</b><br>`:''}${esc(c.what)}${flag(c)}</div>
+ <div class="chgs">${r.changes.map(c=>`<div class="chg"><div class="txt">${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}<br>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}<br>${vbadge(c)}<br>${c.class_change?`<b style="font-size:15px">${esc(c.ops_text||c.class_change)}</b><br>`:''}${esc(c.what)}${flag(c)}</div>
  <figure><figcaption>before</figcaption><a href="${esc(c.before_crop)}" target="_blank"><img loading="lazy" src="${esc(c.before_crop)}" title="before"></a></figure><figure><figcaption>after</figcaption><a href="${esc(c.after_crop)}" target="_blank"><img loading="lazy" src="${esc(c.after_crop)}" title="${c.merged?'after review (ships)':'after (proposed)'}"></a></figure></div>`).join('')}</div>
  </div></div>`;
 let ROWS=[],cur=-1;

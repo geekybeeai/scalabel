@@ -315,6 +315,27 @@ def verify_frame_change(img, issue, rec, frame, label_id) -> dict:
     return _shift(img, after.get("category"), issue, {**rec, "label_id": label_id}, frame)
 
 
+def verify_combined(img, issues_by_type: dict, rec: dict, frame, label_id) -> dict:
+    """A change made of several fixes (``issue_types`` / ``ops`` are parallel lists) gets the
+    WORST verdict of its parts: geometry parts are scored as a plain shift, the class part
+    by the set_category rules."""
+    parts = []
+    for t, op in zip(rec["issue_types"], rec["ops"]):
+        issue = issues_by_type.get(t)
+        if op == "set_category":
+            v = _set_category(issue, rec)
+        elif op == "shift":
+            v = _shift(img, rec["after"].get("category"), issue, {**rec, "label_id": label_id},
+                       frame)
+        elif op == "drop_vertices":
+            v = {"verdict": "check", "reasons": ["vertices dropped: confirm by eye"]}
+        else:
+            v = {"verdict": "check", "reasons": ["label deleted: confirm by eye"]}
+        parts.append({**v, "reasons": [f"{t} {op}: {r}" for r in v["reasons"]]})
+    worst = min(parts, key=lambda p: _RANK[p["verdict"]])
+    return {**worst, "reasons": [r for p in parts for r in p["reasons"]]}
+
+
 def verify_round(out: Path, rnd: dict, repo_root: Path | None = None) -> dict:
     """Verdicts of one round (see module doc); decodes each frame image once."""
     out = Path(out)
@@ -322,21 +343,31 @@ def verify_round(out: Path, rnd: dict, repo_root: Path | None = None) -> dict:
     changes = json.loads(Path(rnd["changes"]).read_text())
     items = frames_by_name(rnd["items"])
     issues = {}
-    ip = out / f"issues_{rnd['type']}.jsonl"
-    if ip.exists():
-        issues = {i.key: i for i in load_issues_tolerant(ip)}
+    types = {rnd["type"]}
+    for labels in changes.values():
+        for rec in labels.values():
+            types.update(rec.get("issue_types") or [])
+    for t in sorted(types):
+        ip = out / f"issues_{t}.jsonl"
+        if ip.exists():
+            issues.update({i.key: i for i in load_issues_tolerant(ip)})
     res: dict[str, dict] = {}
     for fname, labels in changes.items():
         frame = items.get(fname, (0, {}))[1]
         img = None
         try:
             for lid, rec in labels.items():
-                issue = issues.get(f"{rnd['stem']}|{fname}|{lid}|{rnd['type']}")
+                its = rec.get("issue_types") or [rnd["type"]]
+                by_t = {t: issues.get(f"{rnd['stem']}|{fname}|{lid}|{t}") for t in its}
+                issue = by_t[its[0]]
                 if img is None and rec.get("after") and rec.get("before") and frame.get("url"):
                     img = FrameImage(image_path(frame, Path(repo_root) / "local-data"),
                                      out / "roi_cache")
                 try:
-                    v = verify_frame_change(img, issue, rec, frame, lid)
+                    if len(rec.get("ops") or []) > 1 and rec.get("before") and rec.get("after"):
+                        v = verify_combined(img, by_t, rec, frame, lid)
+                    else:
+                        v = verify_frame_change(img, issue, rec, frame, lid)
                 except Exception as e:  # noqa: BLE001 - one bad change must not stop the round
                     v = {"verdict": "check", "reasons": [f"verification failed: {type(e).__name__}: {e}"]}
                 res.setdefault(fname, {})[lid] = v
