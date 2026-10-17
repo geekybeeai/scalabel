@@ -404,8 +404,8 @@ const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><
  <div>${r.projects.map(p=>`<a href="${esc(p.link)}" target="_blank">${esc(p.project)} (task ${p.task_index}, frame ${p.item})</a>`).join('<br>')}</div>
  ${r.hand.length?'<div><span class="badge">draw by hand</span> '+r.hand.map(h=>esc(h.round)+': '+(h.done?'done':'not done')).join(', ')+'</div>':''}
  ${edits(r)}
- <table>${r.changes.map(c=>`<tr><td>${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}</td><td>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}</td><td>${vbadge(c)}<br>${esc(c.what)}${flag(c)}</td>
- <td><img loading="lazy" src="${esc(c.before_crop)}" title="before"></td><td><img loading="lazy" src="${esc(c.after_crop)}" title="${c.merged?'after review (ships)':'after (proposed)'}"></td></tr>`).join('')}</table>
+ <div class="chgs">${r.changes.map(c=>`<div class="chg"><div class="txt">${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}<br>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}<br>${vbadge(c)}<br>${esc(c.what)}${flag(c)}</div>
+ <figure><figcaption>before</figcaption><a href="${esc(c.before_crop)}" target="_blank"><img loading="lazy" src="${esc(c.before_crop)}" title="before"></a></figure><figure><figcaption>after</figcaption><a href="${esc(c.after_crop)}" target="_blank"><img loading="lazy" src="${esc(c.after_crop)}" title="${c.merged?'after review (ships)':'after (proposed)'}"></a></figure></div>`).join('')}</div>
  </div></div>`;
 let ROWS=[],cur=-1;
 async function show(){const t=$('#round').value,f=$('#show').value;
@@ -435,7 +435,15 @@ document.addEventListener('keydown',e=>{
 
 def viewb_html(css: str) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Annotation QA View B</title>
-<style>{css}table img{{max-width:420px}}td{{padding:4px 8px;vertical-align:top}}</style></head><body>
+<style>{css}
+.chgs{{display:block}}
+.chg{{display:flex;gap:10px;align-items:flex-start;padding:4px 8px;border-top:1px solid #eee}}
+.txt{{flex:0 0 220px;width:220px;min-width:0;overflow-wrap:anywhere;font-size:13px}}
+.chg figure{{flex:1 1 0;min-width:0;max-width:calc((100% - 240px)/2);margin:0}}
+.chg figcaption{{font-size:11px;color:#666}}
+.chg img{{display:block;width:100%;height:auto;object-fit:contain}}
+@media (max-width:999px){{.chg{{flex-direction:column}}.txt{{flex:none;width:auto}}.chg figure{{max-width:none;width:100%}}}}
+</style></head><body>
 <header><a href="/">&larr; View A</a> &nbsp; <b>View B: final review</b> &nbsp; <select id="round"></select>
  show: <select id="show"><option value="all">all</option><option value="needs" selected>needs a look (check+bad)</option><option value="bad">bad only</option></select> <span id="n"></span>
 &nbsp; (each change: before left, after right; merged rounds show what will ship; J/K next/prev frame, O open in Scalabel)</header><div id="rows"></div>
