@@ -141,6 +141,45 @@ def describe(before: dict | None, after: dict | None) -> str:
     return " + ".join(parts) or "no visible change"
 
 
+VERDICT_RANK = {"bad": 0, "check": 1, "unverified": 1, "ok": 2}
+
+
+def _verdicts(out: Path, tag: str) -> dict:
+    p = Path(out) / "rounds" / f"{tag}_verify.json"
+    try:
+        return _changes(p)
+    except (OSError, ValueError):
+        return {}
+
+
+def _finish_row(rw: dict) -> None:
+    """Row verdict = worst change verdict; a draw-by-hand frame counts as check."""
+    vs = [c["verdict"] for c in rw["changes"]] + (["check"] if rw["hand"] else [])
+    rw["verdict"] = min(vs, key=VERDICT_RANK.get) if vs else "check"
+    rw["all_ok"] = bool(rw["changes"]) and all(v == "ok" for v in vs) and not rw["review_edits"]
+
+
+def select_rows(rows: list[dict], tag: str = "", show: str = "needs") -> dict:
+    """View B's filter and order. ``show``: all | needs (check+bad) | bad.
+
+    Rows are limited to a round when ``tag`` is given and ordered bad, check, ok, then by
+    project item order (rows without a round keep their incoming order within a verdict).
+    Counts are per change verdict over the round's rows, before the show filter."""
+    def idx(r):
+        p = next((p for p in r["projects"] if p["project"] == tag), None)
+        return p["index"] if p else 10 ** 9
+    rows = [r for r in rows if not tag or any(p["project"] == tag for p in r["projects"])]
+    counts = {"ok": 0, "check": 0, "bad": 0, "unverified": 0}
+    for r in rows:
+        for c in r["changes"]:
+            if not tag or c["tag"] == tag:
+                counts[c["verdict"]] += 1
+    keep = {"all": 2, "needs": 1, "bad": 0}.get(show, 1)
+    rows = [r for r in rows if VERDICT_RANK[r["verdict"]] <= keep]
+    rows = sorted(rows, key=lambda r: (VERDICT_RANK[r["verdict"]], idx(r) if tag else 0))
+    return {"rows": rows, "counts": counts}
+
+
 def _crop_name(*parts: str) -> str:
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
@@ -193,12 +232,17 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
             continue
         is_merged = (r["stem"], r["tag"]) in merged
         cur = _work_frames(out, r["stem"]) if is_merged else {}
+        verd = _verdicts(out, r["tag"])
         for fname, labels in changes.items():
             rw = row(r["stem"], fname)
             shipped = {l["id"]: l for l in _labels(cur.get(fname, (0, None))[1])}
             for lid, rec in labels.items():
                 q = urlencode({"stem": r["stem"], "frame": fname, "label": lid, "round": r["tag"]})
-                c = {"round": r["round"], "issue_type": r["type"], "label_id": lid,
+                vd = verd.get(fname, {}).get(lid) or {}
+                c = {"round": r["round"], "tag": r["tag"], "issue_type": r["type"], "label_id": lid,
+                     "verdict": vd.get("verdict", "unverified"),
+                     "reasons": vd.get("reasons") or ["not verified yet (run: python3 -m "
+                                                      "annotation_qa verify --round <tag>)"],
                      "what": describe(rec.get("before"), rec.get("after")),
                      "anchor": rec.get("anchor") or change_anchor(rec.get("before"), rec.get("after")),
                      "merged": is_merged, "review": "", "shipped": "",
@@ -235,6 +279,8 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
             rw["hand"].append({"round": r["round"], "done": done})
             rw["projects"].append({"round": r["round"], "project": r["tag"],
                                    **_project_link(repo_root, r["tag"], idx)})
+    for rw in rows.values():
+        _finish_row(rw)
     return sorted(rows.values(),
                   key=lambda r: (-len(r["changes"]), r["export_stem"], r["frame_name"]))
 
@@ -350,21 +396,26 @@ const edits=r=>r.review_edits.map(e=>'<div><span class="badge">edited in review<
  +(e.added.length?'added '+e.added.map(esc).join(', '):'')+(e.added.length&&e.deleted.length?'; ':'')
  +(e.deleted.length?'deleted '+e.deleted.map(esc).join(', '):'')+'</div>').join('');
 const flag=c=>c.review?` <span class="badge">${esc(c.review)}</span>`+(c.shipped?' ships as: '+esc(c.shipped):''):'';
-const card=r=>`<div class="card" data-i="${r._i}"><div class="meta"><div><b>${esc(r.export_stem)}</b></div>
+const VB={ok:['✓ ok','#2a7','#e6f6ee'],check:['⚠ check','#b80','#fff4d6'],unverified:['⚠ not verified','#b80','#fff4d6'],bad:['✗ likely wrong','#c33','#fde8e8']};
+const vbadge=c=>{const v=VB[c.verdict]||VB.check,rs=(c.reasons||[]).map(esc).join('; ');
+ return `<span class="vb" style="color:${v[1]};background:${v[2]};border:1px solid ${v[1]};border-radius:3px;padding:0 5px;font-weight:600" title="${rs}">${v[0]}</span><div class="why" style="font-size:11px;color:#666;max-width:260px">${(c.reasons||[]).map(esc).join('<br>')}</div>`;};
+const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><div class="meta"><span class="vb" style="color:#2a7">✓ all changes verified</span> &mdash; ${esc(r.frame_name)} (${r.changes.length}) &mdash; <a href="#" class="expand" data-i="${r._i}">open anyway</a>${r.projects.length?' &middot; <a class="open" href="'+esc(r.projects[0].link)+'" target="_blank">Scalabel</a>':''}</div></div>`:`<div class="card" data-i="${r._i}"><div class="meta"><div><b>${esc(r.export_stem)}</b></div>
  <div>${esc(r.frame_name)} &middot; ${r.changes.length} changes</div>
  <div>${r.projects.map(p=>`<a href="${esc(p.link)}" target="_blank">${esc(p.project)} (task ${p.task_index}, frame ${p.item})</a>`).join('<br>')}</div>
  ${r.hand.length?'<div><span class="badge">draw by hand</span> '+r.hand.map(h=>esc(h.round)+': '+(h.done?'done':'not done')).join(', ')+'</div>':''}
  ${edits(r)}
- <table>${r.changes.map(c=>`<tr><td>${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}</td><td>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}</td><td>${esc(c.what)}${flag(c)}</td>
+ <table>${r.changes.map(c=>`<tr><td>${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}</td><td>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}</td><td>${vbadge(c)}<br>${esc(c.what)}${flag(c)}</td>
  <td><img loading="lazy" src="${esc(c.before_crop)}" title="before"></td><td><img loading="lazy" src="${esc(c.after_crop)}" title="${c.merged?'after review (ships)':'after (proposed)'}"></td></tr>`).join('')}</table>
  </div></div>`;
-let ALL=[],cur=-1;
-const idxOf=(r,t)=>{const p=r.projects.find(p=>p.project===t);return p?p.index:1e9};
-function show(){const t=$('#round').value;
- let rows=ALL.filter(r=>!t||r.projects.some(p=>p.project===t));
- if(t)rows=rows.slice().sort((a,b)=>idxOf(a,t)-idxOf(b,t));
- $('#n').textContent=rows.length+' edited frames'+(t?' (in Scalabel item order)':'');
- $('#rows').innerHTML=rows.map(card).join('');cur=-1;}
+let ROWS=[],cur=-1;
+async function show(){const t=$('#round').value,f=$('#show').value;
+ const d=await (await fetch('/viewb/view?round='+encodeURIComponent(t)+'&show='+encodeURIComponent(f))).json();
+ ROWS=d.rows;ROWS.forEach((r,i)=>r._i=i);const c=d.counts;
+ $('#n').textContent=ROWS.length+' edited frames'+(t?' (bad, check, ok; then Scalabel item order)':'')
+  +' | changes: ✓ '+c.ok+' ok, ⚠ '+(c.check+c.unverified)+' check, ✗ '+c.bad+' bad';
+ $('#rows').innerHTML=ROWS.map(card).join('');cur=-1;}
+document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a.expand');if(!a)return;e.preventDefault();
+ const r=ROWS[+a.dataset.i];r._open=true;const el=a.closest('.card');el.outerHTML=card(r);});
 function go(d){const cs=[...document.querySelectorAll('#rows .card')];if(!cs.length)return;
  cur=Math.max(0,Math.min(cs.length-1,cur+d));
  cs.forEach((c,i)=>c.style.outline=i===cur?'3px solid #38f':'');
@@ -375,16 +426,17 @@ document.addEventListener('keydown',e=>{
  if(k==='j')go(1);else if(k==='k')go(-1);
  else if(k==='o'){const c=document.querySelectorAll('#rows .card')[cur];if(!c)return;
   const a=c.querySelector('a.open')||c.querySelector('.meta a');if(a)window.open(a.href,'_blank');}});
-(async()=>{ALL=await (await fetch('/viewb/rows')).json();ALL.forEach((r,i)=>r._i=i);
- const tags=[...new Set(ALL.flatMap(r=>r.projects.map(p=>p.project)))].sort();
+(async()=>{const all=await (await fetch('/viewb/rows')).json();
+ const tags=[...new Set(all.flatMap(r=>r.projects.map(p=>p.project)))].sort();
  $('#round').innerHTML='<option value="">all rounds</option>'+tags.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('');
- $('#round').onchange=show;show();})();
+ $('#round').onchange=show;$('#show').onchange=show;show();})();
 """
 
 
 def viewb_html(css: str) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Annotation QA View B</title>
 <style>{css}table img{{max-width:420px}}td{{padding:4px 8px;vertical-align:top}}</style></head><body>
-<header><a href="/">&larr; View A</a> &nbsp; <b>View B: final review</b> &nbsp; <select id="round"></select> <span id="n"></span>
+<header><a href="/">&larr; View A</a> &nbsp; <b>View B: final review</b> &nbsp; <select id="round"></select>
+ show: <select id="show"><option value="all">all</option><option value="needs" selected>needs a look (check+bad)</option><option value="bad">bad only</option></select> <span id="n"></span>
 &nbsp; (each change: before left, after right; merged rounds show what will ship; J/K next/prev frame, O open in Scalabel)</header><div id="rows"></div>
 <script>{VIEWB_JS}</script></body></html>"""

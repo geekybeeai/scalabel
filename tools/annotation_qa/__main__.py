@@ -92,7 +92,18 @@ def main(argv: list[str] | None = None) -> int:
     rf = sub.add_parser("refilter", help="re-apply the calibrated rule to stored issues")
     rf.add_argument("--type", required=True, choices=["position", "curb_soft"])
     rf.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    vf = sub.add_parser("verify", help="auto-verify the changes of a fix round")
+    vf.add_argument("--round", default=None, help="round tag")
+    vf.add_argument("--all", action="store_true", help="every round without a verdict file")
+    vf.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
+    if a.cmd == "verify":
+        if not a.all and not a.round:
+            print("verify needs --round <tag> or --all")
+            return 2
+        from annotation_qa.verify import run
+        run(a.out, a.round, a.all)
+        return 0
     if a.cmd == "refilter":
         from annotation_qa.refilter import refilter
         r = refilter(a.out, a.type)

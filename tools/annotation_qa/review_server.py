@@ -17,7 +17,7 @@ from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_sample,  # n
                                   calibration_status, load_issues_tolerant, read_marks,
                                   write_marks)
 from annotation_qa import comments as cm, locator, zoom
-from annotation_qa.viewb import build_rows, render_crop, viewb_html
+from annotation_qa.viewb import build_rows, render_crop, select_rows, viewb_html
 
 log = logging.getLogger(__name__)
 SCALABEL = "http://localhost:8686"
@@ -256,6 +256,9 @@ def _handler(state: ReviewState):
                 self._send(viewb_html(CSS).encode(), "text/html; charset=utf-8")
             elif u.path == "/viewb/rows":
                 self._json(build_rows(state.out, state.repo_root))
+            elif u.path == "/viewb/view":
+                self._json(select_rows(build_rows(state.out, state.repo_root),
+                                       (q.get("round") or [""])[0], (q.get("show") or ["needs"])[0]))
             elif u.path == "/viewb/crop":
                 p = render_crop(state.out, state.repo_root, *(
                     (q.get(k) or [""])[0] for k in ("stem", "frame", "label", "round", "side")))
