@@ -3,11 +3,12 @@ import numpy as np
 from conftest import GRASS, ROAD, _frame, _road, edge_ctx_from_image, hpoly, make_edge_ctx
 
 from annotation_qa.detectors import REGISTRY
-from annotation_qa.detectors.curb_soft import detect
+from annotation_qa.detectors.curb_soft import _detect as detect  # raw, before the R28 filter
+from annotation_qa.detectors.curb_soft import detect as filtered_detect
 
 
 def test_registered():
-    assert REGISTRY["curb_soft"] is detect
+    assert REGISTRY["curb_soft"] is filtered_detect
 
 
 def test_soft_label_over_concrete_flags_as_curb(scene_concrete_sidewalk_labelled_soft):

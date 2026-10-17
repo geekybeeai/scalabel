@@ -13,17 +13,35 @@ from annotation_qa.issues import (CALIBRATION_N, calibration_sample_path, load_i
 
 
 def _keep(issue_type: str):
-    if issue_type == "position":
-        from annotation_qa.detectors.position import keep_issue
-        return keep_issue
-    raise ValueError(f"no refilter rule for {issue_type}")
+    import importlib
+    try:
+        mod = importlib.import_module(f"annotation_qa.detectors.{issue_type}")
+    except ImportError:
+        mod = None
+    if mod is None or not hasattr(mod, "keep_issue"):
+        raise ValueError(f"no refilter rule for {issue_type}")
+    return mod
 
 
 def refilter(out: Path, issue_type: str) -> dict:
     out = Path(out)
     path = out / f"issues_{issue_type}.jsonl"
     issues = load_issues_tolerant(path)
-    keep = _keep(issue_type)
+    mod = _keep(issue_type)
+    cad_stats = {"cad_dropped": 0, "cad_rescued": 0}
+    if issue_type == "curb_soft":
+        from annotation_qa.cad_ref import CadRef
+        cad = CadRef(out)
+
+        def keep(i):
+            ok, tag = mod.decide(i, cad)
+            if tag == "cad_drop":
+                cad_stats["cad_dropped"] += 1
+            elif tag == "cad_rescue":
+                cad_stats["cad_rescued"] += 1
+            return ok
+    else:
+        keep = mod.keep_issue
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup = out / "backup" / f"issues_{issue_type}.{stamp}.jsonl"
     backup.parent.mkdir(parents=True, exist_ok=True)
@@ -53,4 +71,4 @@ def refilter(out: Path, issue_type: str) -> dict:
     os.replace(tmp, sp)
     return {"before": len(issues), "after": len(kept), "sample_before": len(old),
             "sample_after": len(keys), "sample_answered": sum(answered(k) for k in keys),
-            "backup": str(backup)}
+            "backup": str(backup), **cad_stats}

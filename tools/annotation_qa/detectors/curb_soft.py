@@ -7,6 +7,8 @@ Every poly is judged in ~150 px stretches so mixed edges are seen per stretch.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -210,7 +212,50 @@ def _features(votes: list, deciding: list, share: float) -> dict:
     return f
 
 
+def decide(issue: Issue, cad=None) -> tuple[bool, str | None]:
+    """R28 calibrated rule on a (stored) curb_soft issue. Returns (keep, cad_tag) where
+    cad_tag is "cad_drop" / "cad_rescue" when the CAD flag decided it. Records
+    ``cad_soft`` / ``cad_green_len`` in the issue's features."""
+    f = issue.features
+    flag = cad(issue.frame_name) if cad is not None else None
+    f["cad_soft"] = flag
+    gl = getattr(cad, "green_len", None)
+    f["cad_green_len"] = gl(issue.frame_name) if gl is not None else None
+    if issue.hand_fix:  # mixed edge, split by hand: 3/11 real
+        return False, None
+    if issue.category == CURB:  # curb -> soft: the whole line must read soft
+        ok = (f.get("curb_votes", 1) == 0 and f.get("near_band_votes", 1) == 0
+              and f.get("n_votes", 0) >= 5)
+        if ok and flag is False:
+            return False, "cad_drop"
+        return ok, None
+    ok = f.get("near_band_votes", 0) >= 1 and f.get("share", 0) >= 0.75
+    if not ok and flag is False:
+        return True, "cad_rescue"
+    return ok, None
+
+
+def keep_issue(issue: Issue, cad=None) -> bool:
+    return decide(issue, cad)[0]
+
+
+def _cad_for_ctx(ctx: FrameContext):
+    from annotation_qa.cad_ref import cad_for
+    try:
+        return cad_for(Path(ctx.image.roi_cache).parent)
+    except (TypeError, AttributeError):
+        return None
+
+
 def detect(ctx: FrameContext) -> list[Issue]:
+    issues = _detect(ctx)
+    if not issues:
+        return issues
+    cad = _cad_for_ctx(ctx)
+    return [i for i in issues if keep_issue(i, cad)]
+
+
+def _detect(ctx: FrameContext) -> list[Issue]:
     stem = ctx.export.stem
     frame_name = ctx.frame.get("name", "")
     per_label: dict[str, list] = {}

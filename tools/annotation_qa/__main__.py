@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     fn = sub.add_parser("final", help="write one corrected export per batch to OUT/final")
     fn.add_argument("--out", type=Path, default=DEFAULT_OUT)
     rf = sub.add_parser("refilter", help="re-apply the calibrated rule to stored issues")
-    rf.add_argument("--type", required=True, choices=["position"])
+    rf.add_argument("--type", required=True, choices=["position", "curb_soft"])
     rf.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
     if a.cmd == "refilter":
@@ -98,7 +98,8 @@ def main(argv: list[str] | None = None) -> int:
         r = refilter(a.out, a.type)
         print(f"issues: {r['before']} -> {r['after']}; sample: {r['sample_before']} -> "
               f"{r['sample_after']} keys, {r['sample_answered']} answered; "
-              f"backup {r['backup']}")
+              f"backup {r['backup']}; dropped by CAD {r['cad_dropped']}, "
+              f"rescued by CAD {r['cad_rescued']}")
         return 0
     if a.cmd == "comments":
         from annotation_qa.comments import format_text, read_comments
