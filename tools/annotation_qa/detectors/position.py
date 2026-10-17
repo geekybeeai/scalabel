@@ -3,7 +3,7 @@
 Each poly is judged per ~60 px stretch (20 resampled points, stride 10) on the
 ridge profile across the line, so a line that drifts off paint only part of the
 way is still found. A consistent offset becomes a ``shift`` fix; anything else
-is a hand fix. Road edges are excluded until a boundary score is calibrated.
+is a hand fix. Road edges are judged by ``edge_position`` instead.
 """
 
 from __future__ import annotations
@@ -112,18 +112,8 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
     worst = max(flagged, key=lambda f: f[3] - f[2])
     m = len(prof.P)
     offs = np.array([f[4] for f in flagged], float)
-    covered = np.zeros(m, bool)
-    total, count = np.zeros(m), np.zeros(m)
-    for a, b, _n, _p, off in flagged:
-        covered[a:b] = True
-        total[a:b] += off
-        count[a:b] += 1
-    coverage = float(covered.mean())
+    smooth, coverage = smoothed_offsets(m, [(f[0], f[1], f[4]) for f in flagged])
     std = float(offs.std())
-    per_point = np.where(count > 0, total / np.maximum(count, 1), 0.0)
-    pad = SMOOTH // 2
-    padded = np.pad(per_point, pad, mode="edge")
-    smooth = np.convolve(padded, np.ones(SMOOTH) / SMOOTH, mode="valid")
     a, b = worst[0], worst[1]
     centre = prof.P[min((a + b) // 2, m - 1)]
     return {
@@ -135,6 +125,25 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
                      "n_flagged_stretches": len(flagged), "n_stretches": len(stretches),
                      "coverage": coverage, "offset_std": std, "channel": channel},
     }
+
+
+def smoothed_offsets(m: int, spans: list[tuple[int, int, float]]) -> tuple[np.ndarray, float]:
+    """(per-point shift offsets, coverage) from flagged stretches ``(row_start, row_stop, off)``.
+
+    Each point takes the mean offset of the flagged stretches covering it (0 elsewhere),
+    then a SMOOTH-point moving average so a partial shift ramps in and out.
+    """
+    covered = np.zeros(m, bool)
+    total, count = np.zeros(m), np.zeros(m)
+    for a, b, off in spans:
+        covered[a:b] = True
+        total[a:b] += off
+        count[a:b] += 1
+    per_point = np.where(count > 0, total / np.maximum(count, 1), 0.0)
+    pad = SMOOTH // 2
+    padded = np.pad(per_point, pad, mode="edge")
+    smooth = np.convolve(padded, np.ones(SMOOTH) / SMOOTH, mode="valid")
+    return smooth, float(covered.mean())
 
 
 def keep_issue(issue: Issue) -> bool:

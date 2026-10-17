@@ -33,3 +33,6 @@ REGISTRY["solid_dashed"] = solid_dashed.detect
 from annotation_qa.detectors import yellow_structure  # noqa: E402
 
 REGISTRY["yellow_structure"] = yellow_structure.detect
+from annotation_qa.detectors import edge_position  # noqa: E402
+
+REGISTRY["edge_position"] = edge_position.detect

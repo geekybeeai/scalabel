@@ -336,3 +336,31 @@ def test_since_merge_needs_a_previous_scan(tmp_path, fake_detector):
     exp = _write_export(tmp_path / "ex.json", [_frame("a.png")])
     with pytest.raises(ValueError, match="full scan first"):
         run_scan([exp], tmp_path, tmp_path / "o", ["fake"], since_merge=True)
+
+
+def test_scan_with_two_workers_matches_one_worker(tmp_path):
+    root = tmp_path / "root"
+    img = np.zeros((400, 400, 3), np.uint8)
+    img[10:390, 10:390] = 110
+    img[10:200, 10:390] = 170  # concrete above y=200, asphalt below
+    for i in range(3):
+        p = root / f"items/e{i}.png"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(p), img)
+    frames = [_frame(f"e{i}.png", f"items/e{i}.png",
+                     [_label(1, "curb_road_edge", 208 + i), _label(2, "curb_road_edge", 200)])
+              for i in range(3)]
+    frames.append(_frame("gone.png", "items/missing.png"))
+    exp = _write_export(tmp_path / "exw.json", frames)
+    res = {}
+    for w in (1, 2):
+        out = tmp_path / f"out{w}"
+        s = run_scan([exp], root, out, ["edge_position", "position"], workers=w)
+        crops = {p.relative_to(out).as_posix(): p.read_bytes()
+                 for p in sorted((out / "crops").rglob("*.jpg"))}
+        res[w] = (s.frames, s.skipped, s.counts, s.errors,
+                  (out / "issues_edge_position.jsonl").read_text(),
+                  (out / "issues_position.jsonl").read_text(),
+                  json.loads((out / "scan_summary.json").read_text()), crops)
+    assert res[1][2]["edge_position"] == 3 and len(res[1][1]) == 1
+    assert res[1] == res[2]

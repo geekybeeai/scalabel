@@ -51,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--subset", choices=["reviewer+random20"], default=None)
     sc.add_argument("--since-merge", action="store_true",
                     help="re-detect only the frames merged since the last scan of each type")
+    sc.add_argument("--workers", type=int, default=1,
+                    help="detect frames in N worker processes (default 1)")
     cy = sub.add_parser("calibrate-yellow", help="write OUT/calibration/yellow_stats.json")
     cy.add_argument("--exports", nargs="+", required=True, help="a directory or export files")
     cy.add_argument("--root", type=Path, default=DEFAULT_ROOT)
@@ -90,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     fn = sub.add_parser("final", help="write one corrected export per batch to OUT/final")
     fn.add_argument("--out", type=Path, default=DEFAULT_OUT)
     rf = sub.add_parser("refilter", help="re-apply the calibrated rule to stored issues")
-    rf.add_argument("--type", required=True, choices=["position", "curb_soft"])
+    rf.add_argument("--type", required=True, choices=["position", "curb_soft", "edge_position"])
     rf.add_argument("--out", type=Path, default=DEFAULT_OUT)
     vf = sub.add_parser("verify", help="auto-verify the changes of a fix round")
     vf.add_argument("--round", default=None, help="round tag")
@@ -215,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         a.out = DEFAULT_OUT
     s = run_scan(_expand(a.exports), a.root, a.out,
                  list(dict.fromkeys(t for t in a.types.split(",") if t)), subset=a.subset,
-                 since_merge=a.since_merge)
+                 since_merge=a.since_merge, workers=a.workers)
     print(f"frames={s.frames} skipped={len(s.skipped)} errors={len(s.errors)} counts={s.counts}")
     for e in s.errors[:20]:
         print(f"  error: {e}")

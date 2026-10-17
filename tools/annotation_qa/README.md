@@ -20,6 +20,7 @@ python3 -m annotation_qa scan --exports $EXP --out $OUT \
 
 - A scan into `$OUT` replaces that type's results: `issues_<type>.jsonl`. While it runs it writes `issues_<type>.jsonl.partial`, and it only replaces the old file when it finishes, so an interrupted run keeps the old results.
 - `--subset reviewer+random20` (the 8 reviewer frames plus 20 random frames per export) needs its own `--out`.
+- `--workers N` detects frames in N processes (each loads its own image; about 1 GB each for the largest frames). Issues, crops and the summary are the same as with 1 worker. The full `edge_position` scan takes about 3.5 min with 6 workers.
 - The exit code is 1 when the scan logged errors. The errors are printed and also kept in `$OUT/scan_summary.json`.
 
 ## 2. Triage one type
@@ -107,7 +108,8 @@ python3 -m annotation_qa final --out $OUT               # $OUT/final/<stem>_qa_2
 ## What each check flags, and its known false alarms
 
 - **curb_soft**: curb vs soft edge, judged from the strip just outside the edge (a near concrete band or a sharp step means curb; dirt or grass means soft). About 1/3 to 1/2 of soft→curb flags are real. Beige sand, the back edge of a sidewalk and concrete aprons at grade read as curb. Planters, islands, rings and deep shadow are handled, but check them.
-- **position**: painted lines only; road edges are not checked. It flags only when at least 2 stretches of about 60 px have no paint under the line (ridge below 10) and a stripe (ridge 25 or more) lies within ±25 px. It misses drifts shorter than 2 stretches. Offsets that disagree between stretches become "draw by hand".
+- **edge_position**: `curb_road_edge` / `without_curb_road_edge` that are not on the road boundary (asphalt -> curb, or asphalt -> dirt/grass). Per 60 px stretch it finds the boundary nearest the road within ±20 px (painted lines on the road are ignored, occluded stretches skipped) and flags it when that boundary is at least 1.8x stronger than the one under the line and more than 3 px away. It needs at least 5 flagged stretches in runs of 3 or more. Offsets that disagree, or a shift `partial_shift` cannot represent, become "draw by hand". The shift verdict scores the boundary strength under the line, not paint. Known: on the 2026-10-17 scan about 3/4 of the flags are lines on the BACK edge of a 4-12 px concrete curb/gutter band; the shift moves them to the asphalt seam. Refilter on `features.median_off` if that is not wanted. Lines closer than about 8 px to a boundary are not flagged.
+- **position**: painted lines only; road edges are checked by `edge_position`. It flags only when at least 2 stretches of about 60 px have no paint under the line (ridge below 10) and a stripe (ridge 25 or more) lies within ±25 px. It misses drifts shorter than 2 stretches. Offsets that disagree between stretches become "draw by hand".
 - **shape**: spikes (turn-backs with an arm under 25 px), self-crossings, and painted fragments under 30 px with no paint under them. Long-armed V gore tips are treated as valid. Self-crossing can flag intentional out-and-back outlines.
 - **duplicates**: two labels within 4 px and running the same direction (within about 20°). It misses duplicates that cross at a larger angle. In a chain, the longest piece is kept.
 - **solid_dashed**: a solid label over dashes (white only) or a dashed label over continuous paint. It needs at least 4 dashes and skips lines that are more than 25% unknown or have dark gaps. Junction and stop-bar gaps are the usual false "dashed". Yellow solid/dashed mix-ups are never flagged.

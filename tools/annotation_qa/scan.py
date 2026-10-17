@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import multiprocessing
 import os
 import random
 from dataclasses import dataclass, field
@@ -23,7 +24,8 @@ import cv2
 
 from annotation_qa import rounds
 from annotation_qa.context import FrameContext
-from annotation_qa.data import REVIEWER_FRAMES, image_path, load_export, reviewer_match
+from annotation_qa.data import (REVIEWER_FRAMES, Export, image_path, load_export,
+                                reviewer_match)
 from annotation_qa.detectors import REGISTRY
 from annotation_qa.imaging import FrameImage
 from annotation_qa.issues import (append_issues, file_sha1, load_issues_tolerant, read_meta,
@@ -98,9 +100,52 @@ def since_merge_frames(out: Path, issue_type: str, stems: list[str]) -> dict[str
     return res
 
 
+def _fname(frame) -> str:
+    return frame.get("name", "?") if isinstance(frame, dict) else "?"
+
+
+def _frame_job(job) -> dict:
+    """Detect one frame (in the parent or a pool worker): load its image, run the
+    detectors in ``types`` and render each issue's crop as JPEG bytes. The parent does
+    all bookkeeping (dedup, crop files, .partial appends, progress, errors) in frame
+    order, so results do not depend on the number of workers."""
+    stem, frame, root, out, types = job
+    try:
+        img = FrameImage(image_path(frame, root), out / "roi_cache")
+        img.bgr  # noqa: B018 - force the load
+    except FileNotFoundError as e:
+        return {"status": "skipped", "msg": str(e)}
+    except Exception as e:
+        return {"status": "error", "msg": f"{type(e).__name__}: {e}"}
+    res = {"status": "ok", "found": {}, "failed": {}}
+    ctx = FrameContext(Export(Path(f"{stem}.json"), [frame], {}), frame, img)
+    try:
+        for t in types:
+            try:
+                found = REGISTRY[t](ctx)
+            except Exception as e:
+                res["failed"][t] = f"{type(e).__name__}: {e}"
+                continue
+            rows = []
+            for issue in found:
+                try:
+                    ok, buf = cv2.imencode(".jpg", issue_crop(img, frame, issue))
+                    rows.append((issue, buf.tobytes() if ok else None, None))
+                except Exception as e:
+                    rows.append((issue, None, f"{type(e).__name__}: {e}"))
+            res["found"][t] = rows
+    finally:
+        img.release()
+    return res
+
+
 def run_scan(exports: list[Path], root: Path, out: Path, types: list[str],
-             subset: str | None = None, since_merge: bool = False) -> ScanSummary:
+             subset: str | None = None, since_merge: bool = False,
+             workers: int = 1) -> ScanSummary:
     """Scan ``exports`` (each stem's working copy when there is one) for ``types``.
+
+    ``workers`` > 1 detects frames in a spawn-context process pool (each worker loads
+    its own images); issues, crops and the summary are identical to a 1-worker run.
 
     ``since_merge``: re-detect only the frames listed in merge markers newer than
     each type's last scan, and replace exactly those frames' issues in
@@ -141,6 +186,25 @@ def run_scan(exports: list[Path], root: Path, out: Path, types: list[str],
         log.error(msg)
         summary.errors.append(msg)
 
+    pool = None
+    if workers > 1:
+        pool = multiprocessing.get_context("spawn").Pool(workers)
+    try:
+        _scan_exports(exports, root, out, types, subset, since_merge, wanted, meta, partial,
+                      summary, fail, pool)
+    finally:
+        if pool is not None:
+            pool.close()
+            pool.join()
+    for t in types:  # the run finished: the new results replace the old ones
+        os.replace(partial[t], final[t])
+        write_meta(out, t, meta[t])
+    _save_summary(out, summary)
+    return summary
+
+
+def _scan_exports(exports, root, out, types, subset, since_merge, wanted, meta, partial,
+                  summary, fail, pool) -> None:
     for path in exports:
         stem = Path(path).stem
         work = out / "work" / f"{stem}.json"
@@ -160,59 +224,54 @@ def run_scan(exports: list[Path], root: Path, out: Path, types: list[str],
             fail(f"{stem}: cannot load export: {type(e).__name__}: {e}")
             continue
         seen: set[str] = set()
-        for n, frame in enumerate(frames, 1):
-            fname = frame.get("name", "?") if isinstance(frame, dict) else "?"
+        jobs = [(exp.stem, frame, Path(root), out,
+                 [t for t in types if todo is None or _fname(frame) in todo[t]])
+                for frame in frames]
+        results = pool.imap(_frame_job, jobs, chunksize=1) if pool is not None \
+            else map(_frame_job, jobs)
+        for n, (frame, res) in enumerate(zip(frames, results), 1):
+            fname = _fname(frame)
             tag = f"{exp.stem}|{fname}"
-            try:
-                img = FrameImage(image_path(frame, root), out / "roi_cache")
-                img.bgr  # noqa: B018 - force the load
-            except FileNotFoundError as e:
-                log.warning("skipping %s: %s", tag, e)
+            if res["status"] == "skipped":
+                log.warning("skipping %s: %s", tag, res["msg"])
                 summary.skipped.append(tag)
                 print(f"[{n}/{len(frames)}] {tag}: skipped", flush=True)
                 continue
-            except Exception as e:
-                fail(f"{tag}: cannot open frame: {type(e).__name__}: {e}")
+            if res["status"] == "error":
+                fail(f"{tag}: cannot open frame: {res['msg']}")
                 continue
-            ctx = FrameContext(exp, frame, img)
             k = 0
-            try:
-                for t in types:
-                    if todo is not None and fname not in todo[t]:
+            for t in types:
+                if t not in res["found"] and t not in res["failed"]:
+                    continue
+                if t in res["failed"]:
+                    fail(f"{tag}: detector {t} failed: {res['failed'][t]}")
+                    continue
+                kept = []
+                for issue, jpg, err in res["found"][t]:
+                    if issue.key in seen:
+                        log.warning("duplicate issue key, keeping first: %s", issue.key)
                         continue
-                    try:
-                        found = REGISTRY[t](ctx)
-                    except Exception as e:
-                        fail(f"{tag}: detector {t} failed: {type(e).__name__}: {e}")
-                        continue
-                    kept = []
-                    for issue in found:
-                        if issue.key in seen:
-                            log.warning("duplicate issue key, keeping first: %s", issue.key)
-                            continue
-                        seen.add(issue.key)
+                    seen.add(issue.key)
+                    name = hashlib.sha1(issue.key.encode()).hexdigest()[:12] + ".jpg"
+                    if err is not None:
+                        fail(f"{tag}: crop failed for {issue.key}: {err}")
+                    elif jpg is None:
+                        fail(f"{tag}: crop write failed for {issue.key}")
+                    else:
                         try:
-                            crop = issue_crop(img, frame, issue)
                             cdir = out / "crops" / t
                             cdir.mkdir(parents=True, exist_ok=True)
-                            name = hashlib.sha1(issue.key.encode()).hexdigest()[:12] + ".jpg"
-                            if not cv2.imwrite(str(cdir / name), crop):
-                                fail(f"{tag}: crop write failed for {issue.key}")
+                            (cdir / name).write_bytes(jpg)
                         except Exception as e:
-                            fail(f"{tag}: crop failed for {issue.key}: {type(e).__name__}: {e}")
-                        kept.append(issue)
-                    append_issues(partial[t], kept)
-                    summary.counts[t] += len(kept)
-                    k += len(kept)
-            finally:
-                img.release()
+                            fail(f"{tag}: crop write failed for {issue.key}: "
+                                 f"{type(e).__name__}: {e}")
+                    kept.append(issue)
+                append_issues(partial[t], kept)
+                summary.counts[t] += len(kept)
+                k += len(kept)
             summary.frames += 1
             print(f"[{n}/{len(frames)}] {tag}: {k} issues", flush=True)
         for t in types:
             meta[t][stem] = {"sha1": sha, "scanned_at": started}
         _save_summary(out, summary)
-    for t in types:  # the run finished: the new results replace the old ones
-        os.replace(partial[t], final[t])
-        write_meta(out, t, meta[t])
-    _save_summary(out, summary)
-    return summary

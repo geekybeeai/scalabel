@@ -243,3 +243,86 @@ def yellow_fwhm(img: FrameImage, poly: dict, R: int = 25, peak_window: int = 3,
     if len(widths) < MIN_VALID:
         return None
     return float(np.median(widths)), len(widths), float(np.median(centre))
+
+
+@dataclass
+class EdgeProfile:
+    """Across-line samples for road-edge scoring (see ``edge_profile``).
+
+    Every array is (M, 2E+1) over ``offsets`` -E..E along +Nrm and is NaN where
+    the cell (or the pixels its local statistics need) lies outside the ROI or
+    the canvas, so consumers must use nan-aware maths.
+    """
+
+    offsets: np.ndarray
+    gray: np.ndarray
+    sat: np.ndarray
+    texture: np.ndarray  # local std of gray (5x5)
+    green: np.ndarray  # G - (R+B)/2
+    paint: np.ndarray  # max(white, yellow) ridge, as in ``profile``
+    P: np.ndarray
+    Nrm: np.ndarray
+
+
+EDGE_CHUNK = 200  # resampled points per crop (~600 px of line)
+
+
+def edge_profile(img: FrameImage, poly: dict, E: int = 28, side_gap: int = 5,
+                 tex_k: int = 5) -> EdgeProfile | None:
+    """Gray / saturation / texture / greenness / paint-ridge profiles across a poly.
+
+    Long lines are cut into chunks of EDGE_CHUNK points and each chunk is scored on
+    its own padded crop, so a curb that crosses a 190 MP frame never causes a huge
+    float crop. Validity uses the ROI mask eroded by the local window radius, so
+    black padding never leaks into the texture or blur of a valid cell.
+    """
+    P, Nrm = _resampled(poly)
+    if P is None or not np.isfinite(P).all():
+        return None
+    m = len(P)
+    offsets = np.arange(-E, E + 1)
+    ext = np.arange(-E - side_gap, E + side_gap + 1)
+    n = 2 * E + 1
+    planes = ("gray", "sat", "texture", "green", "paint")
+    out = {k: np.full((m, n), np.nan, np.float32) for k in planes}
+    h, w = img.shape
+    rad = tex_k // 2 + 1  # local window + bilinear neighbour
+    pad = E + side_gap + rad + 2
+    kern = np.ones((2 * rad + 1, 2 * rad + 1), np.uint8)
+    for a in range(0, m, EDGE_CHUNK):
+        b = min(a + EDGE_CHUNK, m)
+        Pc, Nc = P[a:b], Nrm[a:b]
+        loc = _local_crop(img, Pc, pad)
+        if loc is None:
+            continue
+        crop, x0, y0 = loc
+        ch, cw = crop.shape[:2]
+        roi = img.roi.mask[y0:y0 + ch, x0:x0 + cw].astype(np.uint8)
+        roi = cv2.erode(roi, kern, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+        X = Pc[:, 0:1] + ext[None, :] * Nc[:, 0:1]
+        Y = Pc[:, 1:2] + ext[None, :] * Nc[:, 1:2]
+        ix, iy = np.rint(X).astype(int) - x0, np.rint(Y).astype(int) - y0
+        inb = (ix >= 0) & (iy >= 0) & (ix < cw) & (iy < ch)
+        ok = np.zeros(ix.shape, bool)
+        ok[inb] = roi[iy[inb], ix[inb]] > 0
+        gray, sat, r, g, bl = _channels(crop)
+        mean = cv2.blur(gray, (tex_k, tex_k))
+        tex = np.sqrt(np.maximum(cv2.blur(gray * gray, (tex_k, tex_k)) - mean * mean, 0))
+        white = cv2.blur(gray - 0.8 * sat, (3, 3))
+        yellow = cv2.blur((r + g) / 2 - bl, (3, 3))
+        mid = slice(side_gap, side_gap + n)
+        okm = ok[:, mid]
+        for key, plane in (("gray", gray), ("sat", sat), ("texture", tex),
+                           ("green", g - (r + bl) / 2)):
+            s = _sample(plane, X[:, mid], Y[:, mid], x0, y0)
+            out[key][a:b] = np.where(okm, s, np.nan)
+        okr = okm & ok[:, :n] & ok[:, 2 * side_gap:]
+        ridges = []
+        for plane in (white, yellow):
+            s = _sample(plane, X, Y, x0, y0)
+            ridges.append(s[:, mid] - np.maximum(s[:, :n], s[:, 2 * side_gap:]))
+        out["paint"][a:b] = np.where(okr, np.maximum(*ridges), np.nan)
+    if np.isnan(out["gray"]).all():
+        return None
+    return EdgeProfile(offsets, out["gray"], out["sat"], out["texture"], out["green"],
+                       out["paint"], P, Nrm)
