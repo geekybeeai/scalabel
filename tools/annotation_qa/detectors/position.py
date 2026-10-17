@@ -28,6 +28,8 @@ NEAR_R = 3  # a line within this many px of its paint is on it
 NEAR_MAX, PEAK_MIN = 10.0, 25.0
 SHIFT_STD_MAX = 3.0
 MIN_FLAGGED_STRETCHES = 2  # R16: one flagged stretch is noise
+MIN_FLAGGED_STRETCHES_LINES = 5  # R26: solid / dashed lines need 5 flagged stretches
+DASHED_MAX_OFF = 10  # R26: a dashed line further off than this is the neighbouring lane's dashes
 SMOOTH = 15
 DASH_PERCENTILE = 80
 CONF_SCALE = 80.0
@@ -135,6 +137,19 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
     }
 
 
+def keep_issue(issue: Issue) -> bool:
+    """R26 calibrated rule on a (stored) position issue; uses only category and features."""
+    f = issue.features
+    if issue.category in (SOLID, DASHED):
+        if f.get("n_flagged_stretches", 0) < MIN_FLAGGED_STRETCHES_LINES:
+            return False
+    elif f.get("n_flagged_stretches", 0) < MIN_FLAGGED_STRETCHES:
+        return False
+    if issue.category == DASHED and abs(f.get("off", 0)) > DASHED_MAX_OFF:
+        return False
+    return True
+
+
 def detect(ctx: FrameContext) -> list[Issue]:
     stem = ctx.export.stem
     frame_name = ctx.frame.get("name", "")
@@ -160,4 +175,4 @@ def detect(ctx: FrameContext) -> list[Issue]:
             issue_type="position", export_stem=stem, frame_name=frame_name, label_id=lid,
             category=label["category"], confidence=conf, reason=reason, anchor=r["anchor"],
             fix=fix, hand_fix=hand, features={**f, "poly_index": pi}))
-    return issues
+    return [i for i in issues if keep_issue(i)]
