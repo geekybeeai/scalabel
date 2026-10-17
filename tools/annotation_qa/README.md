@@ -32,6 +32,7 @@ python3 -m annotation_qa review --out $OUT        # http://localhost:8790/
    - PASS means precision of at least 2/3 with at least 20 answered. A type with fewer than 20 issues needs all of them answered.
 2. On the type's tab, mark cards **Real** or **False alarm**. You can also bulk-mark everything at or above a confidence as real; the page asks you to confirm the count first.
 3. Only issues marked real are fixed.
+   Every card, the calibrate cards and the zoom lightbox also have a comment box (autosaved to `$OUT/comments.json`); read them at `/comments/view` or with `python3 -m annotation_qa comments --out $OUT`.
 
 ## 3. Fix, then review in Scalabel
 

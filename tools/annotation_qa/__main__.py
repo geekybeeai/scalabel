@@ -83,11 +83,18 @@ def main(argv: list[str] | None = None) -> int:
     pz.add_argument("--out", type=Path, default=DEFAULT_OUT)
     pz.add_argument("--calibration-only", action="store_true",
                     help="only the frozen calibration samples (OUT/calibration/sample_<type>.json)")
+    cm_ = sub.add_parser("comments", help="print the review comments as plain text")
+    cm_.add_argument("--out", type=Path, default=DEFAULT_OUT)
     br = sub.add_parser("bar", help="check the 8 reviewer frames have real-marked issues")
     br.add_argument("--out", type=Path, default=DEFAULT_OUT)
     fn = sub.add_parser("final", help="write one corrected export per batch to OUT/final")
     fn.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
+    if a.cmd == "comments":
+        from annotation_qa.comments import format_text, read_comments
+        text = format_text(read_comments(a.out))
+        print(text if text else "no comments")
+        return 0
     if a.cmd == "bar":
         from annotation_qa.final import bar_report
         rep = bar_report(a.out)

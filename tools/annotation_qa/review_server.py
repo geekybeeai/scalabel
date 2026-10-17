@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import html as _html
 import json
 import logging
 import threading
@@ -15,7 +16,7 @@ from annotation_qa.data import ORIGINALS_DIR, REPO_ROOT
 from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_sample,  # noqa: F401
                                   calibration_status, load_issues_tolerant, read_marks,
                                   write_marks)
-from annotation_qa import locator, zoom
+from annotation_qa import comments as cm, locator, zoom
 from annotation_qa.viewb import build_rows, render_crop, viewb_html
 
 log = logging.getLogger(__name__)
@@ -67,7 +68,8 @@ class ReviewState:
             self._task_size[project] = (size, d.is_dir())
         return self._task_size[project]
 
-    def card(self, issue: Issue, type_counts: dict[tuple[str, str], int]) -> dict:
+    def card(self, issue: Issue, type_counts: dict[tuple[str, str], int],
+             comments: dict | None = None) -> dict:
         project = issue.export_stem.split("_export_")[0]
         size, found = self._project(project)
         i = self._frames(issue.export_stem).get(issue.frame_name)
@@ -88,6 +90,7 @@ class ReviewState:
             frame_link=f"{SCALABEL}/label?project_name={project}&task_index={task}" + (
                 f"&item={frame_no}" if frame_no else ""),
             locator="/locator?key=" + quote(issue.key, safe=""),
+            comment=(comments or {}).get(issue.key, {}).get("text", ""),
             n=0, group_size=1, other_types=0, overview="",
             crop=f"/crops/{issue.issue_type}/"
                  f"{hashlib.sha1(issue.key.encode()).hexdigest()[:12]}.jpg",
@@ -124,11 +127,12 @@ class ReviewState:
         for i in allv:
             counts[(i.export_stem, i.frame_name)] = counts.get((i.export_stem, i.frame_name), 0) + 1
         res = []
+        comments = cm.read_comments(self.out)
         for g in self.grouped(self.issues(t).get(t, [])):
             ov = ("/locator/frame?" + "&".join(f"{k}={quote(v, safe='')}" for k, v in (
                 ("type", t), ("stem", g[0].export_stem), ("frame", g[0].frame_name))))
             for n, i in enumerate(g, 1):
-                d = self.card(i, counts)
+                d = self.card(i, counts, comments)
                 d.update(n=n, group_size=len(g), overview=ov,
                          other_types=counts[(i.export_stem, i.frame_name)] - len(g))
                 res.append(d)
@@ -136,7 +140,8 @@ class ReviewState:
 
     def calibration(self, t: str) -> list[dict]:
         """The fixed calibration sample of type ``t`` (the one `fix` is gated on)."""
-        return [dict(self.card(i, {}), n=n) for n, i in enumerate(
+        comments = cm.read_comments(self.out)
+        return [dict(self.card(i, {}, comments), n=n) for n, i in enumerate(
             calibration_sample(self.out, t, self.issues(t).get(t, [])), 1)]
 
     def calibration_status(self) -> dict[str, dict]:
@@ -150,6 +155,50 @@ class ReviewState:
             marks.update(new)
             write_marks(self.out / "marks.json", marks)
         return len(new)
+
+    def set_comment(self, key: str, text: str) -> int:
+        """Save (or, when blank, delete) the comment of an issue; returns the comment count."""
+        if len(text) > cm.MAX_LEN:
+            raise ValueError(f"comment longer than {cm.MAX_LEN} characters")
+        issue = self.find_issue(key)
+        if issue is None:
+            raise ValueError("unknown issue key")
+        with self.lock:
+            comments = cm.read_comments(self.out)
+            if text.strip():
+                comments[key] = cm.entry(issue, text)
+            else:
+                comments.pop(key, None)
+            cm.write_comments(self.out, comments)
+            return len(comments)
+
+    def comments_html(self) -> str:
+        comments = cm.read_comments(self.out)
+        by_type: dict[str, list[tuple[str, dict]]] = {}
+        for k, c in comments.items():
+            by_type.setdefault(c.get("issue_type", "?"), []).append((k, c))
+        e = _html.escape
+        parts = []
+        for t in sorted(by_type):
+            parts.append(f"<h2>{e(t)} ({len(by_type[t])})</h2>")
+            for k, c in sorted(by_type[t], key=lambda kc: (
+                    kc[1].get("export_stem", ""), kc[1].get("frame_name", ""),
+                    str(kc[1].get("label_id", "")))):
+                issue = self.find_issue(k)
+                card = self.card(issue, {}) if issue else None
+                img = (f'<img src="{e(card["crop"], quote=True)}">' if card else "")
+                link = (f' &middot; <a href="{e(card["link"], quote=True)}" target="_blank">'
+                        f'Open in Scalabel</a>' if card else " (issue no longer detected)")
+                parts.append(
+                    f'<div class="card col">{img}<div><b>{e(str(c.get("export_stem", "")))}</b>'
+                    f' &middot; frame {e(str(c.get("frame_name", "")))}'
+                    f' &middot; label {e(str(c.get("label_id", "")))}{link}'
+                    f'<div style="white-space:pre-wrap;margin-top:6px">{e(str(c.get("text", "")))}'
+                    f'</div><small>{e(str(c.get("updated", "")))}</small></div></div>')
+        body = "".join(parts) or "<p style='margin:16px'>No comments yet.</p>"
+        return (f'<!doctype html><html><head><meta charset="utf-8"><title>Comments</title>'
+                f'<style>{CSS}</style></head><body><header><a href="/">&larr; back</a> &nbsp; '
+                f'<b>Comments ({len(comments)})</b></header>{body}</body></html>')
 
     def bulk(self, t: str, min_conf: float, dry_run: bool = False) -> int:
         """Mark every issue of ``t`` with confidence >= ``min_conf`` real (false marks stay).
@@ -187,9 +236,13 @@ def _handler(state: ReviewState):
             q = parse_qs(u.query)
             t = (q.get("type") or [""])[0]
             if u.path == "/":
-                self._send(index_html(state.types()).encode(), "text/html; charset=utf-8")
+                self._send(index_html(state.types(), len(cm.read_comments(state.out))).encode(), "text/html; charset=utf-8")
             elif u.path == "/marks":
                 self._json(read_marks(state.out / "marks.json"))
+            elif u.path == "/comments":
+                self._json(cm.read_comments(state.out))
+            elif u.path == "/comments/view":
+                self._send(state.comments_html().encode(), "text/html; charset=utf-8")
             elif u.path == "/issues":
                 self._json(state.cards(t))
             elif u.path == "/calibrate/items":
@@ -197,7 +250,7 @@ def _handler(state: ReviewState):
             elif u.path == "/calibration":
                 self._json(state.calibration_status())
             elif u.path == "/calibrate":
-                self._send(calibrate_html(t).encode(), "text/html; charset=utf-8")
+                self._send(calibrate_html(t, len(cm.read_comments(state.out))).encode(), "text/html; charset=utf-8")
             elif u.path == "/viewb":
                 self._send(viewb_html(CSS).encode(), "text/html; charset=utf-8")
             elif u.path == "/viewb/rows":
@@ -272,6 +325,11 @@ def _handler(state: ReviewState):
                             v not in ("real", "false") for v in body.values()):
                         raise ValueError("expected {key: 'real'|'false'}")
                     self._json({"saved": state.save(body)})
+                elif self.path == "/comments":
+                    if not isinstance(body, dict) or not isinstance(body.get("key"), str) \
+                            or not isinstance(body.get("text"), str):
+                        raise ValueError("expected {key: str, text: str}")
+                    self._json({"saved": True, "count": state.set_comment(body["key"], body["text"])})
                 elif self.path == "/marks/bulk":
                     dry = bool(body.get("dry_run"))
                     n = state.bulk(body["issue_type"], float(body["min_confidence"]), dry)
@@ -329,6 +387,8 @@ header{background:#fff;padding:8px 16px;border-bottom:1px solid #ddd;position:st
 .badge{background:#f90;color:#fff;border-radius:4px;padding:1px 6px;font-size:12px}
 button{padding:8px 14px;border:0;border-radius:6px;cursor:pointer;font-size:14px}
 .r{background:#d33;color:#fff}.f{background:#2a9d4a;color:#fff}
+.cmt{display:block;width:100%;max-width:520px;margin-top:8px;font:13px system-ui,sans-serif}
+.sv{font-size:11px;color:#2a9d4a;margin-left:6px}
 .big button{font-size:20px;padding:18px 28px;margin-right:10px}
 """
 
@@ -363,7 +423,7 @@ function card(it,i){const m=marks[it.key]||'';
  ${it.hand_fix?'<div><span class="badge">draw by hand</span></div>':''}
  <div><a href="${it.link}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}</div>
  <div style="margin-top:8px"><button class="r" onclick="mark(${i},'real')">Real</button>
- <button class="f" onclick="mark(${i},'false')">False alarm</button></div></div></div></div>`;}
+ <button class="f" onclick="mark(${i},'false')">False alarm</button></div>${cmtBox(it,i)}</div></div></div>`;}
 async function mark(i,v){const it=items[i];try{await post('/marks',{[it.key]:v});}catch(e){return;}
  marks[it.key]=v;$('#c'+i).className='card col '+v;calib();}
 async function bulk(){const c=parseFloat($('#conf').value);if(isNaN(c))return;
@@ -379,7 +439,9 @@ document.addEventListener('DOMContentLoaded',()=>{if(TABS.length)show(TABS[0][0]
 LB_HTML = """<div id="lb"><div class="bar2"><b id="lbcap"></b> &nbsp;
 <button onclick="lbRawToggle()" id="lbraw">raw only (R)</button><button onclick="lbOpenSc()">Open in Scalabel (O)</button>
 <span id="lbans"></span><button onclick="lbClose()">close (Esc)</button>
-<span id="lbhelp" style="font-size:12px"></span></div><div id="lbmsg" style="text-align:center;padding:8px"></div>
+<span id="lbhelp" style="font-size:12px"></span><br>
+<textarea id="lbcm" class="cmt" rows="2" placeholder="Comment for Claude (optional)&hellip;"
+ oninput="cmtInput(lbI,this.value)" onblur="if(lbI>=0)cmtSave(lbI)"></textarea><span class="sv" id="lbsv"></span></div><div id="lbmsg" style="text-align:center;padding:8px"></div>
 <img id="lbimg" alt=""></div>"""
 
 LB_JS = """
@@ -392,6 +454,7 @@ function lbShow(i){lbI=i;const it=items[i];const im=$('#lbimg');$('#lb').style.d
  $('#lbcap').textContent=(i+1)+' / '+items.length+' \u00b7 '+it.category+' \u00b7 label '+it.label_id+' \u00b7 '+it.reason+(marks[it.key]?' \u00b7 ['+marks[it.key]+']':'');
  $('#lbraw').textContent=lbRaw?'labelled (R)':'raw only (R)';
  $('#lbhelp').textContent=(typeof LB_ANSWER==='function'?'Y = YES, N = NO, ':'')+'\u2190/\u2192 move, click image = actual size';
+ $('#lbcm').value=it.comment||'';$('#lbsv').textContent='';
  const c=document.getElementById('c'+i);if(c)c.scrollIntoView({block:'center'});}
 function lbOpen(i){lbShow(i);}
 function lbClose(){lbI=-1;$('#lb').style.display='none';$('#lbimg').removeAttribute('src');}
@@ -399,6 +462,18 @@ function lbRawToggle(){if(lbI>=0){lbRaw=!lbRaw;lbShow(lbI);}}
 function lbOpenSc(){if(lbI>=0)window.open(items[lbI].link,'_blank');}
 $('#lbimg').onclick=e=>e.target.classList.toggle('full');
 async function lbAnswer(i,v){try{await LB_ANSWER(i,v);}catch(e){return false;}return true;}
+const cmtT={};
+function cmtBox(it,i){return `<div><textarea class="cmt" id="cm${i}" rows="2" placeholder="Comment for Claude (optional)\u2026"
+ oninput="cmtInput(${i},this.value)" onblur="cmtSave(${i})">${esc(it.comment)}</textarea><span class="sv" id="sv${i}"></span></div>`;}
+function cmtInput(i,v){if(items[i].cmtSaved===undefined)items[i].cmtSaved=items[i].comment||'';items[i].comment=v;clearTimeout(cmtT[i]);cmtT[i]=setTimeout(()=>cmtSave(i),600);
+ for(const id of ['cm'+i,'lbcm']){const t=document.getElementById(id);if(t&&t.value!==v&&(id!=='lbcm'||lbI===i))t.value=v;}}
+async function cmtSave(i){clearTimeout(cmtT[i]);const it=items[i];if(!it||it.cmtSaved===it.comment)return;
+ const v=it.comment;
+ try{const r=await fetch('/comments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:it.key,text:v})});
+  if(!r.ok)throw new Error(r.status);const j=await r.json();it.cmtSaved=v;
+  const n=document.getElementById('ncm');if(n)n.textContent=j.count;
+  for(const id of ['sv'+i,lbI===i?'lbsv':'']){const s=id&&document.getElementById(id);if(s){s.textContent='saved';setTimeout(()=>{if(s.textContent==='saved')s.textContent='';},1500);}}
+ }catch(err){for(const id of ['sv'+i,'lbsv']){const s=document.getElementById(id);if(s)s.textContent='NOT saved';}}}
 document.addEventListener('keydown',async e=>{
  if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName||'')))return;
  const k=e.key.toLowerCase(),open=lbI>=0;
@@ -418,7 +493,7 @@ document.addEventListener('keydown',async e=>{
 """
 
 
-def index_html(types: dict[str, int]) -> str:
+def index_html(types: dict[str, int], n_comments: int = 0) -> str:
     tabs = "".join(f'<span class="tab" data-t="{t}" onclick="show(\'{t}\')">{t} ({n})'
                    f'<span class="cal"></span></span>' for t, n in types.items())
     calib = " ".join(f'<a href="/calibrate?type={t}">{t}</a>' for t in types)
@@ -427,7 +502,8 @@ def index_html(types: dict[str, int]) -> str:
 <style>{CSS}</style></head><body><header>{tabs}
 <div class="bar">Mark all &ge; <input id="conf" size="4" value="0.8"> as real
 <button class="r" onclick="bulk()">Apply to this tab</button> <span id="msg"></span>
-&nbsp;|&nbsp; Calibrate: {calib} &nbsp;|&nbsp; <a href="/viewb">View B (final review)</a></div>
+&nbsp;|&nbsp; Calibrate: {calib} &nbsp;|&nbsp; <a href="/viewb">View B (final review)</a>
+&nbsp;|&nbsp; <a href="/comments/view">Comments (<span id="ncm">{n_comments}</span>)</a></div>
 <div class="bar" id="cal"></div></header>
 <div id="cards"></div><div style="margin:16px"><button id="more" onclick="more()">show more</button></div>
 {LB_HTML}<script>{js}{LB_JS}</script></body></html>"""
@@ -453,13 +529,14 @@ window.LB_ANSWER=answer;
  <div>${esc(it.category)} &middot; ${esc(it.frame_name)} &middot; label ${esc(it.label_id)}
  &middot; <a href="${it.link}" target="_blank">Open in Scalabel</a></div>
  <div class="big"><button class="r" onclick="answer(${i},'real')">YES &mdash; real mistake (Y)</button>
- <button class="f" onclick="answer(${i},'false')">NO &mdash; false alarm (N)</button></div></div></div></div>`).join('');count();})();
+ <button class="f" onclick="answer(${i},'false')">NO &mdash; false alarm (N)</button></div>${cmtBox(it,i)}</div></div></div>`).join('');count();})();
 """
 
 
-def calibrate_html(t: str) -> str:
+def calibrate_html(t: str, n_comments: int = 0) -> str:
     safe = "".join(c for c in t if c.isalnum() or c == "_")
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Calibrate {safe}</title>
 <style>{CSS}</style></head><body><header><a href="/">&larr; back</a> &nbsp; Calibrate: {safe}
+&nbsp; <a href="/comments/view">Comments (<span id="ncm">{n_comments}</span>)</a>
 &nbsp; <b id="prog"></b> &nbsp; <b id="status"></b> <b id="done" style="display:none;color:#2a9d4a">All done - thank you!</b></header>
 <div id="cards"></div>{LB_HTML}<script>{CAL_JS % json.dumps(safe)}{LB_JS}</script></body></html>"""
