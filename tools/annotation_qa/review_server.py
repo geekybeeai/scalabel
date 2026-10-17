@@ -17,6 +17,7 @@ from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_sample,  # n
                                   calibration_status, load_issues_tolerant, read_marks,
                                   write_marks)
 from annotation_qa import comments as cm, locator, zoom
+from annotation_qa.exclude import read_excluded
 from annotation_qa.viewb import build_rows, render_crop, select_rows, viewb_html
 
 log = logging.getLogger(__name__)
@@ -129,11 +130,13 @@ class ReviewState:
             counts[(i.export_stem, i.frame_name)] = counts.get((i.export_stem, i.frame_name), 0) + 1
         res = []
         comments = cm.read_comments(self.out)
+        excluded = read_excluded(self.out)
         for g in self.grouped(self.issues(t).get(t, [])):
             ov = ("/locator/frame?" + "&".join(f"{k}={quote(v, safe='')}" for k, v in (
                 ("type", t), ("stem", g[0].export_stem), ("frame", g[0].frame_name))))
             for n, i in enumerate(g, 1):
                 d = self.card(i, counts, comments)
+                d["auto_fix_rejected"] = i.key in excluded
                 d.update(n=n, group_size=len(g), overview=ov,
                          other_types=counts[(i.export_stem, i.frame_name)] - len(g))
                 res.append(d)
@@ -425,6 +428,7 @@ function card(it,i){const m=marks[it.key]||'';
  <div>label ${esc(it.label_id)} &middot; ${esc(it.category)} &middot; conf ${it.confidence.toFixed(2)}</div>
  <div>${esc(it.reason)}</div><div>this frame has ${it.others} other issues</div>
  ${it.hand_fix?'<div><span class="badge">draw by hand</span></div>':''}
+ ${it.auto_fix_rejected?'<div><span class="badge" style="background:#888">auto-fix rejected</span></div>':''}
  <div><a href="${it.link}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}</div>
  <div style="margin-top:8px"><button class="r" onclick="mark(${i},'real')">Real</button>
  <button class="f" onclick="mark(${i},'false')">False alarm</button></div>${cmtBox(it,i)}</div></div></div>`;}

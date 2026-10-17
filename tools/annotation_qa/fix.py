@@ -13,6 +13,7 @@ import numpy as np
 
 from annotation_qa import rounds
 from annotation_qa.data import ORIGINALS_DIR, load_export, save_export
+from annotation_qa.exclude import read_excluded
 from annotation_qa.geometry import ShiftNotRepresentable, _segments, change_anchor, partial_shift
 from annotation_qa.issues import (Issue, calibration_status, file_sha1, format_calibration,
                                   load_issues_tolerant, read_marks, read_meta)
@@ -185,6 +186,17 @@ def apply(issue_type: str, out: Path, version: int, force: bool = False) -> FixR
             by_stem.setdefault(i.export_stem, []).append(i)
 
     res = FixResult()
+    excluded = read_excluded(out)
+    kept: dict[str, list[Issue]] = {}
+    for stem, lst in by_stem.items():
+        for i in lst:
+            if i.key in excluded:
+                msg = f"{i.key}: excluded: auto-fix rejected by verifier"
+                res.skipped.append(msg)
+                log.warning("skipped %s", msg)
+            else:
+                kept.setdefault(stem, []).append(i)
+    by_stem = kept
     reasons = _guards(issue_type, out, version, sorted(by_stem), issues, marks)
     if reasons and not force:
         raise FixRefused(reasons)

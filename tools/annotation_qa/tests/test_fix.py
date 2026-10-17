@@ -524,3 +524,40 @@ def test_cli_fix_prints_calibration_and_exits_nonzero(env, monkeypatch, capsys):
     assert cli.main(["fix", "--type", "shape", "--version", "1", "--out", str(out),
                      "--force"]) == 0
     assert "forced" in capsys.readouterr().out.lower()
+
+
+def test_exclude_and_apply_skips(env):
+    from annotation_qa.exclude import exclude_round, read_excluded
+    orig, out, _ = env
+    i1 = _issue("exportA", "f1.png", "a", "curb_soft", {"op": "set_category", "to": "curb_road_edge"})
+    i2 = _issue("exportA", "f3.png", "z", "curb_soft", {"op": "delete"})
+    _setup(out, [i1, i2], ["real", "real"])
+    apply("curb_soft", out, 1)
+    tag = "exportA_fix_curb_soft_v1"
+    (out / "rounds" / f"{tag}_verify.json").write_text(json.dumps({
+        "f1.png": {"a": {"verdict": "bad", "reasons": ["x"]}},
+        "f3.png": {"z": {"verdict": "ok", "reasons": []}}}))
+    assert exclude_round(out, tag, "bad") == 1
+    assert exclude_round(out, tag, "bad") == 0  # idempotent
+    ex = read_excluded(out)
+    assert list(ex) == [i1.key]
+    assert ex[i1.key] == {"reason": "auto-fix rejected by verifier", "round": tag,
+                          "verdict": "bad", "reasons": ["x"]}
+    # next version: f1 excluded and left out; f3 was merged-free? simulate by merging marker-free force
+    r = apply("curb_soft", out, 2, force=True)
+    assert any(s.startswith(i1.key) and "excluded: auto-fix rejected by verifier" in s
+               for s in r.skipped)
+    assert "f1.png" not in r.changed.get("exportA", [])
+    items = json.load(open(out / "rounds" / "exportA_fix_curb_soft_v2_items.json"))
+    assert [f["name"] for f in items["frames"]] == ["f3.png"]
+
+
+def test_excluded_card_badge(env):
+    from annotation_qa.review_server import ReviewState
+    orig, out, _ = env
+    i1 = _issue("exportA", "f1.png", "a", "curb_soft")
+    i2 = _issue("exportA", "f3.png", "z", "curb_soft")
+    _setup(out, [i1, i2], ["real", "real"])
+    (out / "excluded.json").write_text(json.dumps({i1.key: {"reason": "r"}}))
+    cards = ReviewState(out, out, orig).cards("curb_soft")
+    assert {c["key"]: c["auto_fix_rejected"] for c in cards} == {i1.key: True, i2.key: False}

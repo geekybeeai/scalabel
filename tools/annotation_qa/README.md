@@ -53,6 +53,8 @@ python3 -m annotation_qa fix --type T --version 1 --out $OUT --create-projects
 
 Review each project at `http://localhost:8686/dashboard?project_name=<stem>_fix_T_v1`. Fix what is wrong, then export the project's labels to a JSON file.
 
+After `verify`, `python3 -m annotation_qa exclude --round <tag> --verdict bad` records the verifier-rejected auto-fixes in `OUT/excluded.json`. The next `fix --version <N+1>` skips them (listed as skipped, their frames stay out of the round unless another fix touches them) and View A marks them "auto-fix rejected", so you don't undo them by hand.
+
 ## 4. Merge each batch's reviewed export
 
 ```bash

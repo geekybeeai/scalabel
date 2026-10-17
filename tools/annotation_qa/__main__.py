@@ -96,7 +96,20 @@ def main(argv: list[str] | None = None) -> int:
     vf.add_argument("--round", default=None, help="round tag")
     vf.add_argument("--all", action="store_true", help="every round without a verdict file")
     vf.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ex = sub.add_parser("exclude", help="leave a round's verifier-rejected auto-fixes out of later rounds")
+    ex.add_argument("--round", required=True, help="round tag")
+    ex.add_argument("--verdict", default="bad", choices=["ok", "check", "bad"])
+    ex.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
+    if a.cmd == "exclude":
+        from annotation_qa.exclude import exclude_round
+        try:
+            n = exclude_round(a.out, a.round, a.verdict)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"REFUSED: {e}")
+            return 2
+        print(f"excluded {n} keys added to {a.out / 'excluded.json'}")
+        return 0
     if a.cmd == "verify":
         if not a.all and not a.round:
             print("verify needs --round <tag> or --all")
