@@ -66,6 +66,9 @@ def main(argv: list[str] | None = None) -> int:
                          "(e.g. curb_soft,edge_on_paint)")
     fx.add_argument("--name", default=None,
                     help="type part of the round tag (default: the types joined by '+')")
+    fx.add_argument("--stems", default=None,
+                    help="restrict the round to these export stems (comma-separated; a full "
+                         "stem or the project prefix before _export_). Guards run only for them.")
     fx.add_argument("--out", type=Path, default=DEFAULT_OUT)
     fx.add_argument("--version", type=int, required=True)
     fx.add_argument("--create-projects", action="store_true")
@@ -214,9 +217,10 @@ def main(argv: list[str] | None = None) -> int:
                   "merge the round, or set it aside with archive-round --round <tag>.")
             return 2
         try:
+            stems = a.stems.split(",") if a.stems is not None else None
             r = apply(a.type, a.out, a.version, force_stale=a.force_stale,
                       force_uncalibrated=a.force_uncalibrated, name=a.name,
-                      suggest=a.suggest)
+                      suggest=a.suggest, stems=stems)
         except FixRefused as e:
             print(f"REFUSED: fix --type {a.type} --version {a.version}")
             for why in e.reasons:

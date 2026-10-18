@@ -658,3 +658,65 @@ def test_shift_within_line_width_skipped_frame_not_in_round(env):
     assert r.changed == {"exportA": ["f3.png"]}
     items = json.load(open(out / "rounds" / "exportA_fix_position_v1_items.json"))
     assert [f["name"] for f in items["frames"]] == ["f3.png"]
+
+
+def _two_stems(orig, frames):
+    """exportA (no project prefix) and proj_export_B (project 'proj')."""
+    (orig / "proj_export_B.json").write_text(json.dumps({"frames": frames, "config": {"k": 1}}))
+
+
+def _real_both(out):
+    ia = _issue("exportA", "f1.png", "a", "curb_soft",
+                {"op": "set_category", "to": "curb_road_edge"})
+    ib = _issue("proj_export_B", "f1.png", "a", "curb_soft",
+                {"op": "set_category", "to": "curb_road_edge"})
+    write_issues(out / "issues_curb_soft.jsonl", [ia, ib])
+    write_marks(out / "marks.json", {ia.key: "real", ib.key: "real"})
+
+
+def test_stems_unmerged_round_blocks_only_listed_stems(env):
+    orig, out, frames = env
+    _two_stems(orig, frames)
+    _real_both(out)
+    apply("curb_soft", out, 1, stems=["proj_export_B"])  # B's round v1 stays unmerged
+    with pytest.raises(FixRefused) as e:  # no --stems: B's open round blocks the whole round
+        apply("curb_soft", out, 2)
+    assert any("proj_export_B" in why and "not merged" in why for why in e.value.reasons)
+    r = apply("curb_soft", out, 2, stems=["exportA"])
+    assert r.changed == {"exportA": ["f1.png"]}
+    assert r.tags == ["exportA_fix_curb_soft_v2"]
+    assert not (out / "rounds" / "proj_export_B_fix_curb_soft_v2_items.json").exists()
+
+
+def test_stems_prefix_selects_project(env, tmp_path):
+    orig, out, frames = env
+    _two_stems(orig, frames)
+    _real_both(out)
+    r = apply("curb_soft", out, 1, stems=["proj"])
+    assert set(r.changed) == {"proj_export_B"}
+    assert not (out / "rounds" / "exportA_fix_curb_soft_v1_items.json").exists()
+    out2 = tmp_path / "out2"  # a full stem and a prefix together, on a fresh round
+    out2.mkdir()
+    _real_both(out2)
+    r = apply("curb_soft", out2, 1, stems=["exportA", "proj"])
+    assert set(r.changed) == {"exportA", "proj_export_B"}
+
+
+def test_stems_unknown_refused_and_nothing_written(env):
+    orig, out, frames = env
+    _two_stems(orig, frames)
+    _real_both(out)
+    with pytest.raises(FixRefused) as e:
+        apply("curb_soft", out, 1, stems=["exportA", "nope"])
+    assert any("unknown stem" in why and "nope" in why for why in e.value.reasons)
+    assert not (out / "rounds").exists() and not (out / "work").exists()
+
+
+def test_stems_cli_unknown_exit_2(env, capsys):
+    from annotation_qa.__main__ import main
+    orig, out, frames = env
+    _two_stems(orig, frames)
+    _real_both(out)
+    assert main(["fix", "--type", "curb_soft", "--version", "1", "--out", str(out),
+                 "--stems", "nope"]) == 2
+    assert "unknown stem" in capsys.readouterr().out

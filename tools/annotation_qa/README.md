@@ -69,6 +69,7 @@ python3 -m annotation_qa fix --type curb_soft,edge_on_paint --version 1 [--name 
 - `changes.json` records `issue_types` and `ops` (parallel lists) next to before/after/anchor; single-type rounds also keep `issue_type`.
 - `verify` gives a combined change the worst verdict of its parts. View B shows the ops ("soft edge → CURB + moved 6 px") and draws the before side in its old class colour and the after side in its new one.
 - `project --round <tag>` and `merge` work as for any round.
+- `--stems A[,B]` (full export stems, or the project prefix before `_export_`) limits the round to those stems; only their issues are used and only their guards run, so another stem's open round does not block it. An unknown stem is refused (exit 2).
 
 ### Suggestion-only rounds (`fix --suggest`)
 

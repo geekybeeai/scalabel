@@ -265,9 +265,10 @@ class _Refusals:
 
 def _guards(types: list[str], name: str, out: Path, version: int,
             by_stem: dict[str, list[Issue]], issues_by_type: dict[str, list[Issue]],
-            marks: dict[str, str]) -> _Refusals:
+            marks: dict[str, str], cal_types: list[str] | None = None) -> _Refusals:
     ref = _Refusals()
-    for t in types:  # every listed type must have passed its calibration
+    # every listed type must have passed its calibration
+    for t in (types if cal_types is None else cal_types):
         cal = calibration_refusal(issues_by_type[t], marks, t, out)
         if cal:
             ref.calibration.append(cal)
@@ -317,9 +318,29 @@ def split_types(issue_type: str | list[str]) -> list[str]:
 _GEOMETRY_OPS = ("shift", "drop_vertices", "set_poly")
 
 
+def resolve_stems(requested: list[str], known: set[str]) -> set[str]:
+    """Export stems picked by ``requested``. Each entry is a full stem or the project prefix
+    before "_export_" (every known stem with that prefix). Raises FixRefused when an entry
+    matches nothing."""
+    wanted = [s for s in (x.strip() for x in requested) if s]
+    if not wanted:
+        raise FixRefused(["--stems: no stem given"])
+    picked: set[str] = set()
+    unknown = []
+    for w in wanted:
+        hits = {k for k in known if k == w or k.split("_export_")[0] == w}
+        if not hits:
+            unknown.append(w)
+        picked |= hits
+    if unknown:
+        raise FixRefused([f"--stems: unknown stem(s) {', '.join(unknown)}; known: "
+                          + (", ".join(sorted(known)) or "none")])
+    return picked
+
+
 def apply(issue_type: str | list[str], out: Path, version: int, force_stale: bool = False,
           force_uncalibrated: bool = False, name: str | None = None,
-          suggest: bool = False) -> FixResult:
+          suggest: bool = False, stems: list[str] | None = None) -> FixResult:
     """Apply the real-marked fixes of one or more types to the working copies, one round per stem.
 
     ``issue_type`` may list several types ("curb_soft,edge_on_paint"): a combined round,
@@ -341,6 +362,11 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
     the issues were detected on a different version of the working copy (``force_stale``
     overrides), or when a type's calibration did not PASS (``force_uncalibrated``
     overrides). Overridden refusals are returned in ``FixResult.forced``.
+
+    ``stems`` restricts the round to those export stems (a full stem, or the project prefix
+    before "_export_"). Only issues of the listed stems are considered, and the guards run
+    only for them, so another stem's open round does not block. The calibration gate then
+    covers the types that have an issue in the listed stems. An unknown stem is refused.
 
     ``suggest`` builds a SUGGESTION-ONLY round: the same issues and frames are selected (same
     gates and guards), but the items file keeps every label unchanged (a copy of the work
@@ -370,6 +396,13 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
         if i.fix is not None or i.hand_fix:
             by_stem.setdefault(i.export_stem, []).append(i)
 
+    if stems is not None:
+        known = {i.export_stem for lst in issues_by_type.values() for i in lst}
+        if ORIGINALS_DIR.is_dir():
+            known |= {p.stem for p in ORIGINALS_DIR.glob("*.json")}
+        picked = resolve_stems(stems, known)
+        by_stem = {s: lst for s, lst in by_stem.items() if s in picked}
+
     res = FixResult(suggest=suggest)
     excluded = read_excluded(out)
     kept: dict[str, list[Issue]] = {}
@@ -383,7 +416,9 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
             else:
                 kept.setdefault(stem, []).append(i)
     by_stem = kept
-    ref = _guards(types, name, out, version, by_stem, issues_by_type, marks)
+    cal_types = None if stems is None else [
+        t for t in types if any(i.issue_type == t for lst in by_stem.values() for i in lst)]
+    ref = _guards(types, name, out, version, by_stem, issues_by_type, marks, cal_types)
     blocking = ref.hard + ([] if force_stale else ref.stale) \
         + ([] if force_uncalibrated else ref.calibration)
     if blocking:
