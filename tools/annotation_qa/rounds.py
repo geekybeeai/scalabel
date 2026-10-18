@@ -85,6 +85,32 @@ def last_marker(out: Path, stem: str, tag: str) -> dict | None:
     return hits[-1] if hits else None
 
 
+# ---- changes.json: {frame: {label: change}}, plus "suggest": true in a suggestion round ----
+SUGGEST_KEY = "suggest"
+
+
+def split_changes(raw) -> tuple[dict, bool]:
+    """(changes without the top-level ``suggest`` flag, is it a suggestion round)."""
+    if not isinstance(raw, dict):
+        return {}, False
+    return ({k: v for k, v in raw.items() if k != SUGGEST_KEY}, raw.get(SUGGEST_KEY) is True)
+
+
+def read_changes(path: Path) -> tuple[dict, bool]:
+    """split_changes() of a changes.json file (OSError / ValueError when unreadable)."""
+    return split_changes(json.loads(Path(path).read_text()))
+
+
+def suggest_view(rec: dict) -> dict:
+    """A suggestion change as a normal one: ``after`` = its ``proposed`` result, ``join`` =
+    its ``proposed_join`` (hand-fix entries keep ``after`` None and ``hand`` True)."""
+    r = {k: v for k, v in rec.items() if k not in ("proposed", "proposed_join")}
+    r["after"] = rec.get("proposed")
+    if rec.get("proposed_join"):
+        r["join"] = rec["proposed_join"]
+    return r
+
+
 # ---- round base snapshots: OUT/rounds/<tag>_base.json ----
 def labels_sha1(labels) -> str:
     """Canonical sha1 of a frame's label list (key order does not matter)."""
@@ -96,12 +122,16 @@ def base_path(out: Path, tag: str) -> Path:
     return Path(out) / "rounds" / f"{tag}_base.json"
 
 
-def write_base(out: Path, stem: str, tag: str, frames: dict[str, list]) -> dict:
+def write_base(out: Path, stem: str, tag: str, frames: dict[str, list],
+               mode: str | None = None) -> dict:
     """Record when the round was built and the sha1 of each round frame's labels in the
-    working copy it was built from (``frames``: name -> labels), atomically."""
+    working copy it was built from (``frames``: name -> labels), atomically. ``mode`` is
+    "suggest" for a suggestion-only round."""
     rec = {"stem": stem, "tag": tag,
            "built_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
            "frames": {n: labels_sha1(l) for n, l in sorted(frames.items())}}
+    if mode:
+        rec["mode"] = mode
     p = base_path(out, tag)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + ".tmp")

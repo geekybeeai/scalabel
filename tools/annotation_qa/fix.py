@@ -38,6 +38,7 @@ class FixResult:
     skipped: list[str] = field(default_factory=list)  # issues not applied, with the reason
     forced: list[str] = field(default_factory=list)  # guard refusals overridden by force
     tags: list[str] = field(default_factory=list)  # round tags written
+    suggest: bool = False  # a suggestion-only round: nothing was edited
 
 
 class FixRefused(Exception):
@@ -317,7 +318,8 @@ _GEOMETRY_OPS = ("shift", "drop_vertices", "set_poly")
 
 
 def apply(issue_type: str | list[str], out: Path, version: int, force_stale: bool = False,
-          force_uncalibrated: bool = False, name: str | None = None) -> FixResult:
+          force_uncalibrated: bool = False, name: str | None = None,
+          suggest: bool = False) -> FixResult:
     """Apply the real-marked fixes of one or more types to the working copies, one round per stem.
 
     ``issue_type`` may list several types ("curb_soft,edge_on_paint"): a combined round,
@@ -340,6 +342,13 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
     overrides), or when a type's calibration did not PASS (``force_uncalibrated``
     overrides). Overridden refusals are returned in ``FixResult.forced``.
 
+    ``suggest`` builds a SUGGESTION-ONLY round: the same issues and frames are selected (same
+    gates and guards), but the items file keeps every label unchanged (a copy of the work
+    copy). changes.json gets ``"suggest": true`` and, per change, ``before``, ``proposed``
+    (what the fix would have produced; ``proposed_join`` for a join) and ``anchor``; no
+    ``after``. A hand-fix issue is a change with ``proposed`` null, ``hand`` true and its
+    ``reason``. The base snapshot records ``mode: "suggest"``.
+
     Each round also gets ``rounds/<tag>_base.json``: when it was built and the sha1 of each
     round frame's labels in the working copy, so ``merge`` can tell when they changed.
     """
@@ -361,7 +370,7 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
         if i.fix is not None or i.hand_fix:
             by_stem.setdefault(i.export_stem, []).append(i)
 
-    res = FixResult()
+    res = FixResult(suggest=suggest)
     excluded = read_excluded(out)
     kept: dict[str, list[Issue]] = {}
     for stem, lst in by_stem.items():
@@ -387,6 +396,7 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
         changes: dict[str, dict[str, dict]] = {}
         changed: list[str] = []
         hand: list[str] = []
+        hand_recs: list[tuple[str, Issue, str | None]] = []  # suggest: (frame, issue, reason)
         groups: dict[tuple[str, str], list[Issue]] = {}
         for iss in sorted(stem_issues, key=lambda i: -i.confidence):
             if frames.get(iss.frame_name) is None:
@@ -394,6 +404,7 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
             if iss.hand_fix or iss.fix is None:
                 if iss.frame_name not in hand:
                     hand.append(iss.frame_name)
+                hand_recs.append((iss.frame_name, iss, None))
                 continue
             groups.setdefault((iss.frame_name, iss.label_id), []).append(iss)
 
@@ -450,6 +461,7 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
                         skip(iss, str(e))
                         if fname not in hand:
                             hand.append(fname)
+                        hand_recs.append((fname, iss, str(e)))
                         continue
                     except Exception as e:  # one bad issue must not abort the round
                         skip(iss, f"{type(e).__name__}: {e}")
@@ -539,6 +551,10 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
             else:
                 rec = {"before": snap, "after": _snapshot(after)}
                 rec["anchor"] = change_anchor(rec["before"], rec["after"])
+            if suggest:
+                rec["proposed"] = rec.pop("after")
+                if "join" in rec:
+                    rec["proposed_join"] = rec.pop("join")
             rec["issue_types"] = [i.issue_type for i in applied]
             rec["ops"] = [i.fix["op"] for i in applied]
             if not combined:
@@ -546,18 +562,37 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
             changes.setdefault(fname, {})[lid] = rec
             if fname not in changed:
                 changed.append(fname)
+        if suggest:  # hand-fix issues are suggestions too: what is wrong, and no proposal
+            for fname, iss, why in hand_recs:
+                lab = next((l for l in before[fname]["labels"] if l["id"] == iss.label_id), None)
+                if lab is None or iss.label_id in changes.get(fname, {}):
+                    continue
+                snap = _snapshot(lab)
+                rec = {"before": snap, "proposed": None, "hand": True,
+                       "reason": why or iss.reason or "draw by hand",
+                       "anchor": [int(round(v)) for v in iss.anchor] if any(iss.anchor)
+                       else change_anchor(snap, None),
+                       "issue_types": [iss.issue_type], "ops": []}
+                if not combined:
+                    rec["issue_type"] = types[0]
+                changes.setdefault(fname, {})[iss.label_id] = rec
+                if fname not in changed:
+                    changed.append(fname)
         hand = [n for n in hand if n not in changed]
         if not changed and not hand:
             continue  # nothing to review: no round files for this stem
         tag = rounds.round_tag(stem, name, version)
+        if suggest:  # nothing is edited: the round project is the work copy as it is
+            exp = load_export(working_copy(stem, out))
         save_export(exp, out / "work" / f"{tag}.json")
         keep = set(changed) | set(hand)
-        rounds.write_base(out, stem, tag, {n: before[n].get("labels") or [] for n in keep})
+        rounds.write_base(out, stem, tag, {n: before[n].get("labels") or [] for n in keep},
+                          mode="suggest" if suggest else None)
         subset = type(exp)(exp.path, [f for f in exp.frames if f["name"] in keep], exp.config)
         save_export(subset, out / "rounds" / f"{tag}_items.json")
         chg = out / "rounds" / f"{tag}_changes.json"
         tmp = chg.with_name(chg.name + ".tmp")
-        tmp.write_text(json.dumps(changes))
+        tmp.write_text(json.dumps({rounds.SUGGEST_KEY: True, **changes} if suggest else changes))
         tmp.replace(chg)
         res.tags.append(tag)
         if changed:

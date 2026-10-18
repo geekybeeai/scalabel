@@ -28,7 +28,8 @@ from annotation_qa.geometry import (LINE_WIDTH, _dist_to_polyline, dense, double
                                       resample, self_crossings)
 from annotation_qa.imaging import FrameImage, profile
 from annotation_qa.issues import load_issues_tolerant
-from annotation_qa.rounds import VERIFY_META, read_verdicts, round_files
+from annotation_qa.rounds import (VERIFY_META, read_verdicts, round_files, split_changes,
+                                  suggest_view)
 from annotation_qa.viewb import frames_by_name
 
 HAND = "__hand__"
@@ -520,7 +521,7 @@ def verify_round(out: Path, rnd: dict, repo_root: Path | None = None) -> dict:
     """Verdicts of one round (see module doc); decodes each frame image once."""
     out = Path(out)
     repo_root = Path(repo_root or REPO_ROOT)
-    changes = json.loads(Path(rnd["changes"]).read_text())
+    changes, suggest = split_changes(json.loads(Path(rnd["changes"]).read_text()))
     items = frames_by_name(rnd["items"])
     issues = {}
     types = {rnd["type"]}
@@ -537,6 +538,12 @@ def verify_round(out: Path, rnd: dict, repo_root: Path | None = None) -> dict:
         img = None
         try:
             for lid, rec in labels.items():
+                if suggest:  # score the PROPOSED geometry as if it had been applied
+                    if rec.get("hand"):
+                        res.setdefault(fname, {})[lid] = {"verdict": "check", "reasons": [
+                            "hand fix, no proposal: " + str(rec.get("reason") or "draw by hand")]}
+                        continue
+                    rec = suggest_view(rec)
                 its = rec.get("issue_types") or [rnd["type"]]
                 by_t = {t: issues.get(f"{rnd['stem']}|{fname}|{lid}|{t}") for t in its}
                 issue = by_t[its[0]]

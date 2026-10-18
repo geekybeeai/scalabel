@@ -30,7 +30,8 @@ from annotation_qa.imaging import FrameImage
 from annotation_qa.progress import is_reviewed
 from annotation_qa.reverts import read_reverts
 from annotation_qa.render import RENDER_VERSION, issue_crop
-from annotation_qa.rounds import merged_tags, read_verdicts, round_files  # noqa: F401 - re-exported
+from annotation_qa.rounds import (merged_tags, read_verdicts, round_files,  # noqa: F401
+                                  split_changes, suggest_view)
 
 log = logging.getLogger(__name__)
 SCALABEL = "http://localhost:8686"
@@ -63,8 +64,15 @@ def frames_by_name(path: Path) -> dict[str, tuple[int, dict]]:
         f["name"]: (i, f) for i, f in reversed(list(enumerate(load_export(p).frames)))})
 
 
+def _changes_flag(path: Path) -> tuple[dict, bool]:
+    return _cached("changes", path, lambda p: split_changes(json.loads(p.read_text())))
+
+
 def _changes(path: Path) -> dict:
-    return _cached("json", path, lambda p: json.loads(p.read_text()))
+    return _changes_flag(path)[0]
+
+
+SUGGEST_BADGE = "SUGGESTION \u2014 nothing changed"
 
 
 def _snapshot(label: dict | None) -> dict | None:
@@ -332,7 +340,7 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
     reverts = read_reverts(out)
     for r in round_files(out):
         try:
-            changes = _changes(r["changes"])
+            changes, suggest = _changes_flag(r["changes"])
             items = frames_by_name(r["items"])
         except (OSError, ValueError) as e:
             log.warning("skipping round %s: %s", r["tag"], e)
@@ -344,6 +352,9 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
             rw = row(r["stem"], fname)
             shipped = {l["id"]: l for l in _labels(cur.get(fname, (0, None))[1])}
             for lid, rec in labels.items():
+                hand_sug = suggest and bool(rec.get("hand"))
+                if suggest:  # compare like a normal change: after = the proposal
+                    rec = suggest_view(rec)
                 q = urlencode({"stem": r["stem"], "frame": fname, "label": lid, "round": r["tag"]})
                 vd = verd.get(fname, {}).get(lid) or {}
                 c = {"round": r["round"], "tag": r["tag"], "issue_type": r["type"],
@@ -360,10 +371,23 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                      "reverted": False, "revert_state": "", "round_tag": r["tag"], "frame_name": fname,
                      "before_crop": f"/viewb/crop?{q}&side=before",
                      "after_crop": f"/viewb/crop?{q}&side=after"}
+                if suggest:
+                    c.update(suggest=True, hand_fix=hand_sug, reason=rec.get("reason") or "",
+                             suggest_crop=f"/viewb/crop?{q}&side=suggest",
+                             badge=SUGGEST_BADGE, review="", shipped="")
+                    if hand_sug:
+                        c.update(what="hand fix: " + c["reason"], class_change="", ops_text="")
+                    else:
+                        c["what"] = "suggested: " + c["what"]
                 if rec.get("join"):
                     c["what"] = join_text(rec)
                     c["ops_text"] = ""
-                if is_merged and fname in cur:
+                if suggest:
+                    if is_merged and fname in cur:  # what the user did with the suggestion
+                        from annotation_qa.merge import _user_acted
+                        c["review"] = ("changed by user" if _user_acted(
+                            {**rec, "_lid": str(lid)}, cur[fname][1]) else "left as is")
+                elif is_merged and fname in cur:
                     now = _snapshot(shipped.get(lid))
                     pieces = split_pieces(rec.get("after"))
                     if rec.get("join"):
@@ -380,7 +404,7 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                         c["review"] = ("reverted" if _same(now, rec.get("before"))
                                        else "changed in review")
                         c["shipped"] = describe(rec.get("before"), now)
-                if str(lid) in ((reverts.get(r["tag"]) or {}).get(fname) or {}):
+                if not suggest and str(lid) in ((reverts.get(r["tag"]) or {}).get(fname) or {}):
                     c["reverted"] = True
                     c["revert_state"] = ("pending" if not is_merged else
                                          {"reverted": "applied", "changed in review": "conflict"}
@@ -426,7 +450,8 @@ def frame_specs(out: Path, stem: str, frame_name: str) -> dict[tuple[str, str, s
         if r["stem"] != stem:
             continue
         try:
-            changes = _changes(r["changes"]).get(frame_name)
+            all_changes, suggest = _changes_flag(r["changes"])
+            changes = all_changes.get(frame_name)
             item = frames_by_name(r["items"]).get(frame_name) if changes else None
         except (OSError, ValueError):
             continue
@@ -437,6 +462,9 @@ def frame_specs(out: Path, stem: str, frame_name: str) -> dict[tuple[str, str, s
         if (stem, r["tag"]) in merged:
             shipped = _work_frames(out, stem).get(frame_name, (0, None))[1]
         for lid, rec in changes.items():
+            if suggest:
+                specs.update(_suggest_specs(out, r["tag"], frame_name, lid, rec, proposed))
+                continue
             pieces = split_pieces(rec.get("after"))
             if rec.get("join"):
                 specs.update(_join_specs(out, r["tag"], frame_name, lid, rec, proposed, shipped))
@@ -473,6 +501,45 @@ def frame_specs(out: Path, stem: str, frame_name: str) -> dict[tuple[str, str, s
                         panel_tag=f"{side}: {cat}" if hl else None),
                     "dest": out / "viewb" / f"{_crop_name(key)}.jpg"}
     return specs
+
+
+def _suggest_specs(out: Path, tag: str, frame_name: str, lid: str, rec: dict,
+                   frame: dict) -> dict:
+    """Crop spec (side "suggest") of a suggestion change: every label as it is now in its class
+    colour (``frame`` is the unchanged round frame), the proposed geometry as a dashed magenta
+    overlay tagged "suggested"; a hand-fix suggestion carries its reason instead."""
+    rec = suggest_view(rec)
+    prop = rec.get("after")
+    over: list[dict] = []
+    markers: list = []
+    if rec.get("join"):
+        over = [{"poly2d": (rec["join"].get("after") or {}).get("poly2d") or []}]
+        markers = [list(map(float, p)) for p in rec["join"].get("splices") or []]
+    elif isinstance(prop, list):  # a split: every piece
+        over = [{"poly2d": p.get("poly2d") or []} for p in prop]
+        markers = [list(map(float, c)) for c in rec.get("cut_points") or []]
+    elif prop is not None:
+        over = [{"poly2d": prop.get("poly2d") or []}]
+    if rec.get("hand"):
+        txt = "hand fix: " + str(rec.get("reason") or "draw by hand")[:70]
+    elif not over:
+        txt = "suggested: delete this line"
+    else:
+        what = class_change(rec.get("before"), prop) or ("join" if rec.get("join") else "")
+        txt = "suggested" + (f": {what}" if what else "")
+    anchor = rec.get("anchor")
+    if not anchor:
+        anchor = change_anchor(rec.get("before"), _main(prop)) or [0, 0]
+    anchor = tuple(float(v) for v in anchor)
+    labels = list(_labels(frame))
+    key = json.dumps([RENDER_VERSION, "suggest", frame["url"], labels, anchor, lid, over,
+                      markers, txt], sort_keys=True)
+    return {(tag, lid, "suggest"): {
+        "frame": {"name": frame_name, "url": frame["url"], "labels": labels},
+        "issue": SimpleNamespace(anchor=anchor, label_id="", related_label_ids=[],
+                                 highlight_category=None, overlays=over, markers=markers,
+                                 panel_tag=txt),
+        "dest": Path(out) / "viewb" / f"{_crop_name(key)}.jpg"}}
 
 
 def _split_specs(out: Path, tag: str, frame_name: str, lid: str, rec: dict, pieces: list[dict],
@@ -599,7 +666,7 @@ def render_frame(out: Path, repo_root: Path, stem: str, frame_name: str,
 def render_crop(out: Path, repo_root: Path, stem: str, frame_name: str, label_id: str,
                 tag: str, side: str) -> Path | None:
     """OUT/viewb/<hash>.jpg for one change (rendered with its frame if missing), or None."""
-    if side not in ("before", "after"):
+    if side not in ("before", "after", "suggest"):
         return None
     specs = frame_specs(out, stem, frame_name)
     spec = specs.get((tag, label_id, side))
@@ -628,7 +695,7 @@ const edits=r=>r.review_edits.map(e=>'<div><span class="badge">edited in review<
  +(e.added.length?'added '+e.added.map(esc).join(', '):'')+(e.added.length&&e.deleted.length?'; ':'')
  +(e.deleted.length?'deleted '+e.deleted.map(esc).join(', '):'')+'</div>').join('');
 const REVT={pending:'REVERTED \u2014 will keep the original',applied:'reverted (kept original)',conflict:'revert not applied (Scalabel edit wins)',not_applied:'revert not applied'};
-const revui=(c,i,j)=>(c.reverted?`<div><span class="badge revbadge" style="background:#888;color:#fff">${esc(REVT[c.revert_state]||REVT.pending)}</span></div>`:'')
+const revui=(c,i,j)=>c.suggest?`<div><span class="badge" style="background:#7a3fb0;color:#fff;font-weight:700">${esc(c.badge)}</span></div>`+(c.hand_fix?`<div>${esc(c.reason)}</div>`:''):(c.reverted?`<div><span class="badge revbadge" style="background:#888;color:#fff">${esc(REVT[c.revert_state]||REVT.pending)}</span></div>`:'')
  +(c.merged?'':`<button class="rv" data-i="${i}" data-j="${j}">${c.reverted?'Undo revert':'Revert'}</button>`);
 const flag=c=>c.review?` <span class="badge">${esc(c.review)}</span>`+(c.shipped?' ships as: '+esc(c.shipped):''):'';
 const VB={ok:['✓ ok','#2a7','#e6f6ee'],check:['⚠ check','#b80','#fff4d6'],unverified:['⚠ not verified','#b80','#fff4d6'],bad:['✗ likely wrong','#c33','#fde8e8']};
@@ -645,7 +712,7 @@ const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><
  ${r.hand.length?'<div><span class="badge">draw by hand</span> '+r.hand.map(h=>esc(h.round)+': '+(h.done?'done':'not done')).join(', ')+'</div>':''}
  ${edits(r)}
  <div class="chgs">${r.changes.map((c,j)=>`<div class="chg${c.reverted?' rev':''}" tabindex="0" data-j="${j}"><div class="txt">${esc(c.round)}${c.merged?'':' <span class="badge">not merged yet</span>'}<br>label ${esc(c.label_id)}<br>${c.link?`<a class="open" href="${esc(c.link)}" target="_blank">Open in Scalabel</a>`:''}<br>${vbadge(c)}<br>${c.class_change?`<b style="font-size:15px">${esc(c.ops_text||c.class_change)}</b><br>`:''}${esc(c.what)}${flag(c)}<br>${revui(c,r._i,j)}</div>
- <figure${c.reverted?' class="revfig"':''}><figcaption>before${c.reverted?' (kept)':''}</figcaption><a href="${esc(c.before_crop)}" target="_blank"><img loading="lazy" src="${esc(c.before_crop)}" title="before"></a></figure><figure><figcaption>after</figcaption><a href="${esc(c.after_crop)}" target="_blank"><img loading="lazy" src="${esc(c.after_crop)}" title="${c.merged?'after review (ships)':'after (proposed)'}"></a></figure></div>`).join('')}</div>
+ ${c.suggest?`<figure style="flex:2 1 0;max-width:calc(100% - 240px)"><figcaption>left: raw &middot; right: current line in its class colour, <b style="color:#c0c">dashed magenta = suggested</b> (nothing changed)</figcaption><a href="${esc(c.suggest_crop)}" target="_blank"><img loading="lazy" src="${esc(c.suggest_crop)}" title="suggestion"></a></figure></div>`:`<figure${c.reverted?' class="revfig"':''}><figcaption>before${c.reverted?' (kept)':''}</figcaption><a href="${esc(c.before_crop)}" target="_blank"><img loading="lazy" src="${esc(c.before_crop)}" title="before"></a></figure><figure><figcaption>after</figcaption><a href="${esc(c.after_crop)}" target="_blank"><img loading="lazy" src="${esc(c.after_crop)}" title="${c.merged?'after review (ships)':'after (proposed)'}"></a></figure></div>`}`).join('')}</div>
  </div></div>`;
 let ROWS=[],cur=-1;
 async function show(){const t=$('#round').value,f=$('#show').value;
@@ -673,7 +740,7 @@ document.addEventListener('change',e=>{const b=e.target;if(!b.classList||!b.clas
  const i=+b.dataset.i,want=b.checked;b.blur();setReviewed(i,want);});
 document.addEventListener('click',e=>{if(e.target.id==='resume')resume();});
 function nrev(){const n=ROWS.reduce((a,r)=>a+r.changes.filter(c=>c.reverted).length,0);$('#nrev').textContent=n?n+' reverted':'';}
-async function toggleRev(i,j){const r=ROWS[i],c=r&&r.changes[j];if(!c||c.merged)return;
+async function toggleRev(i,j){const r=ROWS[i],c=r&&r.changes[j];if(!c||c.merged||c.suggest)return;
  const want=!c.reverted;let d;
  try{const x=await fetch('/viewb/revert',{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify({round:c.tag,frame:r.frame_name,label:String(c.label_id),revert:want})});

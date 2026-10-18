@@ -75,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
                          "only; the unmerged-round and existing-tag guards cannot be overridden)")
     fx.add_argument("--force-uncalibrated", action="store_true",
                     help="build although a type's calibration did not PASS (rarely right)")
+    fx.add_argument("--suggest", action="store_true",
+                    help="suggestion-only round: same issues and frames, labels left UNCHANGED; "
+                         "View B shows the proposed line as a dashed overlay and you edit it "
+                         "yourself in Scalabel")
     fx.add_argument("--force", action="store_true", help=argparse.SUPPRESS)  # removed: see C1
     pj = sub.add_parser("project", help="(re)create the Scalabel review project of one round")
     pj.add_argument("--round", required=True, help="round tag, e.g. <stem>_fix_<type>_v<N>")
@@ -211,7 +215,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             r = apply(a.type, a.out, a.version, force_stale=a.force_stale,
-                      force_uncalibrated=a.force_uncalibrated, name=a.name)
+                      force_uncalibrated=a.force_uncalibrated, name=a.name,
+                      suggest=a.suggest)
         except FixRefused as e:
             print(f"REFUSED: fix --type {a.type} --version {a.version}")
             for why in e.reasons:
@@ -221,6 +226,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         for why in r.forced:
             print(f"warning: forced past: {why}")
+        if r.suggest:
+            print("SUGGESTION round: labels are unchanged; View B shows the proposals")
         for stem in sorted(set(r.changed) | set(r.hand)):
             print(f"{stem}: changed={r.changed.get(stem, [])} hand={r.hand.get(stem, [])}")
         if not r.tags:
@@ -243,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
         except MergeRefused as e:
             print(f"REFUSED: {e}\nNothing was merged.")
             return 2
+        if r.suggest:
+            print(f"merged {r.frames} frames of a SUGGESTION round (your edits only, no reverts)")
         print(f"merged {r.frames} frames; reverted_applied={r.reverted_applied} "
               f"reverted_conflicts={r.reverted_conflicts} unmatched={r.unmatched_reverts}"
               + (f" skipped_redrawn={r.reverted_skipped_overlap}"

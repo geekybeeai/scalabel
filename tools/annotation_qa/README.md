@@ -70,6 +70,24 @@ python3 -m annotation_qa fix --type curb_soft,edge_on_paint --version 1 [--name 
 - `verify` gives a combined change the worst verdict of its parts. View B shows the ops ("soft edge → CURB + moved 6 px") and draws the before side in its old class colour and the after side in its new one.
 - `project --round <tag>` and `merge` work as for any round.
 
+### Suggestion-only rounds (`fix --suggest`)
+
+When the tool's automatic edits do not meet requirements it cannot know, build a round where
+NOTHING is edited and you make the changes yourself:
+
+    python3 -m annotation_qa fix --type position --name position_suggest --version 1 --suggest
+
+It selects issues exactly like a normal round (real-marked, not excluded, same gates and
+guards, `--force-stale` allowed) and puts the same frames in the project, but every label is
+unchanged. `changes.json` has `"suggest": true` and per change `before`, `proposed` (what the
+fix would have done; null plus a reason for hand-fix issues) and `anchor`. `verify --round`
+scores the proposed geometry as usual. View B shows a "SUGGESTION - nothing changed" badge,
+the current line in its class colour and the proposal as a dashed magenta line labelled
+"suggested", an "Open in Scalabel" link (item, label, x,y) and no Revert button. Edit in
+Scalabel, export, then `merge` as usual: your edits are copied into the work copy (no
+reverts), each suggested issue is excluded so it is not suggested again ("handled by user in
+suggestion round" if you changed its label, "user left as is (suggestion declined)" if not).
+
 ## 4. Merge each batch's reviewed export
 
 ```bash

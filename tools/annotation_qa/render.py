@@ -46,6 +46,21 @@ def _draw_label(canvas, label, origin, zoom, color, width):
         cv2.polylines(canvas, [p.reshape(-1, 1, 2)], bool(poly.get("closed")), color, width)
 
 
+def _draw_dashed(canvas, label, origin, zoom, color, width, dash=16):
+    """Dashed line (``dash`` px on, ``dash`` px off, in crop pixels) along the label's polys."""
+    for poly in label.get("poly2d") or []:
+        pts = dense(poly)
+        if len(pts) < 2 or not np.isfinite(pts).all():
+            continue
+        p = (np.asarray(pts, float) - origin) * zoom
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p, axis=0).T))]
+        for a in np.arange(0.0, s[-1], 2 * dash):
+            t = np.linspace(a, min(a + dash, s[-1]), 6)
+            seg = np.stack([np.interp(t, s, p[:, 0]), np.interp(t, s, p[:, 1])], axis=1)
+            cv2.polylines(canvas, [np.rint(seg).astype(np.int32).reshape(-1, 1, 2)], False,
+                          color, width, cv2.LINE_AA)
+
+
 def issue_crop(image: FrameImage, frame: dict, issue, half: int = 90, zoom: int = 3,
                raw_only: bool = False) -> np.ndarray:
     """Raw | 8 px gap | labelled, each (2*half*zoom) square; black where off-canvas.
@@ -85,6 +100,9 @@ def issue_crop(image: FrameImage, frame: dict, issue, half: int = 90, zoom: int 
                 _draw_label(right, lab, origin, zoom, hilite_color(hl), 4)
             else:
                 _draw_label(right, lab, origin, zoom, MAGENTA, 3)
+    for lab in getattr(issue, "overlays", None) or []:  # a suggestion: dashed magenta
+        _draw_dashed(right, lab, origin, zoom, (255, 255, 255), 6)
+        _draw_dashed(right, lab, origin, zoom, MAGENTA, 3)
     for x, y in getattr(issue, "markers", None) or []:  # e.g. split cut points
         c = (int(round((x - x0) * zoom)), int(round((y - y0) * zoom)))
         cv2.circle(right, c, 9, (255, 255, 255), 3)

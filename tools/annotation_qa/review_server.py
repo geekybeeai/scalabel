@@ -22,7 +22,7 @@ from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_keys,  # noq
 from annotation_qa import comments as cm, locator, zoom
 from annotation_qa import progress as pg
 from annotation_qa import reverts as rv
-from annotation_qa.rounds import merged_tags, round_files
+from annotation_qa.rounds import merged_tags, round_files, split_changes as rounds_split
 from annotation_qa.exclude import read_excluded
 from annotation_qa.viewb import build_rows, render_crop, select_rows, viewb_html
 
@@ -188,9 +188,12 @@ class ReviewState:
         if rnd is None:
             raise ValueError(f"unknown round {tag!r}")
         try:
-            changes = json.loads(rnd["changes"].read_text())
+            changes, suggest = rounds_split(json.loads(rnd["changes"].read_text()))
         except (OSError, ValueError) as e:
             raise ValueError(f"cannot read changes of {tag}: {e}")
+        if suggest:
+            raise ValueError(f"round {tag} is a suggestion round: nothing was changed, "
+                             "so there is nothing to revert")
         if frame not in changes:
             raise ValueError(f"unknown frame {frame!r} in round {tag}")
         if label not in changes[frame]:
@@ -211,7 +214,7 @@ class ReviewState:
                 d = json.loads(rnd[k].read_text())
             except (OSError, ValueError) as e:
                 raise ValueError(f"cannot read {k} of {tag}: {e}")
-            names |= set(d) if k == "changes" else {f["name"] for f in d.get("frames", [])}
+            names |= set(rounds_split(d)[0]) if k == "changes" else {f["name"] for f in d.get("frames", [])}
         return {"frames": names, **rnd}, (rnd["stem"], tag) in merged_tags(self.out)
 
     def set_progress(self, tag: str, frame: str, reviewed: bool) -> bool:

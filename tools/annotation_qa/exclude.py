@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-from annotation_qa.rounds import read_verdicts
+from annotation_qa.rounds import read_changes, read_verdicts
 
 REASON = "auto-fix rejected by verifier"
 _TAG = re.compile(r"^(?P<stem>.+?)_fix_(?P<type>.+)_v\d+$")
@@ -38,7 +38,7 @@ def exclude_round(out: Path, tag: str, verdict: str = "bad") -> int:
     if verdicts is None:
         raise ValueError(f"the verify file of {tag} is stale or unreadable (written for another "
                          f"changes.json); run verify --round {tag} again")
-    changes = json.loads((out / "rounds" / f"{tag}_changes.json").read_text())
+    changes, _ = read_changes(out / "rounds" / f"{tag}_changes.json")
     cur = read_excluded(out)
     added = 0
     for frame, labels in verdicts.items():

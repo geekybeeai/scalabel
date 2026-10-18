@@ -35,6 +35,7 @@ class MergeResult:
     changed_allowed: list[str] = field(default_factory=list)  # --allow-changed-frames used
     excluded_added: int = 0  # I3: issue keys of changes rejected in review
     marks_dropped: int = 0  # I3: real marks of kept changes (re-detection needs new triage)
+    suggest: bool = False  # a suggestion round: the user's edits were copied, nothing reverted
     backup: str = ""
     warnings: list[str] = field(default_factory=list)
 
@@ -57,7 +58,16 @@ def _read_changes(out: Path, round_tag: str) -> dict | None:
         d = json.loads((Path(out) / "rounds" / f"{round_tag}_changes.json").read_text())
     except (OSError, ValueError):
         return None
-    return d if isinstance(d, dict) else None
+    return rounds.split_changes(d)[0] if isinstance(d, dict) else None
+
+
+def _is_suggest(out: Path, round_tag: str) -> bool:
+    try:
+        d = json.loads((Path(out) / "rounds" / f"{round_tag}_changes.json").read_text())
+    except (OSError, ValueError):
+        d = None
+    base = rounds.read_base(out, round_tag) or {}
+    return rounds.split_changes(d)[1] or base.get("mode") == "suggest"
 
 
 def _overlapping_new(frame: dict, lid: str, restored: dict, known_ids: set[str]) -> str | None:
@@ -258,6 +268,42 @@ def _review_outcome(out: Path, stem: str, tag: str, changes: dict, reviewed: dic
     return added, len(drop)
 
 
+def _user_acted(rec: dict, frame: dict | None) -> bool:
+    """Suggestion round: did the user change the suggested label (or, for a join, either
+    label) in the reviewed frame? Missing counts as changed."""
+    from annotation_qa.viewb import _same, _snapshot  # lazy: cv2
+    labels = {str(l.get("id")): l for l in (frame or {}).get("labels") or []}
+    pairs = [(rec.get("_lid"), rec.get("before"))]
+    j = rec.get("proposed_join") or rec.get("join")
+    if j:
+        pairs.append((str(j.get("target")), j.get("before")))
+    return any(lid not in labels or not _same(_snapshot(labels[lid]), snap) for lid, snap in pairs)
+
+
+def _suggest_outcome(out: Path, stem: str, tag: str, changes: dict,
+                     reviewed: dict[str, dict]) -> int:
+    """I3 for a suggestion round: every suggested issue goes to excluded.json -- "handled by
+    user in suggestion round" when its label was changed, "user left as is (suggestion
+    declined)" when not -- so it is not suggested again. Returns the keys added."""
+    m = _TAG_TYPE.search(tag)
+    tag_type = m["type"] if m else ""
+    entries: dict[str, dict] = {}
+    for fname, labs in changes.items():
+        if fname not in reviewed or not isinstance(labs, dict):
+            continue
+        for lid, rec in labs.items():
+            if not isinstance(rec, dict):
+                continue
+            acted = _user_acted({**rec, "_lid": str(lid)}, reviewed[fname])
+            why = ("handled by user in suggestion round" if acted
+                   else "user left as is (suggestion declined)")
+            types = rec.get("issue_types") or [rec.get("issue_type") or tag_type]
+            for t in types:
+                if t:
+                    entries[f"{stem}|{fname}|{lid}|{t}"] = {"reason": why, "round": tag}
+    return add_excluded(out, entries) if entries else 0
+
+
 def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag: str,
                    remerge: bool = False, allow_changed_frames=()) -> MergeResult:
     """Replace the labels of the round's frames in OUT/work/<stem>.json.
@@ -369,10 +415,15 @@ def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag
         lost = set(reviewed) - set(merged)
         raise MergeRefused(f"{len(lost)} reviewed frame(s) are not in the working copy of "
                            f"{export_stem}: {_few(lost)}")
+    suggest = _is_suggest(out, round_tag)
+    res.suggest = suggest
     stats: dict = {}
     proposed = {k: {str(l.get("id")) for l in f.get("labels") or []} for k, f in items.items()}
-    applied, conflicts = apply_reverts(work.frames, old_labels, out, round_tag, set(merged),
-                                       proposed, stats)
+    if suggest:  # nothing was edited by the tool: there is nothing to revert
+        applied, conflicts, stats = 0, 0, {"unmatched": 0, "skipped_overlap": 0}
+    else:
+        applied, conflicts = apply_reverts(work.frames, old_labels, out, round_tag,
+                                           set(merged), proposed, stats)
     res.frames, res.reverted_applied, res.reverted_conflicts = n, applied, conflicts
     res.unmatched_reverts = stats["unmatched"]
     res.reverted_skipped_overlap = stats["skipped_overlap"]
@@ -388,7 +439,7 @@ def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag
     record_merge(out, export_stem, round_tag, Path(reviewed_export), merged,
                  {"reverted_applied": applied, "reverted_conflicts": conflicts,
                   "unmatched_reverts": res.unmatched_reverts,
-                  "remerge": bool(mine), "legacy_round": res.legacy,
+                  "remerge": bool(mine), **({"mode": "suggest"} if suggest else {}), "legacy_round": res.legacy,
                   "changed_frames_allowed": res.changed_allowed, "backup": str(backup),
                   "result_sha1": {k: rounds.labels_sha1(f.get("labels") or [])
                                   for k, f in sorted(after.items())}})
@@ -396,6 +447,8 @@ def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag
     if changes is None:
         warn(f"{round_tag}: changes.json unreadable; review outcome not recorded "
              "(excluded.json / marks.json unchanged)")
+    elif suggest:
+        res.excluded_added = _suggest_outcome(out, export_stem, round_tag, changes, reviewed)
     else:
         res.excluded_added, res.marks_dropped = _review_outcome(
             out, export_stem, round_tag, changes, reviewed, round_reverts(out, round_tag))

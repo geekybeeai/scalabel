@@ -8,7 +8,7 @@ from pathlib import Path
 from annotation_qa import data
 from annotation_qa.data import REVIEWER_FRAMES, reviewer_match
 from annotation_qa.issues import load_issues_tolerant, read_marks
-from annotation_qa.rounds import merge_markers, merged_tags, round_files
+from annotation_qa.rounds import merge_markers, merged_tags, read_changes, round_files
 
 __all__ = ["REVIEWER_FRAMES", "bar_report", "finalize"]
 
@@ -49,7 +49,8 @@ def finalize(out: Path, originals_dir: Path | None = None
         if (r["stem"], r["tag"]) not in merged:
             unmerged.setdefault(r["stem"], []).append(r["tag"])
         else:
-            n = sum(len(l) for l in json.loads(r["changes"].read_text()).values())
+            chg, sug = read_changes(r["changes"])
+            n = 0 if sug else sum(len(l) for l in chg.values())  # a suggestion round edits nothing
             # changes the user reverted in View B (and merge restored) ship as no change
             mk = [m for m in merge_markers(out) if (m.get("stem"), m.get("tag")) == (r["stem"], r["tag"])]
             n -= int(mk[-1].get("reverted_applied") or 0) if mk else 0
