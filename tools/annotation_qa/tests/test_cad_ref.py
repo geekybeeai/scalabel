@@ -91,17 +91,38 @@ def test_rules_without_cad():
     assert not keep_issue(_iss(SOFT, near_band_votes=0, share=0.9))
     assert not keep_issue(_iss(SOFT, near_band_votes=2, share=0.7))
     # curb -> soft
-    assert keep_issue(_iss(CURB))
-    assert not keep_issue(_iss(CURB, curb_votes=1))
-    assert not keep_issue(_iss(CURB, near_band_votes=1))
+    assert keep_issue(_iss(CURB, n_votes=7))
+    assert not keep_issue(_iss(CURB, n_votes=6))
+    assert not keep_issue(_iss(CURB, curb_votes=1, n_votes=9))
+    assert not keep_issue(_iss(CURB, near_band_votes=1, n_votes=9))
     assert not keep_issue(_iss(CURB, n_votes=4))
+
+
+def test_soft_curb_drop_boundaries():
+    class Cad:
+        def __init__(self, gl, flag=None):
+            self.gl, self.flag = gl, flag
+
+        def __call__(self, f):
+            return self.flag
+
+        def green_len(self, f):
+            return self.gl
+    ok = dict(near_band_votes=3, share=0.9)
+    assert decide(_iss(SOFT, **ok), Cad(8000)) == (True, None)  # not > 8000
+    assert decide(_iss(SOFT, **ok), Cad(8001)) == (False, None)
+    assert decide(_iss(SOFT, near_band_votes=4, share=0.9), Cad(20000)) == (True, None)
+    assert decide(_iss(SOFT, near_band_votes=3, share=0.9), Cad(None)) == (True, None)
+    # drop beats the CAD rescue
+    assert decide(_iss(SOFT, near_band_votes=0, share=0.5), Cad(9000, False)) == (False, None)
+    assert decide(_iss(SOFT, near_band_votes=0, share=0.5), Cad(100, False)) == (True, "cad_rescue")
 
 
 def test_cad_rules_and_features():
     cad = lambda f: {"a": False, "b": True}.get(f)  # noqa: E731
-    assert decide(_iss(CURB, "a"), cad) == (False, "cad_drop")
-    assert decide(_iss(CURB, "b"), cad) == (True, None)
-    assert decide(_iss(CURB, "zz"), cad) == (True, None)
+    assert decide(_iss(CURB, "a", n_votes=7), cad) == (False, "cad_drop")
+    assert decide(_iss(CURB, "b", n_votes=7), cad) == (True, None)
+    assert decide(_iss(CURB, "zz", n_votes=7), cad) == (True, None)
     i = _iss(SOFT, "a")
     assert decide(i, cad) == (True, "cad_rescue")
     assert i.features["cad_soft"] is False and i.features["cad_green_len"] is None
@@ -117,8 +138,9 @@ def test_refilter_curb_soft(tmp_path, monkeypatch):
     monkeypatch.setattr(cad_ref, "CAD_DIR", cd)
     out = tmp_path / "out"
     out.mkdir()
-    iss = [_iss(CURB, "SLC_1.png"), _iss(CURB, "other.png"), _iss(SOFT, "SLC_1.png"),
-           _iss(SOFT, "other.png"), _iss(CURB, "other.png", hand=True)]
+    iss = [_iss(CURB, "SLC_1.png", n_votes=7), _iss(CURB, "other.png", n_votes=7), _iss(SOFT, "SLC_1.png"),
+           _iss(SOFT, "other.png"), _iss(CURB, "other.png", hand=True),
+           _iss(CURB, "other.png", n_votes=6)]
     for k, i in enumerate(iss):
         i.label_id = f"L{k}"
     write_issues(out / "issues_curb_soft.jsonl", iss)

@@ -148,6 +148,18 @@ def test_set_category_curb_soft(repo, out, cat, to, feats, want):
     assert verify._set_category(_issue("curb_soft", feats, cat, to), rec)["verdict"] == want
 
 
+def test_curb_soft_cad_green_len_gate(repo, out):
+    cat, to = "without_curb_road_edge", "curb_road_edge"
+    b, a = _label("1", _hline(100), cat), _label("1", _hline(100), to)
+    rec = {"before": _snap(b), "after": _snap(a)}
+    base = {"near_band_votes": 3, "share": 0.9, "cad_soft": True}
+    assert verify._set_category(_issue("curb_soft", {**base, "cad_green_len": 5000}, cat, to), rec)["verdict"] == "ok"
+    assert verify._set_category(_issue("curb_soft", {**base, "cad_green_len": None}, cat, to), rec)["verdict"] == "ok"
+    v = verify._set_category(_issue("curb_soft", {**base, "cad_green_len": 5001}, cat, to), rec)
+    assert v["verdict"] == "check"
+    assert v["reasons"][0] == "frame has a lot of CAD soft edge (green 5001 px) — check carefully"
+
+
 def test_curb_soft_long_uniform_bright_strip_is_check(repo, out):
     b, a = _label("1", _hline(100), "without_curb_road_edge"), _label("1", _hline(100), "curb_road_edge")
     rec = {"before": _snap(b), "after": _snap(a)}

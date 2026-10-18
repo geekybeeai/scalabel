@@ -283,6 +283,10 @@ def _shift(img, cat, issue, rec, frame) -> dict:
     return _combine(parts) if parts else {"verdict": "check", "reasons": ["geometry unchanged"]}
 
 
+# calibrated 2026-10-18 on Roshan's curb_soft_v2 review (see learn/report.md)
+CAD_GREEN_OK_MAX = 5000  # soft->curb "ok" needs cad_green_len <= this
+
+
 def _set_category(issue, rec) -> dict:
     to = rec["after"]["category"]
     if issue is None:
@@ -301,6 +305,11 @@ def _set_category(issue, rec) -> dict:
         ok = (nb >= 3 and share >= 0.9) or cad is False
     else:
         ok = nv >= 8 and cad is not False
+    if to == "curb_road_edge" and ok:
+        gl = f.get("cad_green_len") or 0
+        if gl > CAD_GREEN_OK_MAX:
+            return {"verdict": "check", "reasons": [
+                f"frame has a lot of CAD soft edge (green {gl} px) — check carefully", facts]}
     return {"verdict": "ok" if ok else "check",
             "reasons": [("strong support: " if ok else "weak support: ") + facts]}
 

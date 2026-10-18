@@ -39,6 +39,12 @@ PAINT_MAX_PX = 8  # bright then dark again within this: a painted line, not a ke
 MIN_FLAG_VOTES, CONF_FULL_VOTES = 2, 4
 MIN_STEP_SAMPLES = 5
 MIN_VOTES, MIN_EACH = 4, 2
+# calibrated 2026-10-18 on Roshan's curb_soft_v2 review (see learn/report.md)
+# soft->curb: a frame with lots of CAD soft edge and weak band evidence is dropped
+SOFT_CURB_DROP_MAX_BAND_VOTES, SOFT_CURB_DROP_GREEN_LEN = 3, 8000
+# calibrated 2026-10-18 on Roshan's curb_soft_v2 review (see learn/report.md)
+# curb->soft needs this many voting stretches (was 5). PROVISIONAL: measured on n=28 only.
+CURB_SOFT_MIN_VOTES = 7
 
 
 def _stretches(poly: dict) -> list[tuple[dict, tuple[float, float]]]:
@@ -225,10 +231,13 @@ def decide(issue: Issue, cad=None) -> tuple[bool, str | None]:
         return False, None
     if issue.category == CURB:  # curb -> soft: the whole line must read soft
         ok = (f.get("curb_votes", 1) == 0 and f.get("near_band_votes", 1) == 0
-              and f.get("n_votes", 0) >= 5)
+              and f.get("n_votes", 0) >= CURB_SOFT_MIN_VOTES)
         if ok and flag is False:
             return False, "cad_drop"
         return ok, None
+    if (f.get("near_band_votes", 0) <= SOFT_CURB_DROP_MAX_BAND_VOTES
+            and (f.get("cad_green_len") or 0) > SOFT_CURB_DROP_GREEN_LEN):
+        return False, None  # takes precedence over the CAD rescue
     ok = f.get("near_band_votes", 0) >= 1 and f.get("share", 0) >= 0.75
     if not ok and flag is False:
         return True, "cad_rescue"
