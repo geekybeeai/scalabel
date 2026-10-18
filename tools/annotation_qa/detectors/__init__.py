@@ -39,3 +39,6 @@ REGISTRY["edge_position"] = edge_position.detect
 from annotation_qa.detectors import edge_on_paint  # noqa: E402
 
 REGISTRY["edge_on_paint"] = edge_on_paint.detect
+from annotation_qa.detectors import curb_soft_split  # noqa: E402
+
+REGISTRY["curb_soft_split"] = curb_soft_split.detect
