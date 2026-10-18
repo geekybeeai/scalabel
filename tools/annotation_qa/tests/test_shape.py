@@ -1,9 +1,13 @@
+import json
+from dataclasses import replace
+
 import numpy as np
 
 from conftest import edge_ctx_from_image, _road, stripe_image
 
 from annotation_qa.detectors import REGISTRY
-from annotation_qa.detectors.shape import detect
+from annotation_qa.detectors.shape import _detect, detect, keep_issue
+from annotation_qa.issues import Issue, read_issues, write_issues
 
 
 def ctx_for(tmp_path, polys, category="without_curb_road_edge", img=None):
@@ -21,7 +25,7 @@ def test_registered():
 def test_zigzag_vertex_dropped(tmp_path):
     # L L(spike, 12 px arm) L
     p = poly([[50, 100], [250, 100], [238, 102]])
-    [i] = detect(ctx_for(tmp_path, [p]))
+    [i] = _detect(ctx_for(tmp_path, [p]))
     assert i.issue_type == "shape" and i.label_id == "L1"
     assert i.fix == {"op": "drop_vertices", "poly_index": 0, "indices": [1]}
     assert not i.hand_fix
@@ -44,7 +48,7 @@ def test_right_angle_and_closed_rectangle_not_flagged(tmp_path):
 
 
 def test_tiny_fragment_deleted(tmp_path):
-    [i] = detect(ctx_for(tmp_path, [poly([[100, 100], [118, 100]])]))
+    [i] = _detect(ctx_for(tmp_path, [poly([[100, 100], [118, 100]])]))
     assert i.fix == {"op": "delete"} and not i.hand_fix
     assert i.confidence == 0.6 and i.features["kind"] == "fragment"
     assert i.features["length"] < 30
@@ -71,7 +75,7 @@ def test_closed_figure_eight_flagged_simple_ring_not(tmp_path):
 def test_turn_back_on_bezier_end_is_hand_fix(tmp_path):
     # curve whose end vertex is a sharp reversal into an L segment
     p = poly([[50, 200], [100, 150], [150, 150], [200, 200], [178, 206]], "LCCLL")
-    [i] = detect(ctx_for(tmp_path, [p]))
+    [i] = _detect(ctx_for(tmp_path, [p]))
     assert i.features["kind"] == "turn_back" and i.hand_fix and i.fix is None
 
 
@@ -86,7 +90,7 @@ def test_most_severe_per_label_one_issue(tmp_path):
 def test_drop_index_refers_to_raw_vertices_with_curve(tmp_path):
     # L C C L L(turn-back) L : the turn-back vertex is raw index 4
     p = poly([[40, 200], [80, 150], [120, 150], [160, 200], [300, 200], [290, 202]], "LCCLLL")
-    [i] = detect(ctx_for(tmp_path, [p]))
+    [i] = _detect(ctx_for(tmp_path, [p]))
     assert i.fix == {"op": "drop_vertices", "poly_index": 0, "indices": [4]}
 
 
@@ -100,7 +104,7 @@ def test_long_armed_v_not_flagged(tmp_path):
 
 def test_spike_on_closed_ring_is_turn_back(tmp_path):
     ring = poly([[50, 50], [250, 50], [240, 52], [250, 250], [50, 250]], closed=True)
-    [i] = detect(ctx_for(tmp_path, [ring]))
+    [i] = _detect(ctx_for(tmp_path, [ring]))
     assert i.features["kind"] == "turn_back" and i.features["angle"] > 120
 
 
@@ -114,11 +118,59 @@ def test_fragment_over_painted_dash_not_flagged(tmp_path):
 
 
 def test_fragment_on_bare_asphalt_deleted(tmp_path):
-    [i] = detect(ctx_for(tmp_path, [_short()], "solid_single_line"))
+    [i] = _detect(ctx_for(tmp_path, [_short()], "solid_single_line"))
     assert i.fix == {"op": "delete"} and i.features["ridge"] < 15
 
 
 def test_curb_fragment_deleted_plain_rule(tmp_path):
     img = stripe_image(stripes=((100, 255),))
-    [i] = detect(ctx_for(tmp_path, [_short()], "curb_road_edge", img))
+    [i] = _detect(ctx_for(tmp_path, [_short()], "curb_road_edge", img))
     assert i.fix == {"op": "delete"} and "ridge" not in i.features
+
+
+def _stored(kind, label="L1", **extra):
+    feats = {"kind": kind, **extra}
+    return Issue("shape", "exp", "f.png", label, "solid_single_line", 0.9, "r", (0.0, 0.0),
+                 None, False, features=feats)
+
+
+def test_keep_issue_only_self_cross():
+    assert keep_issue(_stored("self_cross"))
+    assert not keep_issue(_stored("fragment", length=12.0))
+    assert not keep_issue(_stored("turn_back", angle=150.0))
+    assert not keep_issue(_stored(None))
+
+
+def test_detect_emits_only_self_crossings(tmp_path):
+    bow = poly([[50, 50], [250, 150], [250, 50], [50, 150]])
+    zig = poly([[50, 300], [250, 300], [238, 302]])
+    frag = poly([[100, 100], [118, 100]])
+    assert detect(ctx_for(tmp_path, [zig])) == []
+    assert detect(ctx_for(tmp_path, [frag])) == []
+    [i] = detect(ctx_for(tmp_path, [bow]))
+    assert i.features["kind"] == "self_cross"
+    # the internal pass still sees the turn-back and fragment kinds
+    assert [j.features["kind"] for j in _detect(ctx_for(tmp_path, [zig]))] == ["turn_back"]
+
+
+def test_refilter_shape_keeps_self_crosses_and_tops_up(tmp_path):
+    from annotation_qa.__main__ import main
+    cross = [_stored("self_cross", label=f"C{k}") for k in range(12)]
+    other = [_stored("fragment", label=f"F{k}", length=10.0) for k in range(8)] + \
+            [_stored("turn_back", label=f"T{k}", angle=150.0) for k in range(8)]
+    iss = cross + other
+    write_issues(tmp_path / "issues_shape.jsonl", iss)
+    old_keys = [cross[0].key, cross[1].key, other[0].key]  # other[0] will be filtered out
+    (tmp_path / "calibration").mkdir()
+    (tmp_path / "calibration" / "sample_shape.json").write_text(
+        json.dumps({"keys": old_keys}))
+    (tmp_path / "marks.json").write_text(json.dumps({cross[0].key: "real", other[0].key: "false"}))
+    assert main(["refilter", "--type", "shape", "--out", str(tmp_path)]) == 0
+    kept = read_issues(tmp_path / "issues_shape.jsonl")
+    assert len(kept) == 12 and all(i.features["kind"] == "self_cross" for i in kept)
+    sample = json.loads((tmp_path / "calibration" / "sample_shape.json").read_text())["keys"]
+    assert len(sample) == 12  # all surviving keys: 12 self-crosses, fewer than 30
+    assert cross[0].key in sample and cross[1].key in sample
+    assert other[0].key not in sample
+    assert all(k in {i.key for i in kept} for k in sample)
+    assert len(list((tmp_path / "backup").glob("issues_shape.*.jsonl"))) == 1

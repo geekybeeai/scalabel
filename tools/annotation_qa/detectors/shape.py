@@ -167,7 +167,23 @@ def _point_at(pts: np.ndarray, s: float) -> tuple[float, float]:
     return (float(np.interp(s, cum, pts[:, 0])), float(np.interp(s, cum, pts[:, 1])))
 
 
+def keep_issue(issue: Issue) -> bool:
+    """R36 calibrated rule on a (stored) shape issue: only self-crossings are kept.
+
+    Fragments and turn-backs were dropped on the shape calibration (2026-10-18):
+    fragments were mostly real paint hidden by shadow or legitimate short marks,
+    and turn-backs were judged fine.
+    """
+    return issue.features.get("kind") == "self_cross"
+
+
 def detect(ctx: FrameContext) -> list[Issue]:
+    # Fragment and turn-back kinds are still computed by _detect but filtered out
+    # here (dropped on calibration 2026-10-18, R36); only self-crossings are emitted.
+    return [i for i in _detect(ctx) if keep_issue(i)]
+
+
+def _detect(ctx: FrameContext) -> list[Issue]:
     stem = ctx.export.stem
     frame_name = ctx.frame.get("name", "")
     issues: list[Issue] = []
