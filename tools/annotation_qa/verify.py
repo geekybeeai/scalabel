@@ -8,7 +8,8 @@ Hand frames appear as {frame_name: {"__hand__": {"verdict": "check", ...}}}.
 road edges on the road-boundary strength of ``edge_position`` instead (``edge_on_paint``
 shifts on how much of the moved part is still drawn on paint) -- plus a
 neighbour-overlap and a new-kink test; ``set_category`` changes are judged from the
-features stored with the issue; deletes / vertex drops are always "check".
+features stored with the issue; deletes / vertex drops are always "check"; ``set_poly``
+(self-crossing removal) is judged on the geometry alone (``_set_poly``).
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from annotation_qa.data import REPO_ROOT, image_path
-from annotation_qa.geometry import LINE_WIDTH, _dist_to_polyline, dense, resample
+from annotation_qa.geometry import (LINE_WIDTH, _dist_to_polyline, dense, resample,
+                                      self_crossings)
 from annotation_qa.imaging import FrameImage, profile
 from annotation_qa.issues import load_issues_tolerant
 from annotation_qa.rounds import round_files
@@ -336,6 +338,59 @@ def _split(issue, rec) -> dict:
     return {"verdict": "ok", "reasons": ["every piece strongly supported"] + facts}
 
 
+# set_poly (shape self-crossing removal), calibrated 2026-10-18 on Roshan's own join fixes
+# (283 MgLLWDKf5dOIzRXB, 937 l4eFvSQVYDndAHBN: removed loop/overshoot sticks out <= 0.4 px):
+# "ok" only when what was removed is invisible at the training width and the rest is unchanged
+SET_POLY_OK_EXTENT = 2 * LINE_WIDTH  # px: removed loop / overshoot sticks out at most this
+SET_POLY_OK_FOLLOW = LINE_WIDTH / 2  # px: the new line stays this close to the old one
+
+
+def _set_poly(issue, rec) -> dict:
+    """A geometry replacement (shape self-crossing removal): "bad" when the new line still
+    crosses itself; "ok" when the new line follows the old one within SET_POLY_OK_FOLLOW
+    everywhere and the removed part sticks out at most SET_POLY_OK_EXTENT; else "check"
+    (the shape may have changed -- confirm by eye)."""
+    bp, ap = rec["before"].get("poly2d") or [], rec["after"].get("poly2d") or []
+    if len(bp) != len(ap) or not bp:
+        return {"verdict": "check", "reasons": ["polygon structure changed"]}
+    pi = (issue.fix or {}).get("poly_index") if issue and issue.fix else None
+    idx = [pi] if pi is not None and pi < len(bp) else [k for k in range(len(bp))
+                                                        if bp[k] != ap[k]]
+    if not idx:
+        return {"verdict": "check", "reasons": ["geometry unchanged"]}
+    worst = {"follow": 0.0, "extent": 0.0}
+    reasons, crossing, ring = [], False, False
+    for k in idx:
+        b, a = bp[k], ap[k]
+        B, A = np.asarray(dense(b), float), np.asarray(dense(a), float)
+        if len(B) < 2 or len(A) < 2:
+            return {"verdict": "check", "reasons": ["line too short to verify"]}
+        Pa, _ = resample(A, 1.0)
+        Pb, _ = resample(B, 1.0)
+        Pa = A if Pa is None else Pa
+        Pb = B if Pb is None else Pb
+        worst["follow"] = max(worst["follow"], float(_dist_to_polyline(Pa, B).max()))
+        worst["extent"] = max(worst["extent"], float(_dist_to_polyline(Pb, A).max()))
+        crossing |= bool(self_crossings(a))
+        ring |= bool(a.get("closed")) and not b.get("closed")
+    m = {"max_follow": worst["follow"], "removed_extent": worst["extent"]}
+    if issue is not None and (issue.features or {}).get("removed_len") is not None:
+        m["removed_len"] = issue.features["removed_len"]
+    if crossing:
+        return {"verdict": "bad", "reasons": ["the new line still crosses itself"], **m}
+    facts = [("ends joined into a ring; " if ring else "")
+             + f"removed part sticks out {worst['extent']:.1f} px"
+             + (f" ({m['removed_len']:.0f} px of line)" if "removed_len" in m else ""),
+             f"rest of the line within {worst['follow']:.1f} px of the old one"]
+    if worst["follow"] > SET_POLY_OK_FOLLOW:
+        reasons.append(f"new line strays {worst['follow']:.1f} px > {SET_POLY_OK_FOLLOW:.0f} "
+                       "from the old one: confirm the shape")
+    if worst["extent"] > SET_POLY_OK_EXTENT:
+        reasons.append(f"removed loop sticks out {worst['extent']:.0f} px > "
+                       f"{SET_POLY_OK_EXTENT:.0f}: confirm the shape")
+    return {"verdict": "check" if reasons else "ok", "reasons": reasons + facts, **m}
+
+
 def verify_frame_change(img, issue, rec, frame, label_id) -> dict:
     before, after = rec.get("before"), rec.get("after")
     if before is None or after is None:
@@ -349,6 +404,8 @@ def verify_frame_change(img, issue, rec, frame, label_id) -> dict:
         return _set_category(issue, rec)
     if op == "drop_vertices":
         return {"verdict": "check", "reasons": ["vertices dropped: confirm by eye"]}
+    if op == "set_poly":
+        return _set_poly(issue, rec)
     if op == "delete":
         return {"verdict": "check", "reasons": ["label deleted: confirm by eye"]}
     return _shift(img, after.get("category"), issue, {**rec, "label_id": label_id}, frame)
@@ -370,6 +427,8 @@ def verify_combined(img, issues_by_type: dict, rec: dict, frame, label_id) -> di
                        frame)
         elif op == "drop_vertices":
             v = {"verdict": "check", "reasons": ["vertices dropped: confirm by eye"]}
+        elif op == "set_poly":
+            v = _set_poly(issue, rec)
         else:
             v = {"verdict": "check", "reasons": ["label deleted: confirm by eye"]}
         parts.append({**v, "reasons": [f"{t} {op}: {r}" for r in v["reasons"]]})

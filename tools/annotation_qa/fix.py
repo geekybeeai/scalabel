@@ -79,6 +79,22 @@ def _drop_vertices(poly: dict, indices: list[int]) -> dict:
     return out
 
 
+def _set_poly(poly: dict, fix: dict) -> dict:
+    """op "set_poly": replace the poly's geometry (vertices, types, closed; other keys kept)."""
+    verts = [[float(x), float(y)] for x, y in fix["vertices"]]
+    types = str(fix.get("types") or "L" * len(verts))
+    closed = bool(fix.get("closed", poly.get("closed")))
+    if len(types) != len(verts):
+        raise ValueError(f"set_poly: {len(verts)} vertices but {len(types)} types")
+    if len(verts) < (3 if closed else 2) or not np.isfinite(np.asarray(verts, float)).all():
+        raise ValueError("set_poly: too few or non-finite vertices")
+    if set(types) - {"L", "C"} or types[0] != "L":
+        raise ValueError(f"set_poly: bad types {types!r}")
+    out = dict(poly)
+    out["vertices"], out["types"], out["closed"] = verts, types, closed
+    return out
+
+
 _ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 
@@ -133,6 +149,9 @@ def _apply_op(label: dict, fix: dict, new_labels: list | None = None,
     elif op == "drop_vertices":
         i = fix.get("poly_index", 0)
         label["poly2d"][i] = _drop_vertices(label["poly2d"][i], fix["indices"])
+    elif op == "set_poly":
+        i = fix.get("poly_index", 0)
+        label["poly2d"][i] = _set_poly(label["poly2d"][i], fix)
     else:
         raise ValueError(f"unknown fix op: {op}")
     return True
@@ -228,7 +247,7 @@ def split_types(issue_type: str | list[str]) -> list[str]:
     return out
 
 
-_GEOMETRY_OPS = ("shift", "drop_vertices")
+_GEOMETRY_OPS = ("shift", "drop_vertices", "set_poly")
 
 
 def apply(issue_type: str | list[str], out: Path, version: int, force: bool = False,

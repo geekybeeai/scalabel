@@ -551,3 +551,276 @@ def split_poly(poly: dict, cuts: list[float], tol: float = SIMPLIFY_TOL) -> list
         verts[0], verts[-1] = ends[k].tolist(), ends[k + 1].tolist()  # exact shared ends
         out.append({"vertices": verts, "types": "L" * len(verts), "closed": False})
     return out
+
+
+# ---- self-crossing removal (the "join issue") ----
+# Calibrated 2026-10-18 on the self-crossing calibration cards and Roshan's own fixes
+# (283_verification MgLLWDKf5dOIzRXB, 937_verification l4eFvSQVYDndAHBN: a ring drawn as an
+# open line whose two ends overlap by 1-3 px; he self-closed it with the editor's join).
+# Most self-crossings are such overlapping ends; the rest are small loops / hooks where two
+# joined pieces overlapped (1-36 px of line) and long genuine doublings that stay manual.
+UNCROSS_LOOP_MAX = 150.0  # px of dense length all removed detours may have together
+UNCROSS_LOOP_FRAC = 0.25  # ... and at most this share of the line
+UNCROSS_END_MAX = 50.0  # px: an open line becomes a ring only when both ends overshoot <= this
+UNCROSS_MAX_ITER = 8  # crossings removed one by one, at most this many
+UNCROSS_STUB = 1.0  # px: a kept end piece shorter than this is dropped (line starts at the crossing)
+UNCROSS_TRIM_CHANGE = 2 * LINE_WIDTH  # px: an end hook is trimmed only when it retraces the line
+
+
+def self_crossings(poly: dict) -> list[tuple[float, float, tuple[float, float]]]:
+    """Every proper crossing of two non-adjacent segments of ``dense(poly)`` as
+    (arc a, arc b, (x, y)) with a < b (arc px along the dense curve; a ring's closing edge
+    is part of the dense curve). Touching / collinear overlaps are not crossings, the same
+    rule as the shape detector."""
+    d = np.asarray(dense(poly), float)
+    if len(d) < 4 or not np.isfinite(d).all():
+        return []
+    cum = _arc(d)
+    A, B = d[:-1], d[1:]
+    m = len(A)
+    ring = bool(poly.get("closed"))
+
+    def orient(p, q, r):
+        return (q[..., 0] - p[..., 0]) * (r[..., 1] - p[..., 1]) - \
+               (q[..., 1] - p[..., 1]) * (r[..., 0] - p[..., 0])
+
+    out = []
+    for i in range(m - 2):
+        if cum[i + 1] - cum[i] <= 1e-9:
+            continue
+        js = np.arange(i + 2, m)
+        o1, o2 = orient(A[i], B[i], A[js]), orient(A[i], B[i], B[js])
+        o3, o4 = orient(A[js], B[js], A[i]), orient(A[js], B[js], B[i])
+        hit = (o1 * o2 < 0) & (o3 * o4 < 0)
+        for k in np.flatnonzero(hit):
+            j = int(js[k])
+            if ring and i == 0 and np.allclose(B[j:], d[0]):  # edges meeting at the seam
+                continue
+            ti = o3[k] / (o3[k] - o4[k])
+            tj = o1[k] / (o1[k] - o2[k])
+            x = A[j] + tj * (B[j] - A[j])
+            out.append((float(cum[i] + ti * (cum[i + 1] - cum[i])),
+                        float(cum[j] + tj * (cum[j + 1] - cum[j])), (float(x[0]), float(x[1]))))
+    return out
+
+
+def _sub_cubic(p, t0: float, t1: float) -> list[np.ndarray]:
+    """The exact control polygon [p0, c1, c2, p3] of cubic ``p`` between t0 < t1."""
+    p0, p1, p2, p3 = (np.asarray(v, float) for v in p)
+    if t1 < 1.0 - 1e-9:
+        a, d, m, *_ = _split_cubic(p0, p1, p2, p3, [t1])
+        p1, p2, p3 = a, d, m
+        t0 = t0 / t1
+    if t0 > 1e-9:
+        *_, m, e, c, end = _split_cubic(p0, p1, p2, p3, [t0])
+        p0, p1, p2, p3 = m, e, c, end
+    return [p0, p1, p2, p3]
+
+
+def _pieces(poly: dict) -> list[dict]:
+    """The drawn primitives of ``poly`` in order: {"kind", "pts", "s0", "s1", "cum", "i0"}.
+
+    L pieces take their ends from the dense curve (a ring's closing edge too); C pieces keep
+    their exact control points, with dense samples i0..i0+39 uniform in t."""
+    verts = np.asarray(poly["vertices"], dtype=float)
+    d = np.asarray(dense(poly), float)
+    cum = _arc(d)
+    out = []
+    for kind, idx, i0, s0, s1 in _spans(poly, verts, cum):
+        if s1 - s0 <= 1e-9:
+            continue
+        if kind == "C":
+            i1 = min(i0 + 39, len(d) - 1)
+            out.append({"kind": "C", "pts": [d[i0]] + [verts[q] for q in idx[1:]],
+                        "s0": s0, "s1": s1, "cum": cum[i0:i1 + 1]})
+        else:
+            out.append({"kind": "L", "pts": [d[i0], d[i0 + 1]], "s0": s0, "s1": s1})
+    return out
+
+
+def _cut_piece(pc: dict, u: float, v: float) -> tuple[str, list[np.ndarray]]:
+    """Primitive ``pc`` between arc positions u < v (inside [s0, s1])."""
+    if pc["kind"] == "L":
+        a, b = pc["pts"]
+        ln = pc["s1"] - pc["s0"]
+        f0, f1 = (u - pc["s0"]) / ln, (v - pc["s0"]) / ln
+        return "L", [a + f0 * (b - a), a + f1 * (b - a)]
+    tt = np.linspace(0.0, 1.0, len(pc["cum"]))
+    t0, t1 = (float(np.interp(x, pc["cum"], tt)) for x in (u, v))
+    if t0 <= 1e-9 and t1 >= 1 - 1e-9:
+        return "C", [np.asarray(q, float) for q in pc["pts"]]
+    sub = _sub_cubic(pc["pts"], t0, t1)
+    g = np.linspace(0.0, 1.0, 40)[:, None]
+    b0, b1, b2, b3 = _basis(g)
+    curve = b0 * sub[0] + b1 * sub[1] + b2 * sub[2] + b3 * sub[3]
+    if _dist_to_polyline(curve, np.stack([sub[0], sub[3]])).max() <= SIMPLIFY_TOL:
+        return "L", [sub[0], sub[3]]  # a trimmed, nearly straight bit of curve: one L edge
+    return "C", sub
+
+
+def _keep(pieces: list[dict], u: float, v: float) -> list[tuple[str, list[np.ndarray]]]:
+    out = []
+    for pc in pieces:
+        lo, hi = max(u, pc["s0"]), min(v, pc["s1"])
+        if hi - lo > 1e-6:
+            out.append(_cut_piece(pc, lo, hi))
+    return out
+
+
+def _assemble(runs: list[list[tuple[str, list[np.ndarray]]]], joints: list[np.ndarray],
+              closed: bool) -> dict:
+    """Vertices / types from consecutive runs of primitives. ``joints[k]`` replaces the
+    meeting point of run k and run k+1 (and, for a ring, joints[-1] is where the last run
+    ends at the first one's start)."""
+    verts: list[np.ndarray] = []
+    types: list[str] = []
+    for k, run in enumerate(runs):
+        for q, (kind, pts) in enumerate(run):
+            if not verts:
+                verts.append(np.asarray(pts[0], float))
+                types.append("L")
+            if kind == "C":
+                verts += [pts[1], pts[2]]
+                types += ["C", "C"]
+            verts.append(np.asarray(pts[-1], float))
+            types.append("L")
+        if k < len(joints):
+            verts[-1] = np.asarray(joints[k], float)
+    if closed and len(verts) > 1:
+        if len(runs) == len(joints):  # the ring's start is the last joint too
+            verts[0] = np.asarray(joints[-1], float)
+        verts, types = verts[:-1], types[:-1]  # the end is the start again
+    return {"vertices": [[float(x), float(y)] for x, y in verts], "types": "".join(types),
+            "closed": bool(closed)}
+
+
+def _apex(poly: dict, a: float, b: float, x) -> float:
+    """Arc position of the point of the detour (a, b) farthest from the crossing ``x``: the
+    tip of a hook that runs out and back."""
+    d = np.asarray(dense(poly), float)
+    cum = _arc(d)
+    k = np.flatnonzero((cum > a) & (cum < b))
+    if not len(k):
+        return 0.5 * (a + b)
+    return float(cum[k[int(np.argmax(np.hypot(*(d[k] - np.asarray(x, float)).T)))]])
+
+
+def _uncross_once(poly: dict, a: float, b: float, x, mode: str,
+                  apex: float | None = None) -> dict | None:
+    """``poly`` with one crossing (a, b, x) removed: "cut" drops the detour [a, b] and joins
+    both arms at x; "ring" keeps [a, b] as a closed ring that starts and ends at x;
+    "trim_head" / "trim_tail" (an out-and-back hook at an end of an open line) drop the
+    line from its start to the hook's tip ``apex`` / from the tip to its end, so the line
+    still reaches the tip."""
+    pieces = _pieces(poly)
+    if not pieces:
+        return None
+    total = pieces[-1]["s1"]
+    x = np.asarray(x, float)
+    closed = bool(poly.get("closed"))
+    if mode in ("trim_head", "trim_tail"):
+        run = _keep(pieces, apex, total) if mode == "trim_head" else _keep(pieces, 0.0, apex)
+        return _assemble([run], [], False) if run else None
+    if mode == "ring":
+        run = _keep(pieces, a, b)
+        if not run:
+            return None
+        return _assemble([run], [x], True)
+    head = _keep(pieces, 0.0, a) if a >= UNCROSS_STUB or closed else []
+    tail = _keep(pieces, b, total) if total - b >= UNCROSS_STUB or closed else []
+    if closed:  # the ring's seam is in the kept part: start ... head, x, tail ... start
+        if not head or not tail:  # the seam sits on the crossing: one run from x to x
+            return _assemble([head or tail], [x], True) if (head or tail) else None
+        return _assemble([head, tail], [x], True)
+    if head and tail:
+        return _assemble([head, tail], [x], False)
+    if head:  # the tail stub is dropped: the line ends at the crossing
+        return _assemble([head], [x], False)
+    if tail:  # the head stub is dropped: the line starts at the crossing
+        out = _assemble([tail], [], False)
+        out["vertices"][0] = [float(x[0]), float(x[1])]
+        return out
+    return None
+
+
+def remove_self_crossings(poly: dict) -> tuple[dict, dict] | None:
+    """Remove the self-crossings of ``poly`` the way the editor's join would have avoided
+    them; returns (new poly, info) or None when it refuses (the line goes to hand review).
+
+    Per crossing (a, b) on the dense curve, with ``total`` the line length, the candidates:
+    * "cut": drop the detour [a, b] (a small loop where two joined pieces overlapped),
+      keeping both arms, joined exactly at the crossing point;
+    * "ring": an open line whose two ends overshoot each other (head a and tail total-b both
+      <= UNCROSS_END_MAX) becomes a closed ring of [a, b] that starts at the crossing, like
+      the editor's self-close join; on a ring the same mode removes a detour through the seam;
+    * "trim_head" / "trim_tail": an out-and-back hook at an end of an open line (head or tail
+      <= UNCROSS_END_MAX) loses its first leg / its return leg, so the line still reaches the
+      hook's tip -- only when the hook retraces the line (the drawn line moves at most
+      UNCROSS_TRIM_CHANGE px).
+    The candidate that changes the drawn line least wins (smallest distance from the old
+    curve to the new one, then fewest px removed); crossings are removed one at a time until
+    the line is simple. Curves keep their exact control points: a Bezier the cut runs through
+    is split with de Casteljau, and a trimmed, nearly straight bit of curve becomes one L
+    edge. Refuses when the removed parts together exceed UNCROSS_LOOP_MAX px or
+    UNCROSS_LOOP_FRAC of the line, or the line is still not simple after UNCROSS_MAX_ITER
+    removals.
+
+    info: {"modes": [...], "removed": [px per removal], "removed_len": px, "length": px,
+           "n_crossings": int}"""
+    if len(poly.get("vertices") or []) < 2:
+        return None
+    d0 = np.asarray(dense(poly), float)
+    if not np.isfinite(d0).all():
+        return None
+    total0 = float(_arc(d0)[-1])
+    budget = min(UNCROSS_LOOP_MAX, UNCROSS_LOOP_FRAC * total0)
+    cur = copy.deepcopy(poly)
+    modes, removed = [], []
+    xs = self_crossings(cur)
+    n0 = len(xs)
+    if not xs:
+        return None
+    for _ in range(UNCROSS_MAX_ITER):
+        if not xs:
+            break
+        dc = np.asarray(dense(cur), float)
+        total = float(_arc(dc)[-1])
+        probe = _resample(dc, 2.0)
+        probe = dc if probe is None else probe[1]
+        closed = bool(cur.get("closed"))
+        best = None
+        for a, b, x in xs:
+            opts = [("cut", b - a, None)]
+            if closed or (a <= UNCROSS_END_MAX and total - b <= UNCROSS_END_MAX):
+                opts.append(("ring", a + total - b, None))
+            if not closed and (a <= UNCROSS_END_MAX or total - b <= UNCROSS_END_MAX):
+                apex = _apex(cur, a, b, x)
+                if a <= UNCROSS_END_MAX:
+                    opts.append(("trim_head", apex, apex))
+                if total - b <= UNCROSS_END_MAX:
+                    opts.append(("trim_tail", total - apex, apex))
+            for mode, rem, apex in opts:
+                if sum(removed) + rem > budget:
+                    continue
+                new = _uncross_once(cur, a, b, x, mode, apex)
+                if new is None or len(new["vertices"]) < (3 if new["closed"] else 2):
+                    continue
+                dn = np.asarray(dense(new), float)
+                if len(dn) < 2 or not np.isfinite(dn).all():
+                    continue
+                change = float(_dist_to_polyline(probe, dn).max())
+                if mode.startswith("trim") and change > UNCROSS_TRIM_CHANGE:
+                    continue  # not an out-and-back retrace: the first leg is real line
+                if best is None or (round(change, 1), rem) < (round(best[0], 1), best[1]):
+                    best = (change, rem, mode, new)
+        if best is None:
+            return None
+        _, rem, mode, new = best
+        cur = {**cur, **new}
+        modes.append(mode)
+        removed.append(float(rem))
+        xs = self_crossings(cur)
+    if xs:
+        return None
+    return cur, {"modes": modes, "removed": removed, "removed_len": float(sum(removed)),
+                 "length": total0, "n_crossings": n0}

@@ -31,7 +31,9 @@ class Issue:
     anchor: tuple[float, float]  # image x, y for the crop centre
     # {"op":"set_category","to":str} | {"op":"shift","poly_index":int,"offsets":list[float]}
     # | {"op":"delete"} | {"op":"drop_vertices","poly_index":int,"indices":list[int]}
-    # | {"op":"split","poly_index":int,"cuts":list[float],"categories":list[str]} | None
+    # | {"op":"split","poly_index":int,"cuts":list[float],"categories":list[str]}
+    # | {"op":"set_poly","poly_index":int,"vertices":list[[x,y]],"types":str,"closed":bool}
+    # | None
     fix: dict | None
     hand_fix: bool  # True -> cannot auto-fix; frame goes to review unchanged
     related_label_ids: list[str] = field(default_factory=list)

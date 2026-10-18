@@ -4,6 +4,11 @@ Everything is measured on the dense curve (``geometry.dense``), so Bezier
 control points are never mistaken for corners. A label gets at most one issue:
 self-crossing > turn-back > fragment; the others are named in ``reason``.
 
+A self-crossing carries a ``set_poly`` fix when ``geometry.remove_self_crossings`` can undo
+it (the usual "join issue": a ring drawn as an open line whose ends overlap is joined into a
+ring like the editor's self-close; a small loop where two joined pieces overlapped is cut
+out); otherwise it is a hand fix.
+
 A turn-back is a SPIKE: a reversal above 120 deg whose shorter arm (dense
 length to the neighbouring on-line vertex, or to the line end / ring seam) is
 under 25 px. Long-armed V shapes (gore / chevron tips) are intentional. On a
@@ -22,7 +27,7 @@ import numpy as np
 from annotation_qa.context import FrameContext
 from annotation_qa.fix import droppable_vertices
 from annotation_qa.detectors.position import select_channel
-from annotation_qa.geometry import _arc, _segments, dense, length
+from annotation_qa.geometry import _arc, _segments, dense, length, remove_self_crossings
 from annotation_qa.imaging import profile
 from annotation_qa.issues import Issue
 
@@ -167,6 +172,32 @@ def _point_at(pts: np.ndarray, s: float) -> tuple[float, float]:
     return (float(np.interp(s, cum, pts[:, 0])), float(np.interp(s, cum, pts[:, 1])))
 
 
+def _uncross_fix(polys: list[dict], crosses: list[dict]) -> tuple[dict | None, dict, str]:
+    """(fix, extra features, reason text) for a self-crossing label: a ``set_poly`` with the
+    crossings removed (``geometry.remove_self_crossings``: overlapping ends joined into a
+    ring, or a small loop cut out), or (None, ..., "redraw") when it refuses or more than
+    one poly of the label crosses itself."""
+    if len(crosses) != 1:
+        return None, {"uncross": "refused: several polys cross"}, "redraw"
+    pi = crosses[0]["poly_index"]
+    res = remove_self_crossings(polys[pi])
+    if res is None:
+        return None, {"uncross": "refused"}, "redraw (loop too long to remove automatically)"
+    new, info = res
+    modes = info["modes"]
+    feats = {"uncross": "+".join(modes), "removed_len": info["removed_len"],
+             "removed": info["removed"], "n_crossings": info["n_crossings"],
+             "opened_to_ring": bool(new["closed"]) and not polys[pi].get("closed")}
+    what = []
+    if "ring" in modes and feats["opened_to_ring"]:
+        what.append("join the overlapping ends into a ring")
+    if "cut" in modes or ("ring" in modes and not feats["opened_to_ring"]):
+        what.append("cut out the loop")
+    fix = {"op": "set_poly", "poly_index": pi, "vertices": new["vertices"],
+           "types": new["types"], "closed": bool(new["closed"])}
+    return fix, feats, f"auto-fix: {' and '.join(what)} ({info['removed_len']:.0f} px removed)"
+
+
 def keep_issue(issue: Issue) -> bool:
     """R36 calibrated rule on a (stored) shape issue: only self-crossings are kept.
 
@@ -216,13 +247,15 @@ def _detect(ctx: FrameContext) -> list[Issue]:
         if crosses:
             c = crosses[0]
             others = "; also " + ", ".join(n for n in notes if "turn-back" in n) if backs else ""
+            fix, feats, how = _uncross_fix(polys, crosses)
             issues.append(Issue(
-                **base, confidence=SELF_CROSS_CONF, anchor=c["point"], fix=None, hand_fix=True,
+                **base, confidence=SELF_CROSS_CONF, anchor=c["point"], fix=fix,
+                hand_fix=fix is None,
                 reason=f"line crosses itself at ({c['point'][0]:.0f}, {c['point'][1]:.0f}); "
-                       f"redraw{others}",
+                       f"{how}{others}",
                 features={"kind": "self_cross", "poly_index": c["poly_index"],
                           "point": list(c["point"]), "n_self_cross": len(crosses),
-                          "n_turn_back": len(backs), "length": total}))
+                          "n_turn_back": len(backs), "length": total, **feats}))
         elif backs:
             t = max(backs, key=lambda b: b["angle"])
             poly, pts = t["poly"], t["pts"]

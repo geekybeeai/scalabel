@@ -57,7 +57,10 @@ def refilter(out: Path, issue_type: str) -> dict:
     except (OSError, ValueError, KeyError, TypeError):
         old = []
     alive = {i.key for i in kept}
-    keys = [k for k in old if k in alive and answered(k)]
+    # an answered key stays unless THIS rule dropped its issue: one that vanished because the
+    # label was fixed (a rescan after merging no longer reports it) keeps its valid answer
+    ruled_out = {i.key for i in issues} - alive
+    keys = [k for k in old if answered(k) and k not in ruled_out]
     if len(keys) < CALIBRATION_N:
         rest = sorted(alive - set(keys))
         n = min(CALIBRATION_N - len(keys), len(rest))

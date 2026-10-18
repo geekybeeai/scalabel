@@ -191,6 +191,10 @@ def describe(before: dict | None, after: dict | None) -> str:
             parts.append(f"vertices {n_b} → {n_a}")
     elif mv >= 0.05:
         parts.append(f"moved {mv:.1f}".removesuffix(".0") + " px")
+    cb = [bool(p.get("closed")) for p in before.get("poly2d") or []]
+    ca = [bool(p.get("closed")) for p in after.get("poly2d") or []]
+    if len(cb) == len(ca) and cb != ca:
+        parts.append("closed into a ring" if sum(ca) > sum(cb) else "ring opened")
     return " + ".join(parts) or "no visible change"
 
 
@@ -412,6 +416,8 @@ def frame_specs(out: Path, stem: str, frame_name: str) -> dict[tuple[str, str, s
             if not pts:
                 continue
             anchor = tuple(float(v) for v in np.mean(np.asarray(pts, float), axis=0))
+            if "set_poly" in (rec.get("ops") or []) and rec.get("anchor"):
+                anchor = tuple(float(v) for v in rec["anchor"])  # the removed loop, not the mid
             for side in ("before", "after"):
                 if side == "after" and shipped is not None:
                     base, labels = shipped, list(_labels(shipped))  # what will ship
