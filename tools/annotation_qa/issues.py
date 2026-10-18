@@ -33,6 +33,8 @@ class Issue:
     # | {"op":"delete"} | {"op":"drop_vertices","poly_index":int,"indices":list[int]}
     # | {"op":"split","poly_index":int,"cuts":list[float],"categories":list[str]}
     # | {"op":"set_poly","poly_index":int,"vertices":list[[x,y]],"types":str,"closed":bool}
+    # | {"op":"join_into","target":label_id,"poly_index":int,"vertices":list[[x,y]],
+    #    "types":str,"closed":bool}  (set target's poly to this geometry, delete this label)
     # | None
     fix: dict | None
     hand_fix: bool  # True -> cannot auto-fix; frame goes to review unchanged

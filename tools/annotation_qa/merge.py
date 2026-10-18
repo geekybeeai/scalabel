@@ -30,7 +30,9 @@ def apply_reverts(frames: list[dict], old_labels: dict[str, list], out: Path, ro
     """Undo the tool changes the user marked "Revert" in View B; return (applied, conflicts).
 
     Only labels the user left as the tool's AFTER are restored; a label edited or deleted in
-    Scalabel keeps the user's version (warning). A label the tool deleted is re-added.
+    Scalabel keeps the user's version (warning). A label the tool deleted is re-added. A join
+    (``rec["join"]``) is undone only when neither label was touched in Scalabel: the deleted
+    piece is re-added and the target gets its old geometry back.
     """
     from annotation_qa.viewb import _same, _snapshot  # lazy: viewb pulls in cv2 and rendering
     reverts = round_reverts(out, round_tag)
@@ -52,6 +54,28 @@ def apply_reverts(frames: list[dict], old_labels: dict[str, list], out: Path, ro
                 continue  # unknown change, or an added label (nothing to restore)
             before, after = rec["before"], rec.get("after")
             cur = next((l for l in frame["labels"] if str(l.get("id")) == lid), None)
+            if rec.get("join"):
+                j = rec["join"]
+                tid = str(j.get("target"))
+                tgt = next((l for l in frame["labels"] if str(l.get("id")) == tid), None)
+                if cur is None and tgt is not None and _same(_snapshot(tgt), j.get("after")):
+                    tmpl = next((l for l in old_labels.get(fname, [])
+                                 if str(l.get("id")) == lid), None)
+                    new = dict(tmpl) if tmpl else {"id": lid, "attributes": {}, "manualShape": True,
+                                                   "box2d": None, "box3d": None}
+                    new.update(category=before["category"], poly2d=before["poly2d"])
+                    tgt["category"] = j["before"]["category"]
+                    tgt["poly2d"] = j["before"]["poly2d"]
+                    frame["labels"].append(new)
+                    applied += 1
+                elif (cur is not None and _same(_snapshot(cur), before) and tgt is not None
+                      and _same(_snapshot(tgt), j.get("before"))):
+                    applied += 1  # already the original
+                else:
+                    conflicts += 1
+                    print(f"WARNING: {fname}: joined labels {lid} / {tid} were edited in "
+                          "Scalabel; Scalabel edit wins over the revert")
+                continue
             if isinstance(after, list):  # a split: restore the original, drop the other pieces
                 ids = [str(p.get("id")) for p in after[1:]]
                 rest = [next((l for l in frame["labels"] if str(l.get("id")) == i), None)

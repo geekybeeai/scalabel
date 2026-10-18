@@ -198,6 +198,34 @@ def describe(before: dict | None, after: dict | None) -> str:
     return " + ".join(parts) or "no visible change"
 
 
+def join_text(rec: dict) -> str:
+    """What a join_into change did, e.g. "joined into B (extended, +120 px); piece deleted"."""
+    j = rec.get("join") or {}
+    how = {"extend": "extended", "ring": "closed into a ring",
+           "contained": "unchanged: the piece lies on it"}.get(j.get("mode"), "joined")
+    txt = f"joined into {j.get('target')} ({how}"
+    bb, ba = j.get("before"), j.get("after")
+    if bb and ba and j.get("mode") != "contained":
+        def ln(snap):
+            return sum(float(np.linalg.norm(np.diff(np.asarray(dense(p), float), axis=0),
+                                            axis=1).sum())
+                       for p in snap.get("poly2d") or [] if len(p.get("vertices") or []) >= 2)
+        txt += f", {ln(ba) - ln(bb):+.0f} px"
+    return txt + "); piece deleted"
+
+
+def _join_review(rec: dict, now_a: dict | None, now_b: dict | None) -> tuple[str, str]:
+    """(review state, shipped text) of a merged join: "" when both labels are as proposed."""
+    j = rec.get("join") or {}
+    if now_a is None and _same(now_b, j.get("after")):
+        return "", ""
+    if _same(now_a, rec.get("before")) and _same(now_b, j.get("before")):
+        return "reverted", "both pieces as before"
+    parts = ["piece " + ("deleted" if now_a is None else describe(rec.get("before"), now_a)),
+             f"{j.get('target')}: " + describe(j.get("before"), now_b)]
+    return "changed in review", "; ".join(parts)
+
+
 VERDICT_RANK = {"bad": 0, "check": 1, "unverified": 1, "ok": 2}
 
 
@@ -335,10 +363,16 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                      "reverted": False, "revert_state": "", "round_tag": r["tag"], "frame_name": fname,
                      "before_crop": f"/viewb/crop?{q}&side=before",
                      "after_crop": f"/viewb/crop?{q}&side=after"}
+                if rec.get("join"):
+                    c["what"] = join_text(rec)
+                    c["ops_text"] = ""
                 if is_merged and fname in cur:
                     now = _snapshot(shipped.get(lid))
                     pieces = split_pieces(rec.get("after"))
-                    if pieces:  # a split ships when every piece is still there, unchanged
+                    if rec.get("join"):
+                        c["review"], c["shipped"] = _join_review(
+                            rec, now, _snapshot(shipped.get(str(rec["join"].get("target")))))
+                    elif pieces:  # a split ships when every piece is still there, unchanged
                         rest = [_snapshot(shipped.get(p.get("id"))) for p in pieces[1:]]
                         if not (_same(now, pieces[0]) and all(
                                 _same(n, p) for n, p in zip(rest, pieces[1:]))):
@@ -407,6 +441,9 @@ def frame_specs(out: Path, stem: str, frame_name: str) -> dict[tuple[str, str, s
             shipped = _work_frames(out, stem).get(frame_name, (0, None))[1]
         for lid, rec in changes.items():
             pieces = split_pieces(rec.get("after"))
+            if rec.get("join"):
+                specs.update(_join_specs(out, r["tag"], frame_name, lid, rec, proposed, shipped))
+                continue
             if pieces:
                 specs.update(_split_specs(out, r["tag"], frame_name, lid, rec, pieces,
                                           proposed, shipped))
@@ -477,6 +514,49 @@ def _split_specs(out: Path, tag: str, frame_name: str, lid: str, rec: dict, piec
             "frame": frame,
             "issue": SimpleNamespace(anchor=anchor, label_id=lid, related_label_ids=[],
                                      highlight_category=hl, highlights=hls, markers=marks,
+                                     panel_tag=tag_txt),
+            "dest": Path(out) / "viewb" / f"{_crop_name(key)}.jpg"}
+    return specs
+
+
+def _join_specs(out: Path, tag: str, frame_name: str, lid: str, rec: dict, proposed: dict,
+                shipped: dict | None) -> dict:
+    """Crop specs of a join: before = both pieces (the deleted piece and the target) in their
+    class colour; after = the joined target line in its class colour. White markers at the
+    splice points; centred on the first splice."""
+    j = rec["join"]
+    tid = str(j.get("target"))
+    splices = [list(map(float, p)) for p in j.get("splices") or []]
+    if rec.get("anchor"):
+        anchor = tuple(float(v) for v in rec["anchor"])
+    else:
+        pts = [p for poly in (rec.get("before") or {}).get("poly2d") or [] for p in dense(poly)]
+        anchor = tuple(float(v) for v in np.mean(np.asarray(pts, float), axis=0)) if pts \
+            else (0.0, 0.0)
+    ids = {str(lid), tid}
+    specs = {}
+    for side in ("before", "after"):
+        if side == "after" and shipped is not None:
+            base, labels = shipped, list(_labels(shipped))
+        else:
+            base = proposed
+            labels = [l for l in _labels(proposed) if str(l["id"]) not in ids]
+            if side == "before":
+                labels += [{"id": lid, **rec["before"]}, {"id": tid, **j["before"]}]
+            else:
+                labels.append({"id": tid, **j["after"]})
+        present = {str(l["id"]): l.get("category") for l in labels}
+        hls = {i: present[i] for i in ids if i in present and i != str(lid)}
+        hl = present.get(str(lid))
+        tag_txt = ("before: 2 pieces" if side == "before"
+                   else f"after: joined ({j.get('mode') or 'join'})")
+        frame = {"name": frame_name, "url": base["url"], "labels": labels}
+        key = json.dumps([RENDER_VERSION, "join", frame["url"], labels, anchor, lid, splices,
+                          side], sort_keys=True)
+        specs[(tag, lid, side)] = {
+            "frame": frame,
+            "issue": SimpleNamespace(anchor=anchor, label_id=lid, related_label_ids=[],
+                                     highlight_category=hl, highlights=hls, markers=splices,
                                      panel_tag=tag_txt),
             "dest": Path(out) / "viewb" / f"{_crop_name(key)}.jpg"}
     return specs

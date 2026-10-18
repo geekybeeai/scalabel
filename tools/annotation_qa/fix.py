@@ -138,6 +138,11 @@ def _apply_op(label: dict, fix: dict, new_labels: list | None = None,
     op = fix["op"]
     if op == "delete":
         return False
+    if op == "join_into":  # this label goes; its target's poly is set by _join_target
+        if not fix.get("target"):
+            raise ValueError("join_into: no target label")
+        _set_poly({"vertices": [], "types": "", "closed": False}, fix)  # validate geometry
+        return False
     if op == "split":
         _split(label, fix, new_labels if new_labels is not None else [],
                taken if taken is not None else set())
@@ -155,6 +160,21 @@ def _apply_op(label: dict, fix: dict, new_labels: list | None = None,
     else:
         raise ValueError(f"unknown fix op: {op}")
     return True
+
+
+def _join_target(labels: list[dict], fix: dict) -> tuple[int, dict]:
+    """op "join_into": (index, updated copy) of the target label, its poly ``poly_index``
+    set to the fix's geometry. Raises ValueError when it cannot be applied."""
+    tid = str(fix["target"])
+    k = next((j for j, l in enumerate(labels) if str(l["id"]) == tid), None)
+    if k is None:
+        raise ValueError(f"join target {tid} not found")
+    tgt = copy.deepcopy(labels[k])
+    i = fix.get("poly_index", 0)
+    if not 0 <= i < len(tgt.get("poly2d") or []):
+        raise ValueError(f"join target {tid} has no poly {i}")
+    tgt["poly2d"][i] = _set_poly(tgt["poly2d"][i], fix)
+    return k, tgt
 
 
 def _snapshot(label: dict | None) -> dict | None:
@@ -260,6 +280,13 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
     composed per label: set_category first, then the geometry fix; a delete wins over
     everything; two geometry fixes of different types keep the higher-confidence one.
 
+    A ``join_into`` (duplicates overlapping pieces) changes two labels at once: the issue
+    label is deleted and the target's poly is replaced, both or neither. It counts as a
+    delete of the issue label, and is skipped when the target is also changed by another
+    fix of the round (or joined with another piece already); changes.json records it under
+    the issue label as {"before": A, "after": null, "join": {"target", "poly_index",
+    "before": B, "after": B'}}.
+
     Refuses (FixRefused, nothing written) when a type's calibration did not PASS,
     a stem has an unmerged earlier round, the round tag exists already, or the
     issues were detected on a different version of the working copy. ``force``
@@ -310,6 +337,11 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
                 continue
             groups.setdefault((iss.frame_name, iss.label_id), []).append(iss)
 
+        touched: dict[str, set[str]] = {}  # labels with a fix of their own, per frame
+        for fn, ln in groups:
+            touched.setdefault(fn, set()).add(str(ln))
+        claimed: dict[str, set[str]] = {}  # join targets already taken, per frame
+
         def skip(iss: Issue, why: str) -> None:
             msg = f"{iss.key} ({iss.fix.get('op')}): {why}"
             res.skipped.append(msg)
@@ -330,6 +362,22 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
             for t in types:
                 cands = [i for i in grp if i.issue_type == t]
                 for k, iss in enumerate(cands):
+                    if iss.fix["op"] == "join_into":
+                        tid = str(iss.fix.get("target"))
+                        why = None
+                        if tid in touched.get(fname, set()) - {str(lid)}:
+                            why = f"join target {tid} is also changed by another fix in this round"
+                        elif tid in claimed.get(fname, set()):
+                            why = f"join target {tid} is already joined with another piece"
+                        else:
+                            try:
+                                _join_target(labels, iss.fix)
+                            except Exception as e:  # noqa: BLE001
+                                why = f"{type(e).__name__}: {e}"
+                        if why:
+                            skip(iss, why)
+                            continue
+                        claimed.setdefault(fname, set()).add(tid)
                     try:
                         trial = copy.deepcopy(label)
                         _apply_op(trial, iss.fix)
@@ -355,7 +403,7 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
             reps.sort(key=lambda i: -i.confidence)
             plan = reps
             if combined and len(reps) > 1:
-                dels = [i for i in reps if i.fix["op"] == "delete"]
+                dels = [i for i in reps if i.fix["op"] in ("delete", "join_into")]
                 splits = [i for i in reps if i.fix["op"] == "split"]
                 if dels or splits:  # a delete wins, then a split (it sets the classes)
                     plan = (dels or splits)[:1]
@@ -392,6 +440,21 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
                 applied.append(iss)
             if not applied:
                 continue
+            join = next((i for i in applied if i.fix["op"] == "join_into"), None)
+            jrec = None
+            if join is not None:  # both labels or neither
+                try:
+                    tk, tgt = _join_target(labels, join.fix)
+                except Exception as e:  # noqa: BLE001
+                    skip(join, f"{type(e).__name__}: {e}")
+                    continue
+                tid = str(tgt["id"])
+                bsnap = _snapshot(next(l for l in before[fname]["labels"] if str(l["id"]) == tid))
+                labels[tk] = tgt
+                jf = join.features or {}
+                jrec = {"target": tid, "poly_index": join.fix.get("poly_index", 0),
+                        "before": bsnap, "after": _snapshot(tgt), "mode": jf.get("join"),
+                        "splices": jf.get("join_splices") or [], "gaps": jf.get("join_gaps") or []}
             if not keep_label:
                 del labels[idx]
                 after = None
@@ -408,6 +471,11 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
                 rec["anchor"] = [int(round(v)) for v in point_at_arc(bpoly, sp["cuts"][0])]
                 rec["cut_points"] = [[round(v, 2) for v in point_at_arc(bpoly, c)]
                                      for c in sp["cuts"]]
+            elif jrec is not None:
+                rec = {"before": snap, "after": None, "join": jrec}
+                sp = jrec["splices"]
+                rec["anchor"] = ([int(round(v)) for v in sp[0]] if sp
+                                 else change_anchor(snap, None))
             else:
                 rec = {"before": snap, "after": _snapshot(after)}
                 rec["anchor"] = change_anchor(rec["before"], rec["after"])

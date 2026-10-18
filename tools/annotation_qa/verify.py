@@ -9,7 +9,8 @@ road edges on the road-boundary strength of ``edge_position`` instead (``edge_on
 shifts on how much of the moved part is still drawn on paint) -- plus a
 neighbour-overlap and a new-kink test; ``set_category`` changes are judged from the
 features stored with the issue; deletes / vertex drops are always "check"; ``set_poly``
-(self-crossing removal) is judged on the geometry alone (``_set_poly``).
+(self-crossing removal) and ``join_into`` (two overlapping pieces joined into one line,
+``_join``) are judged on the geometry alone.
 """
 
 from __future__ import annotations
@@ -22,8 +23,8 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from annotation_qa.data import REPO_ROOT, image_path
-from annotation_qa.geometry import (LINE_WIDTH, _dist_to_polyline, dense, resample,
-                                      self_crossings)
+from annotation_qa.geometry import (LINE_WIDTH, _dist_to_polyline, dense, doubled_length,
+                                      resample, self_crossings)
 from annotation_qa.imaging import FrameImage, profile
 from annotation_qa.issues import load_issues_tolerant
 from annotation_qa.rounds import round_files
@@ -391,8 +392,84 @@ def _set_poly(issue, rec) -> dict:
     return {"verdict": "check" if reasons else "ok", "reasons": reasons + facts, **m}
 
 
+# join_into (duplicates overlapping pieces joined into one line): "ok" only when the joined
+# line is simple and follows both pieces within half the training line width away from the
+# splice, and the splice bridges at most 2x the line width
+JOIN_OK_FOLLOW = LINE_WIDTH / 2  # px
+JOIN_OK_GAP = 2 * LINE_WIDTH  # px between the two pieces at a splice
+JOIN_SPLICE_R = 2 * LINE_WIDTH  # px around a splice point that is not compared
+JOIN_OK_DOUBLED = 2 * LINE_WIDTH  # px of new doubled-back line
+
+
+def _samples(poly: dict) -> np.ndarray:
+    d = np.asarray(dense(poly), float)
+    P, _ = resample(d, 1.0)
+    return d if P is None else P
+
+
+def _join(issue, rec) -> dict:
+    """A join_into change (A deleted, B's poly replaced by the joined line): "bad" when the
+    joined line crosses itself more than B did; "ok" when, outside JOIN_SPLICE_R of the
+    splice points, the joined line stays within JOIN_OK_FOLLOW of A or B and every point of
+    A and B is within JOIN_OK_FOLLOW of it, the splice gap is at most JOIN_OK_GAP and it does
+    not double back; else "check"."""
+    j = rec.get("join") or {}
+    A, Bb, Ba = rec.get("before") or {}, j.get("before") or {}, j.get("after") or {}
+    pi = int(j.get("poly_index") or 0)
+    bp, ap = Bb.get("poly2d") or [], Ba.get("poly2d") or []
+    if len(bp) != len(ap) or not 0 <= pi < len(bp):
+        return {"verdict": "check", "reasons": ["join: polygon structure changed"]}
+    b, new = bp[pi], ap[pi]
+    polys_a = [p for p in A.get("poly2d") or [] if len(p.get("vertices") or []) >= 2]
+    Pn, Pb = _samples(new), _samples(b)
+    Pa = np.vstack([_samples(p) for p in polys_a]) if polys_a else np.zeros((0, 2))
+    if len(Pn) < 2 or len(Pb) < 2:
+        return {"verdict": "check", "reasons": ["line too short to verify"]}
+    splices = np.asarray(j.get("splices") or [], float).reshape(-1, 2)
+
+    def outside(P):
+        if not len(splices) or not len(P):
+            return P
+        d = np.linalg.norm(P[:, None, :] - splices[None], axis=2).min(axis=1)
+        return P[d > JOIN_SPLICE_R]
+
+    Dn = np.asarray(dense(new), float)
+    lines = [np.asarray(dense(b), float)] + [np.asarray(dense(p), float) for p in polys_a]
+    on, ob, oa = outside(Pn), outside(Pb), outside(Pa)
+    f_new = float(np.min([_dist_to_polyline(on, L) for L in lines], axis=0).max()) \
+        if len(on) else 0.0
+    f_b = float(_dist_to_polyline(ob, Dn).max()) if len(ob) else 0.0
+    f_a = float(_dist_to_polyline(oa, Dn).max()) if len(oa) else 0.0
+    gap = max([float(g) for g in j.get("gaps") or []] or [0.0])
+    nx, bx = len(self_crossings(new)), len(self_crossings(b))
+    dbl = max(0.0, doubled_length(new) - doubled_length(b))
+    m = {"max_follow_new": f_new, "max_follow_b": f_b, "max_follow_a": f_a,
+         "splice_gap": gap, "doubled": dbl, "mode": j.get("mode")}
+    if nx > bx:
+        return {"verdict": "bad", "reasons": ["the joined line crosses itself"], **m}
+    mode = {"extend": "extended with the piece beyond the overlap",
+            "ring": "closed into a ring", "contained": "kept as it is (the piece lies on it)"}
+    facts = [f"{j.get('target')} {mode.get(j.get('mode'), 'joined')}; piece deleted",
+             f"joined line within {f_new:.1f} px of the pieces; pieces within "
+             f"{max(f_a, f_b):.1f} px of it (outside the splice)",
+             f"splice gap {gap:.1f} px"]
+    reasons = []
+    if max(f_new, f_a, f_b) > JOIN_OK_FOLLOW:
+        reasons.append(f"joined line and pieces differ by {max(f_new, f_a, f_b):.1f} px > "
+                       f"{JOIN_OK_FOLLOW:.0f}: confirm which line is right")
+    if gap > JOIN_OK_GAP:
+        reasons.append(f"splice gap {gap:.1f} px > {JOIN_OK_GAP:.0f}: confirm the splice")
+    if dbl > JOIN_OK_DOUBLED:
+        reasons.append(f"joined line doubles back over {dbl:.0f} px: confirm the shape")
+    if bx:
+        reasons.append(f"{j.get('target')} already crossed itself ({bx}x): a shape issue")
+    return {"verdict": "check" if reasons else "ok", "reasons": reasons + facts, **m}
+
+
 def verify_frame_change(img, issue, rec, frame, label_id) -> dict:
     before, after = rec.get("before"), rec.get("after")
+    if rec.get("join"):
+        return _join(issue, rec)
     if before is None or after is None:
         return {"verdict": "check", "reasons": ["label deleted: confirm by eye"]}
     if isinstance(after, list):  # a split: "after" lists the pieces
@@ -429,6 +506,8 @@ def verify_combined(img, issues_by_type: dict, rec: dict, frame, label_id) -> di
             v = {"verdict": "check", "reasons": ["vertices dropped: confirm by eye"]}
         elif op == "set_poly":
             v = _set_poly(issue, rec)
+        elif op == "join_into":
+            v = _join(issue, rec)
         else:
             v = {"verdict": "check", "reasons": ["label deleted: confirm by eye"]}
         parts.append({**v, "reasons": [f"{t} {op}: {r}" for r in v["reasons"]]})

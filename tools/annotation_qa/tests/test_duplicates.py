@@ -43,12 +43,24 @@ def test_different_class_same_place_hand_fix(tmp_path):
     assert i.features["other_category"] == "curb_road_edge"
 
 
-def test_overlapping_pieces_hand_fix(tmp_path):
+def test_overlapping_pieces_auto_join(tmp_path):
     ctx = ctx_for(tmp_path, [("A", "solid_single_line", [hline(100, 20, 300)]),
                              ("B", "solid_single_line", [hline(100, 200, 380)])])
     [i] = detect(ctx)  # B is shorter (180 vs 280); 100 of 180 overlaps
-    assert i.label_id == "B" and i.hand_fix and "overlapping pieces; join by hand" in i.reason
-    assert 0.3 <= i.features["overlap"] < 0.8
+    assert i.label_id == "B" and not i.hand_fix and "auto-join" in i.reason
+    assert 0.3 <= i.features["overlap"] < 0.8 and i.features["join"] == "extend"
+    assert i.fix["op"] == "join_into" and i.fix["target"] == "A" and i.fix["poly_index"] == 0
+    assert np.allclose(i.fix["vertices"], [[20, 100], [300, 100], [380, 100]])
+
+
+def test_overlapping_pieces_fork_stays_hand_fix(tmp_path):
+    # B runs along A for 100 px from A's middle, then leaves it: a Y, not one line
+    fork = {"vertices": [[100, 100], [200, 100], [260, 160]], "types": "LLL", "closed": False}
+    ctx = ctx_for(tmp_path, [("A", "solid_single_line", [hline(100, 20, 380)]),
+                             ("B", "solid_single_line", [fork])])
+    [i] = detect(ctx)
+    assert i.label_id == "B" and i.hand_fix and i.fix is None
+    assert "join by hand" in i.reason and i.features["join"].startswith("refused: ")
 
 
 def test_different_class_partial_overlap_ignored(tmp_path):

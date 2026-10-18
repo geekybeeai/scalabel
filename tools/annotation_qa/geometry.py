@@ -824,3 +824,318 @@ def remove_self_crossings(poly: dict) -> tuple[dict, dict] | None:
         return None
     return cur, {"modes": modes, "removed": removed, "removed_len": float(sum(removed)),
                  "length": total0, "n_crossings": n0}
+
+
+# ---- joining two overlapping pieces of one line (duplicates "overlapping_pieces") ----
+# Roshan, after calibrating duplicates (overlapping_pieces 14/14 real): "Use auto join for
+# fixing such cases." Two same-category labels A (shorter) and B that run along each other
+# for part of A are joined like the editor's join tool: B keeps its curve and id, A's part
+# beyond the overlap is spliced onto B's end, A's doubled stretch is dropped, A is deleted.
+JOIN_NEAR = 4.0  # px: "along" = within this of the other line (the duplicates detector's NEAR)
+JOIN_PARALLEL_COS = 0.94  # ... with tangents within ~20 deg (the detector's PARALLEL_COS)
+JOIN_GAP_FILL = 6.0  # px: aligned stretches of A this close together count as one overlap
+JOIN_RUN_MIN = 5.0  # px: shorter aligned stretches are ignored
+JOIN_END_TOL = 3 * LINE_WIDTH  # px: an overlap "reaches" a line end when it stops within this
+JOIN_BRIDGE = LINE_WIDTH  # px: both lines are cut back this far from the splice and bridged
+JOIN_MIN_REST = 2.0  # px: A must reach at least this far beyond B to extend it
+JOIN_CONTAINED = 2 * LINE_WIDTH  # px: A wholly this close to B -> the union is B itself
+JOIN_DOUBLE_D = 2.0  # px: two stretches of one line this close ...
+JOIN_DOUBLE_ARC = 20.0  # px: ... and this far apart along it double back on each other
+JOIN_DOUBLE_MAX = 2 * LINE_WIDTH  # px of doubled line tolerated in a joined result
+
+
+def reverse_poly(poly: dict) -> dict:
+    """The same open curve drawn the other way (vertices and types reversed; a cubic's
+    control points stay between its end points)."""
+    if poly.get("closed"):
+        raise ValueError("a ring has no direction to reverse here")
+    v = [[float(x), float(y)] for x, y in reversed(poly["vertices"])]
+    t = (poly.get("types") or "L" * len(v))[::-1]
+    if t[:1] != "L":
+        raise ValueError(f"cannot reverse types {poly.get('types')!r}")
+    return {**poly, "vertices": v, "types": t, "closed": False}
+
+
+def doubled_length(poly: dict) -> float:
+    """px of ``poly`` that run within JOIN_DOUBLE_D of another stretch of the same line
+    more than JOIN_DOUBLE_ARC away along it (an out-and-back or doubled section)."""
+    from scipy.spatial import cKDTree
+    d = np.asarray(dense(poly), float)
+    if len(d) < 2 or not np.isfinite(d).all():
+        return 0.0
+    r = _resample(d, 1.0)
+    if r is None:
+        return 0.0
+    s, P = r[0], r[1]
+    total = float(s[-1])
+    pairs = cKDTree(P).query_pairs(JOIN_DOUBLE_D, output_type="ndarray")
+    if not len(pairs):
+        return 0.0
+    ds = np.abs(s[pairs[:, 0]] - s[pairs[:, 1]])
+    if poly.get("closed"):
+        ds = np.minimum(ds, total - ds)
+    far = pairs[ds > JOIN_DOUBLE_ARC]
+    hit = np.zeros(len(P), bool)
+    hit[far.ravel()] = True
+    return float(hit.sum())
+
+
+def _project(d: np.ndarray, cum: np.ndarray, pt, lo: float = -np.inf,
+             hi: float = np.inf) -> tuple[float, float]:
+    """(arc, distance) of the point of polyline ``d`` nearest to ``pt``, among the arc
+    positions in [lo, hi] (anywhere when none is)."""
+    pt = np.asarray(pt, float)
+    a, b = d[:-1], d[1:]
+    ab = b - a
+    l2 = np.maximum((ab ** 2).sum(axis=1), 1e-12)
+    t = np.clip(((pt - a) * ab).sum(axis=1) / l2, 0.0, 1.0)
+    q = a + t[:, None] * ab
+    arc = cum[:-1] + t * (cum[1:] - cum[:-1])
+    dist = np.linalg.norm(q - pt, axis=1)
+    ok = (arc >= lo) & (arc <= hi)
+    if not ok.any():
+        ok[:] = True
+    k = int(np.argmin(np.where(ok, dist, np.inf)))
+    return float(arc[k]), float(dist[k])
+
+
+def _join_runs(a: dict, b: dict) -> dict | None:
+    """Where open poly ``a`` runs along open poly ``b``: aligned stretches of a (1 px samples
+    within JOIN_NEAR of b, tangents within ~20 deg; gaps up to JOIN_GAP_FILL bridged), each
+    with its arc span on a (a0, a1) and b (b0 at a0, b1 at a1, bmin, bmax), the line ends it
+    reaches ("head" / "tail" / "both" / None) and its direction on b (sigma = +1 when b's arc
+    grows with a's, -1 when it shrinks, 0 when unclear)."""
+    from scipy.spatial import cKDTree
+    da, db = np.asarray(dense(a), float), np.asarray(dense(b), float)
+    if len(da) < 2 or len(db) < 2 or not (np.isfinite(da).all() and np.isfinite(db).all()):
+        return None
+    ra, rb = _resample(da, 1.0), _resample(db, 1.0)
+    if ra is None or rb is None:
+        return None
+    sa, Pa, Na = ra
+    sb, Pb, Nb = rb
+    d, idx = cKDTree(Pb).query(Pa)
+    al = (d <= JOIN_NEAR) & (np.abs((Na * Nb[idx]).sum(axis=1)) >= JOIN_PARALLEL_COS)
+    LA, LB = float(sa[-1]), float(sb[-1])
+    spans = []
+    on = np.flatnonzero(al)
+    if len(on):
+        start = prev = int(on[0])
+        for k in on[1:]:
+            if sa[k] - sa[prev] > JOIN_GAP_FILL:
+                spans.append((start, prev))
+                start = int(k)
+            prev = int(k)
+        spans.append((start, prev))
+
+    def ends(lo, hi, total):
+        h, t = lo <= JOIN_END_TOL, total - hi <= JOIN_END_TOL
+        return "both" if h and t else "head" if h else "tail" if t else None
+
+    runs = []
+    for i0, i1 in spans:
+        a0, a1 = float(sa[i0]), float(sa[i1])
+        if a1 - a0 < JOIN_RUN_MIN:
+            continue
+        sel = np.arange(i0, i1 + 1)[al[i0:i1 + 1]]
+        bs = sb[idx[sel]]
+        b0, b1 = float(sb[idx[i0]]), float(sb[idx[i1]])
+        runs.append({"a0": a0, "a1": a1, "b0": b0, "b1": b1, "bmin": float(bs.min()),
+                     "bmax": float(bs.max()), "a_end": ends(a0, a1, LA),
+                     "b_end": ends(float(bs.min()), float(bs.max()), LB),
+                     "sigma": 0 if abs(b1 - b0) < 2.0 else (1 if b1 > b0 else -1)})
+    return {"LA": LA, "LB": LB, "runs": runs, "dmax": float(d.max()), "da": da, "db": db}
+
+
+def _want_sigma(a_end: str, b_end: str) -> int:
+    """The direction on b an overlap must have so a's free part continues past b's end: a
+    run at a's head on b's tail (or a's tail on b's head) goes the same way, else opposite."""
+    return 1 if (a_end == "head") == (b_end == "tail") else -1
+
+
+def _resolve_b_end(run: dict) -> dict:
+    """A run that covers both ends of a short b: the end it continues past follows from a's
+    end and the direction."""
+    if run["b_end"] == "both" and run["a_end"] in ("head", "tail") and run["sigma"]:
+        tail = (run["a_end"] == "head") == (run["sigma"] > 0)
+        return {**run, "b_end": "tail" if tail else "head"}
+    return run
+
+
+def _bridge(p, q) -> list:
+    return [("L", [np.asarray(p, float), np.asarray(q, float)])]
+
+
+def _splice_at_end(an: dict, run: dict, b_end: str, a_lo: float, a_hi: float):
+    """(sB, tA, gap) of the splice at b's ``b_end``: b's end point when it lies on a (else
+    the last point of b along a), projected onto a within arc [a_lo, a_hi]."""
+    da, db = an["da"], an["db"]
+    ca, cb = _arc(da), _arc(db)
+    sB = an["LB"] if b_end == "tail" else 0.0
+    E = db[-1] if b_end == "tail" else db[0]
+    tA, gap = _project(da, ca, E, a_lo, a_hi)
+    if gap > JOIN_NEAR:  # b's end hooks away from a: splice where b last runs along a
+        sB = run["bmax"] if b_end == "tail" else run["bmin"]
+        E = np.array([np.interp(sB, cb, db[:, 0]), np.interp(sB, cb, db[:, 1])])
+        tA, gap = _project(da, ca, E, a_lo, a_hi)
+    return sB, tA, gap
+
+
+def _join_info(mode, splices, gaps, a, b, new, **kw) -> dict:
+    la = float(_arc(np.asarray(dense(a), float))[-1])
+    lb = float(_arc(np.asarray(dense(b), float))[-1])
+    ln = float(_arc(np.asarray(dense(new), float))[-1])
+    return {"mode": mode, "splices": [[float(x), float(y)] for x, y in splices],
+            "gaps": [float(g) for g in gaps], "length_a": la, "length_b": lb,
+            "length": ln, "added_len": ln - lb, **kw}
+
+
+def _join_check(new: dict, a: dict, b: dict, info: dict):
+    if len(new["vertices"]) < (3 if new["closed"] else 2):
+        return None, "the joined line is degenerate"
+    # only what the join adds counts: b may already cross itself or double back (a shape issue)
+    nx, bx = len(self_crossings(new)), len(self_crossings(b))
+    if nx > bx:
+        return None, "the joined line would cross itself"
+    dbl, bdbl = doubled_length(new), doubled_length(b)
+    if dbl > bdbl + JOIN_DOUBLE_MAX:
+        return None, f"the joined line would double back on itself ({dbl - bdbl:.0f} px)"
+    info["b_crossings"], info["b_doubled"] = bx, bdbl
+    out = {k: v for k, v in b.items() if k not in ("vertices", "types", "closed")}
+    out.update(vertices=new["vertices"], types=new["types"], closed=bool(new["closed"]))
+    return out, info
+
+
+def _join_extend(a: dict, b: dict, run: dict):
+    """b + a's part beyond b's end, a orientated to continue b; spliced at b's end."""
+    bb = b if run["b_end"] == "tail" else reverse_poly(b)
+    aa = a if run["a_end"] == "head" else reverse_poly(a)
+    an = _join_runs(aa, bb)
+    cand = [r for r in (an["runs"] if an else []) if r["a_end"] in ("head", "both")]
+    cand = [_resolve_b_end(r) for r in cand]
+    cand = [r for r in cand if r["b_end"] == "tail" and r["sigma"] > 0]
+    if not cand:
+        return None, "the overlap does not line up once orientated"
+    r = max(cand, key=lambda q: q["a1"] - q["a0"])
+    sB, tA, gap = _splice_at_end(an, r, "tail", -np.inf, r["a1"] + JOIN_END_TOL)
+    if gap > 2 * LINE_WIDTH:
+        return None, f"the pieces are {gap:.1f} px apart at the splice"
+    h = JOIN_BRIDGE if gap > 0.5 else 0.0
+    if an["LA"] - (tA + h) < JOIN_MIN_REST:
+        return None, "nothing of the shorter piece reaches beyond the other one"
+    if sB - h < JOIN_MIN_REST:
+        return None, "the other piece is too short to splice"
+    runB = _keep(_pieces(bb), 0.0, sB - h)
+    runA = _keep(_pieces(aa), tA + h, an["LA"])
+    if not runB or not runA:
+        return None, "nothing left to splice"
+    pB, pA = runB[-1][1][-1], runA[0][1][0]
+    if h:
+        new = _assemble([runB, _bridge(pB, pA), runA], [pB, pA], False)
+    else:
+        new = _assemble([runB, runA], [pB], False)
+    if run["b_end"] == "head":
+        new = reverse_poly(new)
+    splice = (np.asarray(pB, float) + np.asarray(pA, float)) / 2
+    info = _join_info("extend", [splice], [gap], a, b, new, a_end=run["a_end"],
+                      b_end=run["b_end"], dropped_len=float(tA))
+    return _join_check(new, a, b, info)
+
+
+def _join_ring(a: dict, b: dict, head_run: dict, tail_run: dict):
+    """a bridges b's two ends: the closed ring b + a's middle, spliced at both of b's ends."""
+    aa = a if head_run["b_end"] == "tail" else reverse_poly(a)
+    an = _join_runs(aa, b)
+    runs = an["runs"] if an else []
+    hr = [r for r in runs if r["a_end"] == "head" and r["b_end"] == "tail" and r["sigma"] > 0]
+    tr = [r for r in runs if r["a_end"] == "tail" and r["b_end"] == "head" and r["sigma"] > 0]
+    if not hr or not tr:
+        return None, "the overlaps do not line up once orientated"
+    hr = max(hr, key=lambda q: q["a1"] - q["a0"])
+    tr = max(tr, key=lambda q: q["a1"] - q["a0"])
+    sB1, tA1, g1 = _splice_at_end(an, hr, "tail", -np.inf, hr["a1"] + JOIN_END_TOL)
+    sB0, tA2, g0 = _splice_at_end(an, tr, "head", tr["a0"] - JOIN_END_TOL, np.inf)
+    if max(g0, g1) > 2 * LINE_WIDTH:
+        return None, f"the pieces are {max(g0, g1):.1f} px apart at a splice"
+    h1 = JOIN_BRIDGE if g1 > 0.5 else 0.0
+    h0 = JOIN_BRIDGE if g0 > 0.5 else 0.0
+    if (sB1 - h1) - (sB0 + h0) < JOIN_MIN_REST or (tA2 - h0) - (tA1 + h1) < JOIN_MIN_REST:
+        return None, "the overlaps meet: nothing left to close the ring with"
+    runB = _keep(_pieces(b), sB0 + h0, sB1 - h1)
+    runA = _keep(_pieces(aa), tA1 + h1, tA2 - h0)
+    if not runB or not runA:
+        return None, "nothing left to splice"
+    pB0, pB1 = runB[0][1][0], runB[-1][1][-1]
+    pA1, pA2 = runA[0][1][0], runA[-1][1][-1]
+    runs_, joints = [runB], [pB1]
+    if h1:
+        runs_.append(_bridge(pB1, pA1))
+        joints.append(pA1)
+    runs_.append(runA)
+    joints.append(pA2 if h0 else pB0)
+    if h0:
+        runs_.append(_bridge(pA2, pB0))
+        joints.append(pB0)
+    new = _assemble(runs_, joints, True)
+    s1 = (np.asarray(pB1, float) + np.asarray(pA1, float)) / 2
+    s0 = (np.asarray(pB0, float) + np.asarray(pA2, float)) / 2
+    info = _join_info("ring", [s1, s0], [g1, g0], a, b, new, a_end="both", b_end="both",
+                      dropped_len=float(tA1 + an["LA"] - tA2))
+    return _join_check(new, a, b, info)
+
+
+def join_overlapping(a: dict, b: dict) -> tuple[dict | None, dict | str]:
+    """Join open poly ``a`` (the shorter piece) into open poly ``b`` where they overlap;
+    returns (b's new poly, info) or (None, reason it refuses -- the pair stays a hand fix).
+
+    Modes, from where a runs along b (``_join_runs``):
+    * "extend": a's overlap reaches one end of a and one end of b, running so that a's free
+      part continues past b's end: b keeps its whole curve, a's doubled stretch is dropped and
+      its free part is spliced on at b's end;
+    * "ring": a overlaps both ends of b (a closes the gap of an outline drawn in two pieces):
+      the closed ring b + a's middle;
+    * "contained": all of a lies within JOIN_CONTAINED of b: b unchanged (a is deleted).
+    At a splice both lines are cut back JOIN_BRIDGE px and joined by one straight edge (no
+    bridge when they meet within 0.5 px); curves keep their exact control points (a Bezier
+    the cut runs through is split with de Casteljau). Refuses a fork (the overlap stops in
+    the middle of a or b), pieces that overlap running the wrong way (joining would double
+    back), rings, and any result that would cross itself or double back.
+
+    info: {"mode", "splices": [[x, y]], "gaps": [px], "length_a", "length_b", "length",
+           "added_len", "a_end", "b_end", "dropped_len"}"""
+    if a.get("closed") or b.get("closed"):
+        return None, "a ring cannot be joined"
+    if len(a.get("vertices") or []) < 2 or len(b.get("vertices") or []) < 2:
+        return None, "line too short"
+    an = _join_runs(a, b)
+    if an is None:
+        return None, "line too short"
+    if an["dmax"] <= JOIN_CONTAINED:
+        new = {"vertices": [[float(x), float(y)] for x, y in b["vertices"]],
+               "types": b.get("types") or "L" * len(b["vertices"]), "closed": False}
+        info = _join_info("contained", [], [], a, b, new, a_end="both", b_end=None,
+                          dropped_len=an["LA"], max_offset=an["dmax"])
+        return _join_check(new, a, b, info)
+    runs = [_resolve_b_end(r) for r in an["runs"]]
+    if not runs:
+        return None, "no stretch runs along the other piece"
+    ends = [r for r in runs if r["a_end"] in ("head", "tail") and r["b_end"] in ("head", "tail")
+            and r["sigma"] == _want_sigma(r["a_end"], r["b_end"])]
+    heads = [r for r in ends if r["a_end"] == "head"]
+    tails = [r for r in ends if r["a_end"] == "tail"]
+    if heads and tails:
+        h = max(heads, key=lambda q: q["a1"] - q["a0"])
+        t = max(tails, key=lambda q: q["a1"] - q["a0"])
+        if h["b_end"] != t["b_end"]:
+            return _join_ring(a, b, h, t)
+    main = max(runs, key=lambda q: q["a1"] - q["a0"])
+    if main["a_end"] == "both":
+        return None, "the shorter piece lies along the other one but strays more than " \
+                     f"{JOIN_CONTAINED:.0f} px from it"
+    if main["a_end"] is None:
+        return None, "the overlap is in the middle of the shorter piece (a fork / crossing)"
+    if main["b_end"] not in ("head", "tail"):
+        return None, "the shorter piece leaves the other one in its middle (a fork / branch)"
+    if main["sigma"] != _want_sigma(main["a_end"], main["b_end"]):
+        return None, "the pieces overlap running the wrong way (joining would double back)"
+    return _join_extend(a, b, main)
