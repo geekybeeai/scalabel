@@ -27,6 +27,7 @@ import numpy as np
 from annotation_qa.data import image_path, load_export
 from annotation_qa.geometry import _dist_to_polyline, change_anchor, dense
 from annotation_qa.imaging import FrameImage
+from annotation_qa.progress import is_reviewed
 from annotation_qa.reverts import read_reverts
 from annotation_qa.render import RENDER_VERSION, issue_crop
 from annotation_qa.rounds import merged_tags, round_files  # noqa: F401 - re-exported
@@ -186,12 +187,21 @@ def _finish_row(rw: dict) -> None:
     rw["all_ok"] = bool(rw["changes"]) and all(v == "ok" for v in vs) and not rw["review_edits"]
 
 
-def select_rows(rows: list[dict], tag: str = "", show: str = "needs") -> dict:
-    """View B's filter and order. ``show``: all | needs (check+bad) | bad.
+def select_rows(rows: list[dict], tag: str = "", show: str = "needs",
+                progress: dict | None = None) -> dict:
+    """View B's filter and order. ``show``: all | needs (check+bad) | bad | unreviewed.
 
     Rows are limited to a round when ``tag`` is given and ordered bad, check, ok, then by
     project item order (rows without a round keep their incoming order within a verdict).
-    Counts are per change verdict over the round's rows, before the show filter."""
+    ``unreviewed`` is "needs a look" minus reviewed frames. Counts are per change verdict over
+    the round's rows, before the show filter.
+
+    Every row gets ``n`` (1-based position) and ``reviewed``; positions and the totals
+    (``total``, ``reviewed``) are over the verdict-filtered list, so they stay stable while
+    the "unreviewed" filter hides frames. ``resume`` is the list index of the first
+    unreviewed row, or -1. Merged rounds count as reviewed (read-only: ``locked``)."""
+    progress = progress or {}
+
     def idx(r):
         p = next((p for p in r["projects"] if p["project"] == tag), None)
         return p["index"] if p else 10 ** 9
@@ -201,17 +211,30 @@ def select_rows(rows: list[dict], tag: str = "", show: str = "needs") -> dict:
         for c in r["changes"]:
             if (not tag or c["tag"] == tag) and not c["reverted"]:
                 counts[c["verdict"]] += 1
-    keep = {"all": 2, "needs": 1, "bad": 0}.get(show, 1)
+    keep = {"all": 2, "needs": 1, "bad": 0, "unreviewed": 1}.get(show, 1)
     rows = [r for r in rows if VERDICT_RANK[r["verdict"]] <= keep]
     rows = sorted(rows, key=lambda r: (VERDICT_RANK[r["verdict"]], idx(r) if tag else 0))
-    return {"rows": rows, "counts": counts}
+    for n, r in enumerate(rows, 1):
+        ps = [p for p in r["projects"] if not tag or p["project"] == tag]
+        r["n"] = n
+        r["locked"] = bool(ps) and all(p.get("merged") for p in ps)
+        r["reviewed"] = bool(ps) and all(
+            p.get("merged") or is_reviewed(progress, p["project"], r["frame_name"]) for p in ps)
+        r["scalabel"] = ps[0] if ps else None
+    total = len(rows)
+    done = sum(1 for r in rows if r["reviewed"])
+    first = next((i for i, r in enumerate(rows) if not r["reviewed"] and not r["locked"]), -1)
+    if show == "unreviewed":
+        rows = [r for r in rows if not r["reviewed"]]
+        first = 0 if rows else -1
+    return {"rows": rows, "counts": counts, "total": total, "reviewed": done, "resume": first}
 
 
 def _crop_name(*parts: str) -> str:
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
 
-def _project_link(repo_root: Path, tag: str, index: int) -> dict:
+def _project_link(repo_root: Path, tag: str, index: int, n_items: int = 0) -> dict:
     """Deep link to frame ``index`` (0-based, items-file order) of a review project."""
     size = 0
     try:
@@ -223,7 +246,8 @@ def _project_link(repo_root: Path, tag: str, index: int) -> dict:
         size = TASK_SIZE
     task, item = index // size, index % size + 1
     return {"link": f"{SCALABEL}/label?project_name={quote(tag, safe='')}&task_index={task}&item={item}",
-            "index": index, "task_index": task, "item": item}
+            "index": index, "task_index": task, "item": item,
+            "n_tasks": max(1, -(-n_items // size)) if n_items else 1}
 
 
 def _work_frames(out: Path, stem: str) -> dict[str, tuple[int, dict]]:
@@ -294,8 +318,9 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                                          .get(c["review"], "not_applied"))
                 rw["changes"].append(c)
             if fname in items:
-                pl = _project_link(repo_root, r["tag"], items[fname][0])
-                rw["projects"].append({"round": r["round"], "project": r["tag"], **pl})
+                pl = _project_link(repo_root, r["tag"], items[fname][0], len(items))
+                rw["projects"].append({"round": r["round"], "project": r["tag"],
+                                       "merged": is_merged, **pl})
                 for c in rw["changes"]:
                     if c["round"] == r["round"] and "link" not in c:
                         c["link"] = pl["link"] + "&label=" + quote(str(c["label_id"]), safe="")
@@ -315,8 +340,8 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
             rw = row(r["stem"], fname)
             done = _labels(_work_frames(out, r["stem"]).get(fname, (0, frame))[1]) != pre
             rw["hand"].append({"round": r["round"], "done": done})
-            rw["projects"].append({"round": r["round"], "project": r["tag"],
-                                   **_project_link(repo_root, r["tag"], idx)})
+            rw["projects"].append({"round": r["round"], "project": r["tag"], "merged": is_merged,
+                                   **_project_link(repo_root, r["tag"], idx, len(items))})
     for rw in rows.values():
         _finish_row(rw)
     return sorted(rows.values(),
@@ -446,7 +471,12 @@ const flag=c=>c.review?` <span class="badge">${esc(c.review)}</span>`+(c.shipped
 const VB={ok:['✓ ok','#2a7','#e6f6ee'],check:['⚠ check','#b80','#fff4d6'],unverified:['⚠ not verified','#b80','#fff4d6'],bad:['✗ likely wrong','#c33','#fde8e8']};
 const vbadge=c=>{const v=VB[c.verdict]||VB.check,rs=(c.reasons||[]).map(esc).join('; ');
  return `<span class="vb" style="color:${v[1]};background:${v[2]};border:1px solid ${v[1]};border-radius:3px;padding:0 5px;font-weight:600" title="${rs}">${v[0]}</span><div class="why" style="font-size:11px;color:#666;max-width:260px">${(c.reasons||[]).map(esc).join('<br>')}</div>`;};
-const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><div class="meta"><span class="vb" style="color:#2a7">✓ all changes verified</span> &mdash; ${esc(r.frame_name)} (${r.changes.length}) &mdash; <a href="#" class="expand" data-i="${r._i}">open anyway</a>${r.projects.length?' &middot; <a class="open" href="'+esc(r.projects[0].link)+'" target="_blank">Scalabel</a>':''}</div></div>`:`<div class="card" data-i="${r._i}"><div class="meta"><div><b>${esc(r.export_stem)}</b></div>
+let TOTAL=0,NREV=0;
+const sfr=r=>{const p=r.scalabel;return p?(p.n_tasks>1?'task '+p.task_index+', frame '+p.item:'frame '+p.item):'';};
+const where=r=>{const a=r.projects.length?'<a class="open" href="'+esc((r.scalabel||r.projects[0]).link)+'" target="_blank">Open in Scalabel</a>':'';
+ return `<div class="where"><span class="pos">Image ${r.n} of ${TOTAL}</span>${r.scalabel?' <span class="sfr">Scalabel '+esc(sfr(r))+'</span>':''} ${a}
+ ${r.reviewed?'<span class="rbadge">✓ reviewed</span>':''} <label class="rvw"><input type="checkbox" class="rchk" data-i="${r._i}"${r.reviewed?' checked':''}${r.locked?' disabled':''}> reviewed${r.locked?' (merged)':''}</label></div>`;};
+const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><div class="meta">${where(r)}<span class="vb" style="color:#2a7">✓ all changes verified</span> &mdash; ${esc(r.frame_name)} (${r.changes.length}) &mdash; <a href="#" class="expand" data-i="${r._i}">open anyway</a>${r.projects.length?' &middot; <a class="open" href="'+esc(r.projects[0].link)+'" target="_blank">Scalabel</a>':''}</div></div>`:`<div class="card" data-i="${r._i}"><div class="meta">${where(r)}<div><b>${esc(r.export_stem)}</b></div>
  <div>${esc(r.frame_name)} &middot; ${r.changes.length} changes</div>
  <div>${r.projects.map(p=>`<a href="${esc(p.link)}" target="_blank">${esc(p.project)} (task ${p.task_index}, frame ${p.item})</a>`).join('<br>')}</div>
  ${r.hand.length?'<div><span class="badge">draw by hand</span> '+r.hand.map(h=>esc(h.round)+': '+(h.done?'done':'not done')).join(', ')+'</div>':''}
@@ -457,10 +487,28 @@ const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><
 let ROWS=[],cur=-1;
 async function show(){const t=$('#round').value,f=$('#show').value;
  const d=await (await fetch('/viewb/view?round='+encodeURIComponent(t)+'&show='+encodeURIComponent(f))).json();
- ROWS=d.rows;ROWS.forEach((r,i)=>r._i=i);const c=d.counts;
+ ROWS=d.rows;ROWS.forEach((r,i)=>r._i=i);const c=d.counts;TOTAL=d.total;NREV=d.reviewed;
  $('#n').textContent=ROWS.length+' edited frames'+(t?' (bad, check, ok; then Scalabel item order)':'')
   +' | changes: ✓ '+c.ok+' ok, ⚠ '+(c.check+c.unverified)+' check, ✗ '+c.bad+' bad';
- $('#rows').innerHTML=ROWS.map(card).join('');cur=-1;nrev();}
+ $('#rows').innerHTML=ROWS.map(card).join('');cur=-1;nrev();bar();}
+function bar(){$('#bround').textContent=$('#round').value||'all rounds';
+ $('#bprog').textContent='Reviewed '+NREV+' / '+TOTAL+' images';
+ const pb=$('#pbar');pb.max=Math.max(1,TOTAL);pb.value=NREV;}
+function rerender(i){const r=ROWS[i];const el=document.querySelector('#rows .card[data-i="'+i+'"]');if(!el)return;
+ const had=el.style.outline;el.outerHTML=card(r);const n=document.querySelector('#rows .card[data-i="'+i+'"]');if(n)n.style.outline=had;}
+async function setReviewed(i,want){const r=ROWS[i];if(!r||r.locked||r.reviewed===want)return true;
+ const sel=$('#round').value;
+ const tags=r.projects.filter(p=>!p.merged&&(!sel||p.project===sel)).map(p=>p.project);
+ try{for(const t of tags){const x=await fetch('/viewb/progress',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({round:t,frame:r.frame_name,reviewed:want})});if(!x.ok)throw new Error(await x.text());}}
+ catch(e){alert('progress not saved: '+e.message);rerender(i);return false;}
+ r.reviewed=want;NREV+=want?1:-1;rerender(i);bar();return true;}
+function resume(){const r=ROWS.find(r=>!r.reviewed&&!r.locked);if(!r){alert('Every image is reviewed.');return;}
+ const cs=[...document.querySelectorAll('#rows .card')];const k=cs.findIndex(c=>+c.dataset.i===r._i);if(k<0)return;
+ cur=k;cs.forEach((c,i)=>c.style.outline=i===cur?'3px solid #38f':'');cs[k].scrollIntoView({block:'start',behavior:'smooth'});}
+document.addEventListener('change',e=>{const b=e.target;if(!b.classList||!b.classList.contains('rchk'))return;
+ const i=+b.dataset.i,want=b.checked;b.blur();setReviewed(i,want);});
+document.addEventListener('click',e=>{if(e.target.id==='resume')resume();});
 function nrev(){const n=ROWS.reduce((a,r)=>a+r.changes.filter(c=>c.reverted).length,0);$('#nrev').textContent=n?n+' reverted':'';}
 async function toggleRev(i,j){const r=ROWS[i],c=r&&r.changes[j];if(!c||c.merged)return;
  const want=!c.reverted;let d;
@@ -480,7 +528,8 @@ function go(d){const cs=[...document.querySelectorAll('#rows .card')];if(!cs.len
 document.addEventListener('keydown',e=>{
  const t=e.target&&e.target.tagName;if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT'||(e.target&&e.target.isContentEditable)||e.ctrlKey||e.metaKey||e.altKey)return;
  const k=e.key.toLowerCase();
- if(k==='j')go(1);else if(k==='k')go(-1);
+ if(k==='j'){const cd=document.querySelectorAll('#rows .card')[cur];
+  if(cd)setReviewed(+cd.dataset.i,true);go(1);}else if(k==='u')resume();else if(k==='k')go(-1);
  else if(k==='x'){const f=document.activeElement&&document.activeElement.closest&&document.activeElement.closest('.chg');
   const cd=f?f.closest('.card'):document.querySelectorAll('#rows .card')[cur];if(!cd)return;
   toggleRev(+cd.dataset.i,f?+f.dataset.j:0);}
@@ -502,6 +551,12 @@ def viewb_html(css: str) -> str:
 .chg figure{{flex:1 1 0;min-width:0;max-width:calc((100% - 240px)/2);margin:0}}
 .chg.rev{{background:#f1f1f1}}.chg.rev .revfig img{{outline:4px solid #888;opacity:.9}}
 .chg:focus{{outline:2px solid #38f}}
+#bar{{position:sticky;top:0;z-index:20;background:#fff;border-bottom:2px solid #ccc;padding:6px 10px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}}
+#bar progress{{width:240px;height:14px}}#bround{{font-weight:700}}#bprog{{font-weight:600}}
+#rows .card{{scroll-margin-top:56px}}
+.where{{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:20px;margin-bottom:6px}}
+.where .pos{{font-weight:700}}.where .sfr{{font-weight:700;color:#246}}.where a.open{{font-size:16px}}
+.where .rvw{{font-size:14px}}.rbadge{{background:#e6f6ee;color:#2a7;border:1px solid #2a7;border-radius:3px;padding:0 6px;font-size:15px;font-weight:600}}
 button.rv{{margin-top:4px}}
 .chg figcaption{{font-size:11px;color:#666}}
 #rows .card{{width:100%;box-sizing:border-box}}
@@ -510,6 +565,8 @@ button.rv{{margin-top:4px}}
 @media (max-width:999px){{.chg{{flex-direction:column}}.txt{{flex:none;width:auto}}.chg figure{{max-width:none;width:100%}}}}
 </style></head><body>
 <header><a href="/">&larr; View A</a> &nbsp; <b>View B: final review</b> &nbsp; <select id="round"></select>
- show: <select id="show"><option value="all">all</option><option value="needs" selected>needs a look (check+bad)</option><option value="bad">bad only</option></select> <span id="n"></span> <b id="nrev" style="color:#666"></b>
-&nbsp; (each change: before left, after right; merged rounds show what will ship; J/K next/prev frame, O open in Scalabel, X revert/undo a change)</header><div id="rows"></div>
+ show: <select id="show"><option value="all">all</option><option value="needs" selected>needs a look (check+bad)</option><option value="bad">bad only</option><option value="unreviewed">not yet reviewed</option></select> <span id="n"></span> <b id="nrev" style="color:#666"></b>
+&nbsp; (each change: before left, after right; merged rounds show what will ship; J mark reviewed + next, K prev, U resume at first unreviewed, O open in Scalabel, X revert/undo a change)</header>
+<div id="bar"><span>Round: <span id="bround"></span></span><span id="bprog"></span><progress id="pbar" value="0" max="1"></progress>
+ <button id="resume" type="button" title="U">Resume (U)</button><span style="font-size:12px;color:#666">J = mark reviewed and next</span></div><div id="rows"></div>
 <script>{VIEWB_JS}</script></body></html>"""

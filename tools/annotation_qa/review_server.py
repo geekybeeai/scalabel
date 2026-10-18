@@ -17,6 +17,7 @@ from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_sample,  # n
                                   calibration_status, load_issues_tolerant, read_marks,
                                   write_marks)
 from annotation_qa import comments as cm, locator, zoom
+from annotation_qa import progress as pg
 from annotation_qa import reverts as rv
 from annotation_qa.rounds import merged_tags, round_files
 from annotation_qa.exclude import read_excluded
@@ -196,6 +197,36 @@ class ReviewState:
         with self.lock:
             return rv.set_revert(self.out, tag, frame, label, revert)
 
+    def _round_frames(self, tag: str) -> tuple[dict, bool]:
+        """(round record, merged?) with the set of frame names in ``frames``; ValueError if unknown."""
+        rnd = next((r for r in round_files(self.out) if r["tag"] == tag), None)
+        if rnd is None:
+            raise ValueError(f"unknown round {tag!r}")
+        names: set[str] = set()
+        for k in ("changes", "items"):
+            try:
+                d = json.loads(rnd[k].read_text())
+            except (OSError, ValueError) as e:
+                raise ValueError(f"cannot read {k} of {tag}: {e}")
+            names |= set(d) if k == "changes" else {f["name"] for f in d.get("frames", [])}
+        return {"frames": names, **rnd}, (rnd["stem"], tag) in merged_tags(self.out)
+
+    def set_progress(self, tag: str, frame: str, reviewed: bool) -> bool:
+        rnd, merged = self._round_frames(tag)
+        if frame not in rnd["frames"]:
+            raise ValueError(f"unknown frame {frame!r} in round {tag}")
+        if merged:
+            raise ValueError(f"round {tag} is already merged; all its frames count as reviewed")
+        with self.lock:
+            return pg.set_reviewed(self.out, tag, frame, reviewed)
+
+    def progress(self, tag: str) -> dict:
+        """{frame: {reviewed, time?}} for a round; every frame of a merged round is reviewed."""
+        rnd, merged = self._round_frames(tag)
+        if merged:
+            return {f: {"reviewed": True, "merged": True} for f in sorted(rnd["frames"])}
+        return pg.read_progress(self.out).get(tag) or {}
+
     def comments_html(self) -> str:
         comments = cm.read_comments(self.out)
         by_type: dict[str, list[tuple[str, dict]]] = {}
@@ -281,7 +312,13 @@ def _handler(state: ReviewState):
                 self._json(build_rows(state.out, state.repo_root))
             elif u.path == "/viewb/view":
                 self._json(select_rows(build_rows(state.out, state.repo_root),
-                                       (q.get("round") or [""])[0], (q.get("show") or ["needs"])[0]))
+                                       (q.get("round") or [""])[0], (q.get("show") or ["needs"])[0],
+                                       pg.read_progress(state.out)))
+            elif u.path == "/viewb/progress":
+                try:
+                    self._json(state.progress((q.get("round") or [""])[0]))
+                except ValueError as e:
+                    self._json({"error": str(e)}, 400)
             elif u.path == "/viewb/reverts":
                 tag = (q.get("round") or [""])[0]
                 self._json(rv.round_reverts(state.out, tag) if tag else rv.read_reverts(state.out))
@@ -367,6 +404,13 @@ def _handler(state: ReviewState):
                         raise ValueError("expected {round: str, frame: str, label: str, revert: bool}")
                     self._json({"reverted": state.set_revert(
                         body["round"], body["frame"], body["label"], body["revert"])})
+                elif self.path == "/viewb/progress":
+                    if not isinstance(body, dict) or not all(
+                            isinstance(body.get(k), str) for k in ("round", "frame")) \
+                            or not isinstance(body.get("reviewed"), bool):
+                        raise ValueError("expected {round: str, frame: str, reviewed: bool}")
+                    self._json({"reviewed": state.set_progress(
+                        body["round"], body["frame"], body["reviewed"])})
                 elif self.path == "/marks/bulk":
                     dry = bool(body.get("dry_run"))
                     n = state.bulk(body["issue_type"], float(body["min_confidence"]), dry)
