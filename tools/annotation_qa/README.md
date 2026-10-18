@@ -20,7 +20,7 @@ python3 -m annotation_qa scan --exports $EXP --out $OUT \
 
 - A scan into `$OUT` replaces that type's results: `issues_<type>.jsonl`. While it runs it writes `issues_<type>.jsonl.partial`, and it only replaces the old file when it finishes, so an interrupted run keeps the old results.
 - `--subset reviewer+random20` (the 8 reviewer frames plus 20 random frames per export) needs its own `--out`.
-- `--workers N` detects frames in N processes (each loads its own image; about 1 GB each for the largest frames). Issues, crops and the summary are the same as with 1 worker. The full `edge_position` scan takes about 3.5 min with 6 workers.
+- `--workers N` detects frames in N processes (each loads its own image; about 1 GB each for the largest frames). Issues, crops and the summary are the same as with 1 worker. The full `edge_position` scan takes about 3.5 min with 6 workers. At most 2 × N frames are in flight. When a worker process dies (e.g. out of memory on a huge image), that frame is retried once in a fresh pool and, if it dies again, recorded as an error; the scan carries on. Ctrl-C terminates the workers.
 - The exit code is 1 when the scan logged errors. The errors are printed and also kept in `$OUT/scan_summary.json`; its `counts` keep the last count of every type not scanned in this run.
 
 ## 2. Triage one type
@@ -31,7 +31,7 @@ python3 -m annotation_qa review --out $OUT        # http://localhost:8790/
 
 1. Open `/calibrate?type=T` and answer YES/NO for the fixed sample of 30 (drawn once and kept in `calibration/sample_<type>.json`, so a later `scan --since-merge` does not change it). Each tab and the calibrate page show `answered k/n, real r, precision p` and **PASS / FAIL / NOT CALIBRATED**.
    - PASS means precision of at least 2/3 with at least 20 answered. A type with fewer than 20 issues needs all of them answered.
-2. On the type's tab, mark cards **Real** or **False alarm**. You can also bulk-mark everything at or above a confidence as real; the page asks you to confirm the count first.
+2. On the type's tab, mark cards **Real** or **False alarm**. You can also bulk-mark everything at or above a confidence as real; the page asks you to confirm the count first. Bulk marking skips every calibration-sample key (it freezes the type's sample first), so it cannot answer the calibration for you.
 3. Only issues marked real are fixed.
    Every card, the calibrate cards and the zoom lightbox also have a comment box (autosaved to `$OUT/comments.json`); read them at `/comments/view` or with `python3 -m annotation_qa comments --out $OUT`.
 
@@ -113,11 +113,13 @@ python3 -m annotation_qa final --out $OUT               # $OUT/final/<stem>_qa_2
 ## Review UI: lightbox, keys, prerender, deep link
 
 - View A groups cards by frame (most issues first) under a header with a numbered overview of the whole frame; every card has a locator thumbnail. `/calibrate` keeps its fixed order.
-- Click a crop to open the lightbox (high-detail render from `/zoom`, cached in `OUT/zoom/`). `Esc` closes, left/right arrows move, `R` toggles raw only, `O` opens the issue in Scalabel. On `/calibrate`, `Y` = YES and `N` = NO, with or without the lightbox, then it advances.
+- Click a crop to open the lightbox (high-detail render from `/zoom`, cached in `OUT/zoom/` under a hash of the renderer version, the issue and its fix, and the frame's labels, so a merge or live edit renders a fresh crop). `Esc` closes, left/right arrows move, `R` toggles raw only, `O` opens the issue in Scalabel. On `/calibrate`, `Y` = YES and `N` = NO, with or without the lightbox, then it advances.
 - Ahead of time: `python3 -m annotation_qa prerender-zoom --out $OUT [--calibration-only]` (one image decode per frame; also makes the locator thumbnails).
 - "Open in Scalabel" opens a new tab with `&item=<frame in task>&label=<label id>`; a Scalabel build that does not know these params ignores them.
 
 ## Notes
+
+- The review server answers only requests whose `Host` is `localhost` / `127.0.0.1` (GET and POST alike).
 
 - This branch imports the **untracked** `scalabel/tools/draw_poly2d.py` (it holds the curve sampling). Keep that file.
 - **The yellow width check is off on this data.** `calibration/yellow_stats.json` has `width_usable=false`: the double-yellow median FWHM is 10 px against 8 px for single yellow (threshold 9). The centre-turn-lane pair-distance median is 59.6 px.

@@ -374,3 +374,80 @@ def test_scan_with_two_workers_matches_one_worker(tmp_path):
                   json.loads((out / "scan_summary.json").read_text()), crops)
     assert res[1][2]["edge_position"] == 3 and len(res[1][1]) == 1
     assert res[1] == res[2]
+
+
+# ---- review 2, I7: worker crashes, Ctrl-C, bounded submissions ----
+def _die_on_crash_frames(job):
+    """Worker job that kills its process on frames named crash*.png (like an OOM kill)."""
+    import os as _os
+    from annotation_qa import scan as _scan
+    if job[1].get("name", "").startswith("crash"):
+        _os._exit(3)
+    return _scan._frame_job(job)
+
+
+def _worker_export(tmp_path, names):
+    root = tmp_path / "root"
+    img = np.zeros((400, 400, 3), np.uint8)
+    img[10:390, 10:390] = 110
+    img[10:200, 10:390] = 170
+    frames = []
+    for n in names:
+        p = root / f"items/{n}"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(p), img)
+        frames.append(_frame(n, f"items/{n}", [_label(1, "curb_road_edge", 210)]))
+    return root, _write_export(tmp_path / "exw.json", frames)
+
+
+def test_dead_worker_is_an_error_for_its_frame_not_a_hang(tmp_path, monkeypatch):
+    from annotation_qa import scan
+    monkeypatch.setattr(scan, "_JOB", _die_on_crash_frames)
+    root, exp = _worker_export(tmp_path, ["e0.png", "crash1.png", "e2.png", "e3.png"])
+    s = run_scan([exp], root, tmp_path / "out", ["edge_position"], workers=2)
+    assert len(s.errors) == 1 and "crash1.png" in s.errors[0]
+    assert "worker process died" in s.errors[0]
+    assert s.frames == 3 and s.counts["edge_position"] == 3  # the other frames were detected
+    names = {json.loads(l)["frame_name"] for l in
+             (tmp_path / "out" / "issues_edge_position.jsonl").read_text().splitlines()}
+    assert names == {"e0.png", "e2.png", "e3.png"}
+
+
+def test_ctrl_c_terminates_the_pool(tmp_path, monkeypatch):
+    from annotation_qa import scan
+    killed = []
+    real = scan._kill_pool
+    monkeypatch.setattr(scan, "_kill_pool", lambda ex: (killed.append(ex), real(ex)))
+
+    def boom(*a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(scan, "_scan_exports", boom)
+    root, exp = _worker_export(tmp_path, ["e0.png"])
+    with pytest.raises(KeyboardInterrupt):
+        run_scan([exp], root, tmp_path / "out", ["edge_position"], workers=2)
+    assert len(killed) == 1
+    assert not (tmp_path / "out" / "issues_edge_position.jsonl").exists()  # old results kept
+
+
+def test_in_flight_submissions_are_bounded():
+    from concurrent.futures import Future
+    from annotation_qa import scan
+
+    class FakePool:
+        workers = 3
+
+        def __init__(self):
+            self.submitted = 0
+
+        def submit(self, job):
+            self.submitted += 1
+            f = Future()
+            f.set_result({"job": job})
+            return f
+    pool = FakePool()
+    gen = scan._ordered_results(range(100), pool)
+    seen = []
+    for res in gen:
+        seen.append(res["job"])
+        assert pool.submitted - len(seen) <= 2 * pool.workers
+    assert seen == list(range(100))

@@ -16,6 +16,9 @@ import logging
 import multiprocessing
 import os
 import random
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -148,13 +151,97 @@ def _frame_job(job) -> dict:
     return res
 
 
+_JOB = _frame_job  # what the workers run (a test swaps in a crashing one)
+IN_FLIGHT_PER_WORKER = 2
+CRASH_MSG = ("worker process died while detecting this frame (out of memory on a large "
+             "image?); retried once in a fresh pool")
+
+
+class _Pool:
+    """A spawn-context ProcessPoolExecutor that can be replaced after a worker dies."""
+
+    def __init__(self, workers: int):
+        self.workers = workers
+        self.ex = self._new()
+
+    def _new(self) -> ProcessPoolExecutor:
+        return ProcessPoolExecutor(self.workers, mp_context=multiprocessing.get_context("spawn"))
+
+    def submit(self, job):
+        return self.ex.submit(_JOB, job)
+
+    def restart(self) -> None:
+        _kill_pool(self.ex)
+        self.ex = self._new()
+
+    def close(self) -> None:
+        self.ex.shutdown(wait=True)
+
+    def kill(self) -> None:
+        _kill_pool(self.ex)
+
+
+def _kill_pool(ex: ProcessPoolExecutor) -> None:
+    """Stop a pool now: drop queued jobs and terminate its worker processes (Ctrl-C, errors,
+    a broken pool); ``shutdown`` alone would wait for running detections."""
+    procs = list((getattr(ex, "_processes", None) or {}).values())
+    ex.shutdown(wait=False, cancel_futures=True)
+    for p in procs:
+        try:
+            p.terminate()
+        except Exception:  # noqa: BLE001 - already gone
+            pass
+    for p in procs:
+        try:
+            p.join(5)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _ordered_results(jobs, pool):
+    """Yield the result of every job in order, with at most ``IN_FLIGHT_PER_WORKER`` x
+    workers submitted and not yet yielded. When a worker dies (BrokenProcessPool), every
+    job in flight is lost: the current job is retried alone in a fresh pool, and if that
+    dies too it yields {"status": "crashed"}; the rest are resubmitted."""
+    pending: deque = deque()
+    it = iter(jobs)
+    limit = max(1, IN_FLIGHT_PER_WORKER * pool.workers)
+
+    def fill():
+        while len(pending) < limit:
+            job = next(it, None)
+            if job is None:
+                return
+            pending.append((job, pool.submit(job)))
+    fill()
+    while pending:
+        job, fut = pending.popleft()
+        try:
+            res = fut.result()
+        except BrokenProcessPool:
+            rest = [j for j, _ in pending]
+            pending.clear()
+            pool.restart()
+            try:
+                res = pool.submit(job).result()
+            except BrokenProcessPool:
+                pool.restart()
+                res = {"status": "crashed", "msg": CRASH_MSG}
+            for j in rest:
+                pending.append((j, pool.submit(j)))
+        fill()
+        yield res
+
+
 def run_scan(exports: list[Path], root: Path, out: Path, types: list[str],
              subset: str | None = None, since_merge: bool = False,
              workers: int = 1) -> ScanSummary:
     """Scan ``exports`` (each stem's working copy when there is one) for ``types``.
 
     ``workers`` > 1 detects frames in a spawn-context process pool (each worker loads
-    its own images); issues, crops and the summary are identical to a 1-worker run.
+    its own images); issues, crops and the summary are identical to a 1-worker run. At most
+    2 x workers frames are in flight. A frame whose worker dies twice is recorded as an
+    error and the scan carries on; on Ctrl-C or an error the workers are terminated.
 
     ``since_merge``: re-detect only the frames listed in merge markers newer than
     each type's last scan, and replace exactly those frames' issues in
@@ -195,16 +282,16 @@ def run_scan(exports: list[Path], root: Path, out: Path, types: list[str],
         log.error(msg)
         summary.errors.append(msg)
 
-    pool = None
-    if workers > 1:
-        pool = multiprocessing.get_context("spawn").Pool(workers)
+    pool = _Pool(workers) if workers > 1 else None
     try:
         _scan_exports(exports, root, out, types, subset, since_merge, wanted, meta, partial,
                       summary, fail, pool)
-    finally:
+    except BaseException:  # Ctrl-C or an error: do not wait for (or leak) the workers
         if pool is not None:
-            pool.close()
-            pool.join()
+            pool.kill()
+        raise
+    if pool is not None:
+        pool.close()
     for t in types:  # the run finished: the new results replace the old ones
         os.replace(partial[t], final[t])
         write_meta(out, t, meta[t])
@@ -236,8 +323,7 @@ def _scan_exports(exports, root, out, types, subset, since_merge, wanted, meta, 
         jobs = [(exp.stem, frame, Path(root), out,
                  [t for t in types if todo is None or _fname(frame) in todo[t]])
                 for frame in frames]
-        results = pool.imap(_frame_job, jobs, chunksize=1) if pool is not None \
-            else map(_frame_job, jobs)
+        results = _ordered_results(jobs, pool) if pool is not None else map(_JOB, jobs)
         for n, (frame, res) in enumerate(zip(frames, results), 1):
             fname = _fname(frame)
             tag = f"{exp.stem}|{fname}"
@@ -248,6 +334,10 @@ def _scan_exports(exports, root, out, types, subset, since_merge, wanted, meta, 
                 continue
             if res["status"] == "error":
                 fail(f"{tag}: cannot open frame: {res['msg']}")
+                continue
+            if res["status"] == "crashed":
+                fail(f"{tag}: {res['msg']}")
+                print(f"[{n}/{len(frames)}] {tag}: worker crashed", flush=True)
                 continue
             k = 0
             for t in types:
