@@ -208,3 +208,46 @@ def test_page_js_checks_post_response_and_confirms_bulk(server):
     html = get(server, "/")
     assert "if(!r.ok)" in html and "confirm(" in html and "dry_run:true" in html
     assert "if(!r.ok)" in get(server, "/calibrate?type=shape")
+
+
+# ---- strict JSON for the browser: non-finite features must never reach the page ----
+def _reject_constant(name):
+    raise ValueError(f"non-finite JSON constant {name} in browser payload")
+
+
+def _strict_loads(text):
+    return json.loads(text, parse_constant=_reject_constant)
+
+
+def test_finite_helper_replaces_non_finite_recursively():
+    import math
+    from annotation_qa.review_server import _dumps, _finite
+    obj = {"a": float("inf"), "b": [float("-inf"), float("nan"), 1.5, 2, True], "c": {"d": "x", "e": None}}
+    assert _finite(obj) == {"a": None, "b": [None, None, 1.5, 2, True], "c": {"d": "x", "e": None}}
+    assert _strict_loads(_dumps(obj))["b"][2] == 1.5
+    assert math.isfinite(_finite(3.0))
+
+
+def test_calibrate_items_strict_json_with_inf_features(tmp_path, repo):
+    from dataclasses import replace
+    out = tmp_path / "o"
+    out.mkdir()
+    iss = [replace(_issue("shape", i, 0.5), features={"on_cv": float("inf"), "near": float("nan"), "n": 3})
+           for i in range(3)]
+    (out / "issues_shape.jsonl").write_text("".join(json.dumps(i.__dict__) + "\n" for i in iss))
+    root, orig = repo
+    srv = make_server(out, port=0, repo_root=root, originals_dir=orig)
+    try:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        items = _strict_loads(get(srv, "/calibrate/items?type=shape"))
+        assert len(items) == 3
+        assert items[0]["features"] == {"on_cv": None, "near": None, "n": 3}
+        assert _strict_loads(get(srv, "/issues?type=shape"))
+        page = get(srv, "/calibrate?type=shape")
+        import re
+        embedded = re.search(r"const T=(.*?);", page).group(1)
+        assert _strict_loads(embedded) == "shape"
+        assert "Infinity" not in page and "NaN" not in page
+    finally:
+        srv.shutdown()
+        srv.server_close()

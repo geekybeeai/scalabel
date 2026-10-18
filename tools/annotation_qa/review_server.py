@@ -6,6 +6,8 @@ import hashlib
 import html as _html
 import json
 import logging
+import math
+import numbers
 import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -271,6 +273,28 @@ class ReviewState:
         return n
 
 
+def _finite(obj):
+    """Copy of ``obj`` with non-finite floats (inf, -inf, nan) replaced by None.
+
+    Browsers' JSON.parse rejects the bare tokens Infinity/NaN that json.dumps emits by default.
+    """
+    if isinstance(obj, bool) or obj is None or isinstance(obj, (str, numbers.Integral)):
+        return obj
+    if isinstance(obj, numbers.Real):
+        f = float(obj)
+        return f if math.isfinite(f) else None
+    if isinstance(obj, dict):
+        return {k: _finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_finite(v) for v in obj]
+    return obj
+
+
+def _dumps(obj) -> str:
+    """Strict JSON for the browser: non-finite values become null, and any slip raises."""
+    return json.dumps(_finite(obj), allow_nan=False)
+
+
 def _handler(state: ReviewState):
     class H(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # quiet
@@ -284,7 +308,7 @@ def _handler(state: ReviewState):
             self.wfile.write(body)
 
         def _json(self, obj, code=200):
-            self._send(json.dumps(obj).encode(), code=code)
+            self._send(_dumps(obj).encode(), code=code)
 
         def do_GET(self):
             u = urlparse(self.path)
@@ -579,7 +603,7 @@ def index_html(types: dict[str, int], n_comments: int = 0) -> str:
     tabs = "".join(f'<span class="tab" data-t="{t}" onclick="show(\'{t}\')">{t} ({n})'
                    f'<span class="cal"></span></span>' for t, n in types.items())
     calib = " ".join(f'<a href="/calibrate?type={t}">{t}</a>' for t in types)
-    js = INDEX_JS % json.dumps([[t, n] for t, n in types.items()])
+    js = INDEX_JS % _dumps([[t, n] for t, n in types.items()])
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Annotation QA review</title>
 <style>{CSS}</style></head><body><header>{tabs}
 <div class="bar">Mark all &ge; <input id="conf" size="4" value="0.8"> as real
@@ -621,4 +645,4 @@ def calibrate_html(t: str, n_comments: int = 0) -> str:
 <style>{CSS}</style></head><body><header><a href="/">&larr; back</a> &nbsp; Calibrate: {safe}
 &nbsp; <a href="/comments/view">Comments (<span id="ncm">{n_comments}</span>)</a>
 &nbsp; <b id="prog"></b> &nbsp; <b id="status"></b> <b id="done" style="display:none;color:#2a9d4a">All done - thank you!</b></header>
-<div id="cards"></div>{LB_HTML}<script>{CAL_JS % json.dumps(safe)}{LB_JS}</script></body></html>"""
+<div id="cards"></div>{LB_HTML}<script>{CAL_JS % _dumps(safe)}{LB_JS}</script></body></html>"""

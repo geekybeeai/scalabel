@@ -16,6 +16,7 @@ longest poly. Fix: ``set_category``.
 
 from __future__ import annotations
 
+import math
 import warnings
 
 import numpy as np
@@ -101,7 +102,8 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
     mid = P[len(P) // 2]
     return {"to": to, "conf": float(np.clip(conf, 0, 1)), "anchor": (float(mid[0]), float(mid[1])),
             "length": (len(P) - 1) * STEP,
-            "features": {"on_fraction": on_fraction, "n_off_runs": len(off_runs), "on_cv": cv,
+            "features": {"on_fraction": on_fraction, "n_off_runs": len(off_runs),
+                         "on_cv": cv if math.isfinite(cv) else None,
                          "n_on_runs": len(on_len), "unknown_fraction": unknown_fraction, "near_ridge": float(near_p),
                          "best_ridge": float(full_p), "channel": channel}}
 

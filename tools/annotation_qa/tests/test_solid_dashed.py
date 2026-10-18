@@ -36,6 +36,7 @@ def test_dashed_label_over_solid_flagged(tmp_path):
     [i] = detect(line_ctx(tmp_path, img, [hpoly(200)], "dashed_white_line"))
     assert i.fix == {"op": "set_category", "to": "solid_single_line"}
     assert i.features["on_fraction"] >= 0.85
+    assert i.features["on_cv"] is None  # no interior dash runs: CV undefined, never inf
 
 
 def test_matching_labels_not_flagged(tmp_path):
@@ -77,3 +78,13 @@ def test_dashed_with_dark_gaps_not_flagged_solid(tmp_path):
 def test_solid_broken_by_three_gaps_not_dashed(tmp_path):
     img = paint(_road(), [(10, 100), (130, 200), (230, 300), (330, 390)])
     assert detect(line_ctx(tmp_path, img, [hpoly(200)], "solid_single_line")) == []
+
+
+def test_solid_dashed_features_never_inf(tmp_path):
+    import json
+    import math
+    img = paint(_road(), [(10, 390)])
+    [i] = detect(line_ctx(tmp_path, img, [hpoly(200)], "dashed_white_line"))
+    json.dumps(i.features, allow_nan=False)  # raises on inf / nan
+    cv = i.features["on_cv"]
+    assert cv is None or math.isfinite(cv)
