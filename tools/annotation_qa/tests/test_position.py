@@ -68,8 +68,8 @@ def test_single_flagged_stretch_gives_no_issue(tmp_path):
 
 def test_inconsistent_offsets_are_hand_fix(tmp_path):
     img = stripe_image(stripes=())
-    img[198:203, 10:200] = (255, 255, 255)
-    img[230:235, 200:390] = (255, 255, 255)
+    img[193:198, 10:200] = (255, 255, 255)
+    img[202:207, 200:390] = (255, 255, 255)
     [i] = detect(line_ctx(tmp_path, img, [hpoly(212)]))
     assert i.hand_fix and i.fix is None and "redraw" in i.reason
 
@@ -134,6 +134,27 @@ def _issue(cat, n, off):
     from annotation_qa.issues import Issue
     return Issue("position", "e", "f", "L1", cat, 0.5, "r", (0, 0), None, True,
                  features={"n_flagged_stretches": n, "off": off})
+
+
+def test_stretch_flagged_only_beyond_line_width(tmp_path):
+    img = stripe_image(stripes=())
+    img[200, 10:390] = (255, 255, 255)  # 1 px paint line, so the near window is clear of it
+    assert detect(line_ctx(tmp_path, img, [hpoly(204)])) == []  # 4 px off
+    for y in (202, 203, 204):  # <= 4 px off never flags, whatever the measured offset
+        assert detect(line_ctx(tmp_path, img, [hpoly(y)])) == []
+    [i] = detect(line_ctx(tmp_path, img, [hpoly(207)]))  # beyond 4 px
+    assert abs(i.features["off"]) > 4 and i.features["median_flagged_off"] == i.features["off"]
+
+
+def test_keep_issue_respects_line_width():
+    from annotation_qa.detectors.position import keep_issue
+    assert not keep_issue(_issue("center_turn_lane", 5, 4))
+    assert keep_issue(_issue("center_turn_lane", 5, 5))
+    i = _issue("center_turn_lane", 5, 12)
+    i.features["median_flagged_off"] = 4.0
+    assert not keep_issue(i)
+    i.features["median_flagged_off"] = 6.0
+    assert keep_issue(i)
 
 
 def test_keep_issue_rules():

@@ -100,6 +100,12 @@ def test_shift_onto_neighbour_is_bad(repo, out):
     assert any("another label" in r for r in v["reasons"])
 
 
+def test_shift_within_line_width_is_bad(repo, out):
+    tag = _round(repo, out, _hline(204), _hline(200))
+    v = _run(repo, out, tag)["f1.png"]["1"]
+    assert v["verdict"] == "bad" and v["reasons"] == ["move within line width"]
+
+
 def test_new_kink_is_bad(repo, out):
     after = [(50, 200), (200, 200), (220, 225)]
     tag = _round(repo, out, [(50, 212), (220, 212)], after)

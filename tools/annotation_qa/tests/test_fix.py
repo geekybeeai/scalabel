@@ -561,3 +561,22 @@ def test_excluded_card_badge(env):
     (out / "excluded.json").write_text(json.dumps({i1.key: {"reason": "r"}}))
     cards = ReviewState(out, out, orig).cards("curb_soft")
     assert {c["key"]: c["auto_fix_rejected"] for c in cards} == {i1.key: True, i2.key: False}
+
+
+def _shift(label, off):
+    from annotation_qa.geometry import dense, resample
+    pts, _ = resample(dense(label["poly2d"][0]))
+    return {"op": "shift", "poly_index": 0, "offsets": [off] * len(pts)}
+
+
+def test_shift_within_line_width_skipped_frame_not_in_round(env):
+    orig, out, frames = env
+    small = _issue("exportA", "f1.png", "a", "position", _shift(frames[0]["labels"][0], 4.0))
+    big = _issue("exportA", "f3.png", "z", "position", _shift(frames[2]["labels"][0], 5.0))
+    _setup(out, [small, big], ["real", "real"])
+    r = apply("position", out, 1)
+    assert any("move ≤ 4 px (within line width) — no change needed" in s
+               for s in r.skipped if "|a|" in s)
+    assert r.changed == {"exportA": ["f3.png"]}
+    items = json.load(open(out / "rounds" / "exportA_fix_position_v1_items.json"))
+    assert [f["name"] for f in items["frames"]] == ["f3.png"]

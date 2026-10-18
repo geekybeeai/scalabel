@@ -162,3 +162,21 @@ def test_change_anchor():
     for a in (None, {"category": "b", "poly2d": [line]}):
         mx, my = change_anchor(b, a)
         assert abs(mx - 50) <= 3 and my == 0
+
+
+def test_simplify_tolerance_is_half_line_width():
+    from annotation_qa.geometry import MERGE_TOL, SIMPLIFY_TOL, _simplify, shift_residual, shift_poly
+    assert SIMPLIFY_TOL == 2.0 and MERGE_TOL == 2.0
+    xs = np.linspace(0, 300, 61)
+    poly = {"vertices": [[float(x), 1.8 * np.sin(x / 20)] for x in xs],
+            "types": "L" * len(xs), "closed": False}
+    pts, _ = resample(dense(poly))
+    offs = np.full(len(pts), 6.0)
+    new = shift_poly(poly, offs)
+    out = _simplify(poly, new, offs, [False] * len(new["vertices"]), 3.0)
+    assert len(out["vertices"]) < len(new["vertices"])
+    from annotation_qa.geometry import _dist_to_polyline
+    # simplified result stays within the tolerance of the shifted dense target
+    d = _dist_to_polyline(np.asarray(dense(new)), np.asarray(dense(out)))
+    assert d.max() <= SIMPLIFY_TOL + 1e-6
+    assert shift_residual(poly, out, offs) <= 3.5

@@ -14,7 +14,8 @@ import numpy as np
 from annotation_qa import rounds
 from annotation_qa.data import ORIGINALS_DIR, load_export, save_export
 from annotation_qa.exclude import read_excluded
-from annotation_qa.geometry import ShiftNotRepresentable, _segments, change_anchor, partial_shift
+from annotation_qa.geometry import (LINE_WIDTH, ShiftNotRepresentable, _segments, change_anchor,
+                                      max_move, partial_shift)
 from annotation_qa.issues import (Issue, calibration_status, file_sha1, format_calibration,
                                   load_issues_tolerant, read_marks, read_meta)
 
@@ -269,7 +270,13 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
                 cands = [i for i in grp if i.issue_type == t]
                 for k, iss in enumerate(cands):
                     try:
-                        _apply_op(copy.deepcopy(label), iss.fix)
+                        trial = copy.deepcopy(label)
+                        _apply_op(trial, iss.fix)
+                        if iss.fix["op"] == "shift":
+                            pi = iss.fix.get("poly_index", 0)
+                            if max_move(label["poly2d"][pi], trial["poly2d"][pi]) <= LINE_WIDTH:
+                                skip(iss, "move \u2264 4 px (within line width) \u2014 no change needed")
+                                continue
                     except ShiftNotRepresentable as e:  # goes to review as a draw-by-hand frame
                         skip(iss, str(e))
                         if fname not in hand:

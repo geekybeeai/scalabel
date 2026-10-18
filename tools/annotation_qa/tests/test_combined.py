@@ -44,7 +44,7 @@ def test_compose_set_category_and_shift(env):
     orig, out, frames = env
     lab = frames[0]["labels"][0]  # "a": horizontal line y=0
     cat = _issue("exportA", "f1.png", "a", SOFT, {"op": "set_category", "to": "curb_road_edge"})
-    sh = _issue("exportA", "f1.png", "a", PAINT, _shift_fix(lab, 4.0))
+    sh = _issue("exportA", "f1.png", "a", PAINT, _shift_fix(lab, 8.0))
     cat.confidence, sh.confidence = 0.5, 0.9
     _setup(out, [cat, sh])
     r = apply(f"{SOFT},{PAINT}", out, 1, name="edges")
@@ -53,7 +53,7 @@ def test_compose_set_category_and_shift(env):
     after = _label_after(out, tag, 0, "a")
     assert after["category"] == "curb_road_edge"
     ys = np.asarray(dense(after["poly2d"][0]))[:, 1]
-    assert np.abs(np.abs(ys) - 4.0).max() < 1.5  # shifted by ~4 px (either normal side)
+    assert np.abs(np.abs(ys) - 8.0).max() < 1.5  # shifted by ~8 px (either normal side)
     rec = _changes(out, tag)["f1.png"]["a"]
     assert rec["issue_types"] == [SOFT, PAINT] and rec["ops"] == ["set_category", "shift"]
     assert "issue_type" not in rec
@@ -92,7 +92,7 @@ def test_delete_wins_and_is_recorded_alone(env):
 def test_conflicting_geometry_keeps_higher_confidence(env):
     orig, out, frames = env
     lab = frames[0]["labels"][0]
-    s1 = _issue("exportA", "f1.png", "a", EDGE, _shift_fix(lab, 3.0))
+    s1 = _issue("exportA", "f1.png", "a", EDGE, _shift_fix(lab, 6.0))
     s2 = _issue("exportA", "f1.png", "a", PAINT, _shift_fix(lab, -8.0))
     s1.confidence, s2.confidence = 0.4, 0.8
     _setup(out, [s1, s2])
@@ -187,7 +187,7 @@ def test_exclude_combined_round_keys_match_issues(env):
     orig, out, frames = env
     lab = frames[0]["labels"][0]
     cat = _issue("exportA", "f1.png", "a", SOFT, {"op": "set_category", "to": "curb_road_edge"})
-    sh = _issue("exportA", "f1.png", "a", PAINT, _shift_fix(lab, 4.0))
+    sh = _issue("exportA", "f1.png", "a", PAINT, _shift_fix(lab, 8.0))
     _setup(out, [cat, sh])
     tag = apply(f"{SOFT},{PAINT}", out, 1, name="edges").tags[0]
     assert tag == "exportA_fix_edges_v1"

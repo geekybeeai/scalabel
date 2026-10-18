@@ -199,7 +199,7 @@ def shift_poly(poly: dict, offsets: np.ndarray, step: float = 3.0) -> dict:
 
 
 # ---- partial shifts (the position fix on part of a line) ----
-SHIFT_RESIDUAL_MAX = 3.5  # px between the shifted curve and its target, anywhere (calibrated 2026-10-17 against the user's "a few pixels is fine" guidance; was 2.0)
+SHIFT_RESIDUAL_MAX = 3.5  # px between the shifted curve and its target, anywhere (calibrated 2026-10-17; kept 2026-10-18 under the 4 px training line width; was 2.0)
 BREAK_TOL = 0.5  # px: Douglas-Peucker tolerance for the inserted break vertices
 SHARP_COS = float(np.cos(np.radians(25.0)))  # corner samples: normal turns more than this
 
@@ -372,6 +372,17 @@ def _dist_to_polyline(q: np.ndarray, line: np.ndarray, chunk: int = 64) -> np.nd
     return out
 
 
+LINE_WIDTH = 4.0  # px: the downstream training line width; moves within it are pointless
+
+
+def max_move(before: dict, after: dict) -> float:
+    """Largest distance (px) between the dense curves of two polys, either direction."""
+    B, A = np.asarray(dense(before), float), np.asarray(dense(after), float)
+    if len(B) < 2 or len(A) < 2:
+        return 0.0
+    return float(max(_dist_to_polyline(B, A).max(), _dist_to_polyline(A, B).max()))
+
+
 def shift_residual(before: dict, after: dict, offsets: np.ndarray, step: float = 3.0) -> float:
     """Largest distance (px) from a target point P + offset * N of ``before`` to the
     drawn curve of ``after``. Samples on a sharp corner (where the normal itself is
@@ -390,8 +401,8 @@ def shift_residual(before: dict, after: dict, offsets: np.ndarray, step: float =
     return float(_dist_to_polyline(T[keep], np.asarray(line, dtype=float)).max())
 
 
-SIMPLIFY_TOL = 3.0  # px: Douglas-Peucker tolerance for an all-L result (calibrated 2026-10-17 against the user's "a few pixels is fine" guidance; was 1.0)
-MERGE_TOL = 3.0  # px: how far dense(new) may stray from the target when merging inserted L (calibrated 2026-10-17 against the user's "a few pixels is fine" guidance; was 1.5)
+SIMPLIFY_TOL = 2.0  # px: Douglas-Peucker tolerance for an all-L result (calibrated 2026-10-18: half the 4 px training line width; was 3.0, originally 1.0)
+MERGE_TOL = 2.0  # px: how far dense(new) may stray from the target when merging inserted L (calibrated 2026-10-18: half the 4 px training line width; was 3.0, originally 1.5)
 
 
 def _dp_poly(pts: np.ndarray, closed: bool, tol: float) -> np.ndarray:

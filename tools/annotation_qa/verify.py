@@ -21,7 +21,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from annotation_qa.data import REPO_ROOT, image_path
-from annotation_qa.geometry import _dist_to_polyline, dense, resample
+from annotation_qa.geometry import LINE_WIDTH, _dist_to_polyline, dense, resample
 from annotation_qa.imaging import FrameImage, profile
 from annotation_qa.issues import load_issues_tolerant
 from annotation_qa.rounds import round_files
@@ -126,6 +126,8 @@ def _verdict_shift_poly(img: FrameImage, cat: str, channel: str | None, bpoly: d
     nearest = cKDTree(Pb).query(Pa)[1]
     moved_a = moved_b[nearest] | (_dist_to_polyline(Pa, B) > MOVED_PX)
     max_move = float(_dist_to_polyline(Pb[moved_b], A).max())
+    if max_move <= LINE_WIDTH:  # R33 safety net: within the training line width
+        return {"verdict": "bad", "reasons": ["move within line width"], "max_move": max_move}
     neigh = _neighbour_frac(Pa[moved_a], _tangents(Na)[moved_a], neighbours)
     turn_a = float(_turns(Pa)[_dilate(moved_a, KINK_K)].max())
     turn_b = float(_turns(Pb)[_dilate(moved_b, KINK_K)].max())

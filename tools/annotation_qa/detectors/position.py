@@ -29,6 +29,7 @@ NEAR_MAX, PEAK_MIN = 10.0, 25.0
 SHIFT_STD_MAX = 3.0
 MIN_FLAGGED_STRETCHES = 2  # R16: one flagged stretch is noise
 MIN_FLAGGED_STRETCHES_LINES = 5  # R26: solid / dashed lines need 5 flagged stretches
+MIN_OFF = 4  # R33: the training line is 4 px wide; a stretch counts as flagged only when |off| > this
 DASHED_MAX_OFF = 10  # R26: a dashed line further off than this is the neighbouring lane's dashes
 SMOOTH = 15
 DASH_PERCENTILE = 80
@@ -105,7 +106,7 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
         if np.isnan(near):
             continue
         # |off| == R: the profile is still rising at the window edge, not a local maximum
-        if near < NEAR_MAX and peak >= PEAK_MIN and NEAR_R < abs(off) < R:
+        if near < NEAR_MAX and peak >= PEAK_MIN and MIN_OFF < abs(off) < R:
             flagged.append((a, b, float(near), peak, off))
     if len(flagged) < MIN_FLAGGED_STRETCHES:
         return None
@@ -121,7 +122,7 @@ def _judge_poly(cat: str, poly: dict, ctx: FrameContext):
         "anchor": (float(centre[0]), float(centre[1])),
         "consistent": std <= SHIFT_STD_MAX,
         "offsets": smooth.tolist(),
-        "features": {"near": worst[2], "peak": worst[3], "off": worst[4],
+        "features": {"near": worst[2], "peak": worst[3], "off": worst[4], "median_flagged_off": float(np.median(offs)),
                      "n_flagged_stretches": len(flagged), "n_stretches": len(stretches),
                      "coverage": coverage, "offset_std": std, "channel": channel},
     }
@@ -149,6 +150,9 @@ def smoothed_offsets(m: int, spans: list[tuple[int, int, float]]) -> tuple[np.nd
 def keep_issue(issue: Issue) -> bool:
     """R26 calibrated rule on a (stored) position issue; uses only category and features."""
     f = issue.features
+    off = f.get("median_flagged_off", f.get("off"))
+    if off is not None and abs(off) <= MIN_OFF:  # R33: within the 4 px line width
+        return False
     if issue.category in (SOLID, DASHED):
         if f.get("n_flagged_stretches", 0) < MIN_FLAGGED_STRETCHES_LINES:
             return False
