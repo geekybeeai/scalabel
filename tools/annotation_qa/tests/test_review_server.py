@@ -78,7 +78,13 @@ def test_index_lists_tabs_with_counts(server):
     assert "/calibrate?type=shape" in html
 
 
+def _freeze_sample(out, t, keys):
+    (out / "calibration").mkdir(exist_ok=True)
+    (out / "calibration" / f"sample_{t}.json").write_text(json.dumps({"type": t, "keys": keys}))
+
+
 def test_bulk_threshold_marks_only_above_and_keeps_false(server, out_dir):
+    _freeze_sample(out_dir, "shape", ["proj_export_a|f1.png|2|shape"])  # bulk skips the sample
     write_marks(out_dir / "marks.json", {"proj_export_a|f1.png|1|shape": "false"})
     r = post(server, "/marks/bulk", {"issue_type": "shape", "min_confidence": 0.8})
     assert r == {"saved": 1}
@@ -199,6 +205,7 @@ def test_post_needs_local_host_header(server, out_dir):
 
 
 def test_bulk_dry_run_counts_without_writing(server, out_dir):
+    _freeze_sample(out_dir, "shape", ["proj_export_a|f1.png|2|shape"])
     r = post(server, "/marks/bulk", {"issue_type": "shape", "min_confidence": 0.8,
                                      "dry_run": True})
     assert r == {"count": 2} and read_marks(out_dir / "marks.json") == {}
@@ -251,3 +258,67 @@ def test_calibrate_items_strict_json_with_inf_features(tmp_path, repo):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ---- review 2: I4 bulk vs calibration, bulk body, Host check on GET, escaped links ----
+def test_bulk_cannot_fake_a_calibration_pass(tmp_path):
+    from annotation_qa.review_server import ReviewState
+    out = tmp_path / "out"
+    out.mkdir()
+    many = [_issue("shape", i, 0.9, frame=f"f{i}.png") for i in range(45)]
+    (out / "issues_shape.jsonl").write_text("".join(json.dumps(i.__dict__) + "\n" for i in many))
+    st = ReviewState(out, tmp_path, tmp_path)
+    assert st.calibration_status()["shape"]["status"] == "NOT CALIBRATED"
+    n = st.bulk("shape", 0.0)
+    status = st.calibration_status()["shape"]
+    assert status["status"] == "NOT CALIBRATED" and status["answered"] == 0
+    assert n == 45 - status["n"] == 15  # everything outside the frozen sample of 30
+    sample = set(json.loads((out / "calibration" / "sample_shape.json").read_text())["keys"])
+    assert not sample & set(read_marks(out / "marks.json"))
+
+
+def test_bulk_skips_keys_of_other_types_samples_too(tmp_path):
+    from annotation_qa.review_server import ReviewState
+    out = tmp_path / "out"
+    out.mkdir()
+    iss = [_issue("shape", i, 0.9, frame=f"f{i}.png") for i in range(40)]
+    (out / "issues_shape.jsonl").write_text("".join(json.dumps(i.__dict__) + "\n" for i in iss))
+    _freeze_sample(out, "shape", [iss[0].key])
+    _freeze_sample(out, "other", [iss[1].key])
+    assert ReviewState(out, tmp_path, tmp_path).bulk("shape", 0.0) == 38
+
+
+@pytest.mark.parametrize("body", [b"[]", b'"x"', b"1", b'{"issue_type": "shape"}',
+                                  b'{"issue_type": 3, "min_confidence": 0.5}',
+                                  b'{"issue_type": "shape", "min_confidence": true}',
+                                  b'{"issue_type": "shape", "min_confidence": "0.5"}'])
+def test_bulk_body_validated(server, out_dir, body):
+    h = {"Content-Type": "application/json", "Host": f"127.0.0.1:{server.server_address[1]}"}
+    assert _raw_post(server, "/marks/bulk", body, h) == 400
+    assert read_marks(out_dir / "marks.json") == {}
+
+
+@pytest.mark.parametrize("path", ["/", "/marks", "/issues?type=shape", "/viewb/rows", "/comments"])
+def test_get_needs_local_host_header(server, path):
+    import urllib.error
+    req = urllib.request.Request(_url(server, path), headers={"Host": "evil.example:8790"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+    assert e.value.code == 403
+    ok = urllib.request.Request(_url(server, path),
+                                headers={"Host": f"localhost:{server.server_address[1]}"})
+    assert urllib.request.urlopen(ok).status == 200
+
+
+def test_links_quote_project_and_page_escapes_urls(tmp_path, server):
+    from annotation_qa.review_server import ReviewState
+    i = _issue("shape", 1, 0.9, stem='a b&c"<x>_export_z')
+    card = ReviewState(tmp_path, tmp_path, tmp_path).card(i, {})
+    assert "project_name=a%20b%26c%22%3Cx%3E&" in card["link"]
+    assert "project_name=a%20b%26c%22%3Cx%3E&" in card["frame_link"]
+    html = get(server, "/")
+    for k in ("link", "frame_link", "crop", "locator", "overview"):
+        assert "${it.%s}" % k not in html
+    assert 'href="${esc(it.link)}"' in html and 'src="${esc(it.crop)}"' in html
+    cal = get(server, "/calibrate?type=shape")
+    assert "${it.link}" not in cal and "${it.crop}" not in cal

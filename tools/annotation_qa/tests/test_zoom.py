@@ -83,7 +83,8 @@ def test_zoom_renders_caches_and_serves(server, env):
     body = fetch(server, "/zoom?key=" + quote(key, safe=""))
     img = cv2.imdecode(np.frombuffer(body, np.uint8), cv2.IMREAD_COLOR)
     assert img.shape[:2] == (1320, 2 * 1320 + 8)
-    f = zoom.zoom_path(out, key)
+    frame = locator.find_frame(out, env[2], STEM, "a.png")
+    f = zoom.zoom_path(out, issues["shape"][0], frame)
     assert f.exists() and f.parent == out / "zoom"
     mt = f.stat().st_mtime_ns
     assert fetch(server, "/zoom?key=" + quote(key, safe="")) == body
@@ -91,7 +92,8 @@ def test_zoom_renders_caches_and_serves(server, env):
     raw = fetch(server, "/zoom?raw=1&key=" + quote(key, safe=""))
     rimg = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
     assert rimg.shape[:2] == (1320, 1320)
-    assert zoom.zoom_path(out, key, raw=True).exists() and zoom.zoom_path(out, key, True) != f
+    fr = zoom.zoom_path(out, issues["shape"][0], frame, raw=True)
+    assert fr.exists() and fr != f
 
 
 def test_zoom_validation(server, env):
@@ -190,3 +192,28 @@ def test_page_scripts_parse_and_have_keys():
             assert subprocess.run(["node", "--check", str(p)]).returncode == 0
         assert "lbOpen" in html and "'/zoom?key='" in html
     assert "LB_ANSWER=answer" in calibrate_html("shape")
+
+
+def test_zoom_cache_follows_labels_fix_and_renderer(server, env, monkeypatch):
+    """I5: a changed label (e.g. after a merge), fix or RENDER_VERSION gives a new crop."""
+    out, root, orig, issues = env
+    iss = issues["shape"][0]
+    q = "/zoom?key=" + quote(iss.key, safe="")
+    first = fetch(server, q)
+    frame = locator.find_frame(out, orig, STEM, "a.png")
+    p1 = zoom.zoom_path(out, iss, frame)
+    # the work copy moves label 1 (as a merge would): a new file, a different picture
+    exp = json.loads((orig / f"{STEM}.json").read_text())
+    exp["frames"][0]["labels"][0]["poly2d"][0]["vertices"] = [[20, 140], [380, 140]]
+    (out / "work").mkdir()
+    (out / "work" / f"{STEM}.json").write_text(json.dumps(exp))
+    frame2 = locator.find_frame(out, orig, STEM, "a.png")
+    p2 = zoom.zoom_path(out, iss, frame2)
+    assert p2 != p1
+    second = fetch(server, q)
+    assert p2.exists() and second != first
+    # the fix and the renderer version are in the key too
+    from dataclasses import replace
+    assert zoom.zoom_path(out, replace(iss, fix={"op": "delete"}), frame2) != p2
+    monkeypatch.setattr(zoom, "RENDER_VERSION", "v999")
+    assert zoom.zoom_path(out, iss, frame2) != p2

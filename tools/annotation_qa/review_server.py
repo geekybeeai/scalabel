@@ -15,8 +15,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from annotation_qa.data import ORIGINALS_DIR, REPO_ROOT
-from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_sample,  # noqa: F401
-                                  calibration_status, load_issues_tolerant, read_marks,
+from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_keys,  # noqa: F401
+                                  calibration_sample, calibration_status,
+                                  frozen_calibration_keys, load_issues_tolerant, read_marks,
                                   write_marks)
 from annotation_qa import comments as cm, locator, zoom
 from annotation_qa import progress as pg
@@ -90,11 +91,11 @@ class ReviewState:
             frame_no=frame_no,
             project=project,
             project_found=found,
-            link=f"{SCALABEL}/label?project_name={project}&task_index={task}" + (
+            link=f"{SCALABEL}/label?project_name={quote(project, safe='')}&task_index={task}" + (
                 f"&item={frame_no}&label={quote(str(issue.label_id), safe='')}"
                 f"&x={int(round(issue.anchor[0]))}&y={int(round(issue.anchor[1]))}"
                 if frame_no else ""),
-            frame_link=f"{SCALABEL}/label?project_name={project}&task_index={task}" + (
+            frame_link=f"{SCALABEL}/label?project_name={quote(project, safe='')}&task_index={task}" + (
                 f"&item={frame_no}" if frame_no else ""),
             locator="/locator?key=" + quote(issue.key, safe=""),
             comment=(comments or {}).get(issue.key, {}).get("text", ""),
@@ -260,11 +261,18 @@ class ReviewState:
     def bulk(self, t: str, min_conf: float, dry_run: bool = False) -> int:
         """Mark every issue of ``t`` with confidence >= ``min_conf`` real (false marks stay).
 
-        ``dry_run`` only counts them, so the page can ask for confirmation first."""
+        Keys of any calibration sample are skipped (the type's own sample is frozen first), so
+        a bulk mark can never answer the calibration and fake a PASS: those are answered one
+        by one on /calibrate. ``dry_run`` only counts them, so the page can ask first."""
         with self.lock:
             marks = read_marks(self.out / "marks.json")
+            mine = self.issues(t).get(t, [])
+            protected = set(calibration_keys(self.out, t, mine)) if mine else set()
+            protected |= frozen_calibration_keys(self.out)
             n = 0
-            for i in self.issues(t).get(t, []):
+            for i in mine:
+                if i.key in protected:
+                    continue
                 if i.confidence >= min_conf and marks.get(i.key) != "false":
                     marks[i.key] = "real"
                     n += 1
@@ -310,7 +318,19 @@ def _handler(state: ReviewState):
         def _json(self, obj, code=200):
             self._send(_dumps(obj).encode(), code=code)
 
+        def _host_ok(self) -> bool:
+            """Only requests addressed to this machine (DNS rebinding: a page on another
+            site must not read or post marks); answers 403 otherwise."""
+            host = (self.headers.get("Host") or "").strip().lower()
+            host = host[1:].split("]")[0] if host.startswith("[") else host.rsplit(":", 1)[0]
+            if host in LOCAL_HOSTS:
+                return True
+            self._json({"error": "forbidden host"}, 403)
+            return False
+
         def do_GET(self):
+            if not self._host_ok():
+                return
             u = urlparse(self.path)
             q = parse_qs(u.query)
             t = (q.get("type") or [""])[0]
@@ -400,10 +420,7 @@ def _handler(state: ReviewState):
                 self._send(b"not found", "text/plain", 404)
 
         def do_POST(self):
-            host = (self.headers.get("Host") or "").strip().lower()
-            host = host[1:].split("]")[0] if host.startswith("[") else host.rsplit(":", 1)[0]
-            if host not in LOCAL_HOSTS:  # a page on another site must not post marks
-                self._json({"error": "forbidden host"}, 403)
+            if not self._host_ok():
                 return
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype != "application/json":
@@ -436,6 +453,12 @@ def _handler(state: ReviewState):
                     self._json({"reviewed": state.set_progress(
                         body["round"], body["frame"], body["reviewed"])})
                 elif self.path == "/marks/bulk":
+                    if not isinstance(body, dict) or not isinstance(body.get("issue_type"), str) \
+                            or isinstance(body.get("min_confidence"), bool) \
+                            or not isinstance(body.get("min_confidence"), (int, float)) \
+                            or not math.isfinite(body["min_confidence"]):
+                        raise ValueError("expected {issue_type: str, min_confidence: number, "
+                                         "dry_run?: bool}")
                     dry = bool(body.get("dry_run"))
                     n = state.bulk(body["issue_type"], float(body["min_confidence"]), dry)
                     self._json({"count": n} if dry else {"saved": n})
@@ -517,17 +540,17 @@ function more(){const end=Math.min(items.length,shown+PAGE);let h='';
  $('#more').style.display=shown<items.length?'':'none';$('#more').textContent='show more ('+(items.length-shown)+' left)';}
 function ghead(it){return `<div class="ghead"><b>${esc(it.frame_name)}</b> &middot; ${esc(it.export_stem)}<br>
  ${it.group_size} issues in this frame (this type) &middot; ${it.other_types} other types
- &middot; <a href="${it.frame_link}" target="_blank">Open frame in Scalabel</a>
- <img loading="lazy" src="${it.overview}"></div>`;}
+ &middot; <a href="${esc(it.frame_link)}" target="_blank">Open frame in Scalabel</a>
+ <img loading="lazy" src="${esc(it.overview)}"></div>`;}
 function card(it,i){const m=marks[it.key]||'';
- return (it.n==1?ghead(it):'')+`<div class="card col ${m}" id="c${i}"><img class="crop" loading="lazy" src="${it.crop}" onclick="lbOpen(${i})">
- <div class="row"><img class="loc" loading="lazy" src="${it.locator}"><div class="meta">
+ return (it.n==1?ghead(it):'')+`<div class="card col ${esc(m)}" id="c${i}"><img class="crop" loading="lazy" src="${esc(it.crop)}" onclick="lbOpen(${i})">
+ <div class="row"><img class="loc" loading="lazy" src="${esc(it.locator)}"><div class="meta">
  <div><span class="num">${it.n}</span><b>${esc(it.export_stem)}</b></div><div>frame ${esc(it.frame_name)}${it.frame_no?' (frame '+it.frame_no+' in task)':''}</div>
  <div>label ${esc(it.label_id)} &middot; ${esc(it.category)} &middot; conf ${it.confidence.toFixed(2)}</div>
  <div>${esc(it.reason)}</div><div>this frame has ${it.others} other issues</div>
  ${it.hand_fix?'<div><span class="badge">draw by hand</span></div>':''}
  ${it.auto_fix_rejected?'<div><span class="badge" style="background:#888">auto-fix rejected</span></div>':''}
- <div><a href="${it.link}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}</div>
+ <div><a href="${esc(it.link)}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}</div>
  <div style="margin-top:8px"><button class="r" onclick="mark(${i},'real')">Real</button>
  <button class="f" onclick="mark(${i},'false')">False alarm</button></div>${cmtBox(it,i)}</div></div></div>`;}
 async function mark(i,v){const it=items[i];try{await post('/marks',{[it.key]:v});}catch(e){return;}
@@ -630,10 +653,10 @@ async function answer(i,v){const it=items[i];
 window.LB_ANSWER=answer;
 (async()=>{marks=await (await fetch('/marks')).json();items=await (await fetch('/calibrate/items?type='+T)).json();
  $('#cards').innerHTML=items.map((it,i)=>`<div class="card col ${marks[it.key]||''}" id="c${i}">
- <img class="crop" loading="lazy" src="${it.crop}" onclick="lbOpen(${i})"><div class="row">
- <img class="loc" loading="lazy" src="${it.locator}"><div><div><span class="num">${i+1}</span>${esc(it.reason)}</div>
+ <img class="crop" loading="lazy" src="${esc(it.crop)}" onclick="lbOpen(${i})"><div class="row">
+ <img class="loc" loading="lazy" src="${esc(it.locator)}"><div><div><span class="num">${i+1}</span>${esc(it.reason)}</div>
  <div>${esc(it.category)} &middot; ${esc(it.frame_name)} &middot; label ${esc(it.label_id)}
- &middot; <a href="${it.link}" target="_blank">Open in Scalabel</a></div>
+ &middot; <a href="${esc(it.link)}" target="_blank">Open in Scalabel</a></div>
  <div class="big"><button class="r" onclick="answer(${i},'real')">YES &mdash; real mistake (Y)</button>
  <button class="f" onclick="answer(${i},'false')">NO &mdash; false alarm (N)</button></div>${cmtBox(it,i)}</div></div></div>`).join('');count();})();
 """

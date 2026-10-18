@@ -1,8 +1,11 @@
 """High-detail on-demand crops for the review lightbox, and their prerender.
 
-``OUT/zoom/<sha1(key)[:12]>.jpg`` is the labelled | raw pair (half=220, zoom=3, panels of
-1320 px); ``<hash>_raw.jpg`` is the raw panel alone. A crop is rendered once, then served
-from the file. At most ``ZOOM_SLOTS`` renders run at once (images are up to 190 MP).
+``OUT/zoom/<hash>.jpg`` is the labelled | raw pair (half=220, zoom=3, panels of 1320 px);
+``<hash>_raw.jpg`` is the raw panel alone. The hash covers RENDER_VERSION, the issue (key,
+anchor, related labels, fix) and the frame's url and labels as the crop draws them (work
+copy, else original), so a merge, a live edit or a new renderer gives a new file instead of
+a stale crop. A crop is rendered once, then served from the file. At most ``ZOOM_SLOTS``
+renders run at once (images are up to 190 MP).
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from annotation_qa.data import image_path
 from annotation_qa.imaging import FrameImage
 from annotation_qa.locator import find_frame, save_base_from, ensure_base, base_path
 from annotation_qa.issues import Issue, calibration_sample_path, load_issues_tolerant
-from annotation_qa.render import issue_crop
+from annotation_qa.render import RENDER_VERSION, issue_crop
 
 HALF, ZOOM = 220, 3
 ZOOM_SLOTS = threading.Semaphore(2)
@@ -26,8 +29,12 @@ _locks: dict[tuple[str, str], threading.Lock] = {}
 _locks_guard = threading.Lock()
 
 
-def zoom_path(out: Path, key: str, raw: bool = False) -> Path:
-    h = hashlib.sha1(key.encode()).hexdigest()[:12]
+def zoom_path(out: Path, issue: Issue, frame: dict, raw: bool = False) -> Path:
+    """Cache file of one zoom crop of ``issue`` drawn on ``frame`` (see the module doc)."""
+    key = json.dumps([RENDER_VERSION, HALF, ZOOM, issue.key, list(issue.anchor),
+                      sorted(map(str, issue.related_label_ids or [])), issue.fix,
+                      frame.get("url"), frame.get("labels") or []], sort_keys=True, default=str)
+    h = hashlib.sha1(key.encode()).hexdigest()[:16]
     return Path(out) / "zoom" / f"{h}{'_raw' if raw else ''}.jpg"
 
 
@@ -39,13 +46,13 @@ def _frame_lock(stem: str, name: str) -> threading.Lock:
 def render_issues(out: Path, repo_root: Path, originals: Path, issues: list[Issue],
                   variants: tuple[bool, ...] = (False, True)) -> int:
     """Render the missing zoom crops of issues that share ONE frame (one image decode)."""
-    todo = [(i, raw) for i in issues for raw in variants
-            if not zoom_path(out, i.key, raw).exists()]
     first = issues[0]
-    if not todo:
-        return 0
     frame = find_frame(out, originals, first.export_stem, first.frame_name)
     if frame is None:
+        return 0
+    todo = [(i, raw) for i in issues for raw in variants
+            if not zoom_path(out, i, frame, raw).exists()]
+    if not todo:
         return 0
     n = 0
     with _frame_lock(first.export_stem, first.frame_name), ZOOM_SLOTS:
@@ -57,7 +64,7 @@ def render_issues(out: Path, repo_root: Path, originals: Path, issues: list[Issu
                 except FileNotFoundError:
                     return 0
             for issue, raw in todo:
-                dest = zoom_path(out, issue.key, raw)
+                dest = zoom_path(out, issue, frame, raw)
                 if dest.exists():
                     continue
                 try:
@@ -76,7 +83,10 @@ def render_issues(out: Path, repo_root: Path, originals: Path, issues: list[Issu
 
 def render_zoom(out: Path, repo_root: Path, originals: Path, issue: Issue,
                 raw: bool = False) -> Path | None:
-    dest = zoom_path(out, issue.key, raw)
+    frame = find_frame(out, originals, issue.export_stem, issue.frame_name)
+    if frame is None:
+        return None
+    dest = zoom_path(out, issue, frame, raw)
     if not dest.exists():
         render_issues(out, repo_root, originals, [issue], (raw,))
     return dest if dest.exists() else None
