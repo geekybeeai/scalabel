@@ -84,6 +84,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(fixmod, "ORIGINALS_DIR", orig)
     monkeypatch.setattr(data, "ORIGINALS_DIR", orig)
     monkeypatch.setattr(fixmod, "calibration_refusal", lambda *a: None)
+    monkeypatch.setattr(fixmod, "DISABLED_FOR_ROUNDS", frozenset())  # split rounds (I6)
     out = tmp_path / "out"
     out.mkdir()
     return out, frames
@@ -235,6 +236,6 @@ def test_viewb_merged_split_review_state(env, tmp_path):
     (c,) = [c for r in build_rows(out, tmp_path) for c in r["changes"]]
     assert c["merged"] and c["review"] == ""  # shipped as proposed
     reverts.set_revert(out, TAG, "f1.png", "e1", True)
-    merge_reviewed(STEM, reviewed, out, round_tag=TAG)  # re-merge applies the revert
+    merge_reviewed(STEM, reviewed, out, round_tag=TAG, remerge=True)  # applies the revert
     (c,) = [c for r in build_rows(out, tmp_path) for c in r["changes"]]
     assert c["review"] == "reverted" and c["revert_state"] == "applied"

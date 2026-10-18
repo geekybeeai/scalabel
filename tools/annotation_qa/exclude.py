@@ -7,6 +7,8 @@ import os
 import re
 from pathlib import Path
 
+from annotation_qa.rounds import read_verdicts
+
 REASON = "auto-fix rejected by verifier"
 _TAG = re.compile(r"^(?P<stem>.+?)_fix_(?P<type>.+)_v\d+$")
 
@@ -32,7 +34,10 @@ def exclude_round(out: Path, tag: str, verdict: str = "bad") -> int:
     vpath = out / "rounds" / f"{tag}_verify.json"
     if not vpath.exists():
         raise FileNotFoundError(f"no verify file for {tag}: run verify --round {tag} first")
-    verdicts = json.loads(vpath.read_text())
+    verdicts = read_verdicts(out, tag)
+    if verdicts is None:
+        raise ValueError(f"the verify file of {tag} is stale or unreadable (written for another "
+                         f"changes.json); run verify --round {tag} again")
     changes = json.loads((out / "rounds" / f"{tag}_changes.json").read_text())
     cur = read_excluded(out)
     added = 0
@@ -52,8 +57,22 @@ def exclude_round(out: Path, tag: str, verdict: str = "bad") -> int:
                             "reasons": list(v.get("reasons") or [])}
                 added += 1
     if added:
-        p = excluded_path(out)
-        tmp = p.with_name(p.name + ".tmp")
-        tmp.write_text(json.dumps(cur, indent=1, sort_keys=True))
-        os.replace(tmp, p)
+        write_excluded(out, cur)
     return added
+
+
+def write_excluded(out: Path, data: dict) -> None:
+    p = excluded_path(out)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
+    os.replace(tmp, p)
+
+
+def add_excluded(out: Path, entries: dict[str, dict]) -> int:
+    """Add ``entries`` (key -> record) to excluded.json, keeping existing keys; return added."""
+    cur = read_excluded(out)
+    new = {k: v for k, v in entries.items() if k not in cur}
+    if new:
+        write_excluded(out, {**cur, **new})
+    return len(new)

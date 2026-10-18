@@ -10,6 +10,8 @@ from annotation_qa.fix import apply, working_copy
 from annotation_qa.geometry import dense, resample
 from annotation_qa.issues import Issue, write_issues, write_marks
 
+_REAL_DISABLED = fixmod.DISABLED_FOR_ROUNDS  # before any fixture patches it
+
 
 def _label(lid, cat, verts, types=None):
     return {"id": lid, "category": cat, "attributes": {}, "manualShape": True,
@@ -45,6 +47,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(fixmod, "ORIGINALS_DIR", orig)
     # calibration is tested on its own (test_calibration_gate_*); pass it here
     monkeypatch.setattr(fixmod, "calibration_refusal", lambda *a: None)
+    # rounds of the types dropped by calibration are tested on their own (I6)
+    monkeypatch.setattr(fixmod, "DISABLED_FOR_ROUNDS", frozenset())
     out = tmp_path / "out"
     out.mkdir()
     return orig, out, frames
@@ -377,29 +381,101 @@ def test_no_metadata_and_changed_work_copy_refused(env):
     apply("curb_soft", out, 1)  # no meta, untouched work copy: fine (scan read the original)
     working_copy("exportA", out).write_text(json.dumps({"frames": [], "config": {}}))
     with pytest.raises(FixRefused, match="no scan metadata"):
-        apply("solid_dashed", out, 1, force=False)
+        apply("solid_dashed", out, 1)
 
 
-def test_force_overrides_each_guard(env, capsys):
+def test_force_stale_does_not_bypass_unmerged_or_existing_tag(env):
+    """C1: --force-stale only skips the staleness guard; v1 unmerged stays a hard refusal."""
     orig, out, _ = env
     _two_types(out)
     apply("curb_soft", out, 1)
-    r = apply("curb_soft", out, 1, force=True)  # existing tag
-    assert any("already exists" in f for f in r.forced) and r.changed
-    r = apply("solid_dashed", out, 1, force=True)  # unmerged earlier round
-    assert any("not merged yet" in f for f in r.forced)
-    assert (out / "rounds" / "exportA_fix_solid_dashed_v1_items.json").exists()
+    # make the issues stale too, so --force-stale has something to bypass
+    work = working_copy("exportA", out)
+    work.write_text(work.read_text().replace('"k": 1', '"k": 2'))
+    for kw in ({}, {"force_stale": True}, {"force_stale": True, "force_uncalibrated": True}):
+        with pytest.raises(FixRefused, match="not merged yet: exportA_fix_curb_soft_v1"):
+            apply("solid_dashed", out, 2, **kw)  # a second round on the same stem
+        with pytest.raises(FixRefused, match="exportA_fix_curb_soft_v1 already exists"):
+            apply("curb_soft", out, 1, **kw)
+    assert not (out / "rounds" / "exportA_fix_solid_dashed_v2_items.json").exists()
 
 
-def test_forced_rebuild_drops_old_merge_marker(env, tmp_path):
+def test_force_stale_bypasses_only_staleness(env):
+    orig, out, _ = env
+    _two_types(out)
+    write_meta(out, "curb_soft", {"exportA": {"sha1": "old"}})
+    with pytest.raises(FixRefused, match="re-scan first"):
+        apply("curb_soft", out, 1)
+    r = apply("curb_soft", out, 1, force_stale=True)
+    assert r.tags == ["exportA_fix_curb_soft_v1"]
+    assert len(r.forced) == 1 and "re-scan first" in r.forced[0]
+
+
+def test_force_uncalibrated_bypasses_only_calibration(env, monkeypatch):
+    orig, out, _ = env
+    _two_types(out)
+    monkeypatch.setattr(fixmod, "calibration_refusal", lambda *a: "curb_soft calibration FAIL")
+    with pytest.raises(FixRefused, match="calibration FAIL"):
+        apply("curb_soft", out, 1, force_stale=True)  # the stale flag does not skip it
+    write_meta(out, "curb_soft", {"exportA": {"sha1": "old"}})
+    with pytest.raises(FixRefused, match="re-scan first"):
+        apply("curb_soft", out, 1, force_uncalibrated=True)  # nor the other way round
+    r = apply("curb_soft", out, 1, force_uncalibrated=True, force_stale=True)
+    assert r.tags and len(r.forced) == 2
+
+
+def test_merged_tag_cannot_be_rebuilt_even_after_archive(env, tmp_path):
+    from annotation_qa.archive import archive_round
     from annotation_qa.rounds import merged_tags
     orig, out, _ = env
     _two_types(out)
     apply("curb_soft", out, 1)
     _merge_round(out, tmp_path, "exportA_fix_curb_soft_v1")
-    assert merged_tags(out)
-    apply("curb_soft", out, 1, force=True)
-    assert merged_tags(out) == set()
+    archive_round(out, "exportA_fix_curb_soft_v1")
+    assert merged_tags(out)  # archive keeps the merge marker
+    _two_types(out)  # re-triaged after a rescan: real again
+    with pytest.raises(FixRefused, match="was merged before"):
+        apply("curb_soft", out, 1, force_stale=True)
+
+
+def test_disabled_detectors_refused_without_override(env, monkeypatch):
+    """I6: types dropped by calibration cannot build rounds; no flag overrides it."""
+    orig, out, _ = env
+    monkeypatch.setattr(fixmod, "DISABLED_FOR_ROUNDS", _REAL_DISABLED)
+    _two_types(out)
+    assert {"edge_position", "edge_on_paint", "curb_soft_split", "yellow_structure",
+            "solid_dashed"} == set(fixmod.DISABLED_FOR_ROUNDS)
+    for kw in ({}, {"force_stale": True, "force_uncalibrated": True}):
+        with pytest.raises(FixRefused, match="solid_dashed: dropped by calibration"):
+            apply("solid_dashed", out, 1, **kw)
+        with pytest.raises(FixRefused, match="solid_dashed: dropped by calibration"):
+            apply("curb_soft,solid_dashed", out, 1, **kw)
+    assert not (out / "rounds").exists()
+    assert apply("curb_soft", out, 1).tags  # an enabled type still works
+
+
+@pytest.mark.parametrize("name", ["a b", "../x", "x/y", "", "é", "a;b"])
+def test_bad_round_name_refused(env, name):
+    orig, out, _ = env
+    _two_types(out)
+    if name == "":
+        r = apply("curb_soft", out, 1, name=name)  # empty: the default name is used
+        assert r.tags == ["exportA_fix_curb_soft_v1"]
+        return
+    with pytest.raises(FixRefused, match="must match"):
+        apply("curb_soft", out, 1, name=name)
+    assert apply("curb_soft", out, 1, name="edges+x-1_2").tags == ["exportA_fix_edges+x-1_2_v1"]
+
+
+def test_cli_removed_force_flag_names_new_flags(env, capsys):
+    from annotation_qa import __main__ as cli
+    orig, out, _ = env
+    _two_types(out)
+    assert cli.main(["fix", "--type", "curb_soft", "--version", "1", "--out", str(out),
+                     "--force"]) == 2
+    text = capsys.readouterr().out
+    assert "--force-stale" in text and "--force-uncalibrated" in text and "archive-round" in text
+    assert not (out / "rounds").exists()
 
 
 def test_no_round_files_for_stem_without_changes(env):
@@ -522,7 +598,7 @@ def test_cli_fix_prints_calibration_and_exits_nonzero(env, monkeypatch, capsys):
     text = capsys.readouterr().out
     assert "REFUSED" in text and "FAIL" in text and "answered 20/25" in text and "real 13" in text
     assert cli.main(["fix", "--type", "shape", "--version", "1", "--out", str(out),
-                     "--force"]) == 0
+                     "--force-uncalibrated"]) == 0
     assert "forced" in capsys.readouterr().out.lower()
 
 
@@ -543,8 +619,10 @@ def test_exclude_and_apply_skips(env):
     assert list(ex) == [i1.key]
     assert ex[i1.key] == {"reason": "auto-fix rejected by verifier", "round": tag,
                           "verdict": "bad", "reasons": ["x"]}
-    # next version: f1 excluded and left out; f3 was merged-free? simulate by merging marker-free force
-    r = apply("curb_soft", out, 2, force=True)
+    # next version (v1 set aside): f1 excluded and left out
+    from annotation_qa.archive import archive_round
+    archive_round(out, tag)
+    r = apply("curb_soft", out, 2)
     assert any(s.startswith(i1.key) and "excluded: auto-fix rejected by verifier" in s
                for s in r.skipped)
     assert "f1.png" not in r.changed.get("exportA", [])

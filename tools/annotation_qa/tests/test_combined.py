@@ -117,7 +117,7 @@ def test_gate_requires_every_type(env, monkeypatch):
     with pytest.raises(FixRefused, match=f"{PAINT} calibration FAIL"):
         apply(f"{SOFT},{PAINT}", out, 1)
     assert asked == [SOFT, PAINT]
-    r = apply(f"{SOFT},{PAINT}", out, 1, force=True)
+    r = apply(f"{SOFT},{PAINT}", out, 1, force_uncalibrated=True)
     assert r.forced and r.tags
 
 

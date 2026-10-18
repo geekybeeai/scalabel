@@ -65,6 +65,25 @@ def _label_points(label: dict):
             "lo": P.min(axis=0) - BBOX_PAD, "hi": P.max(axis=0) + BBOX_PAD}
 
 
+def _overlap(short: dict, long_: dict) -> float:
+    """Fraction of ``short``'s samples within NEAR of ``long_`` and running along it."""
+    d, idx = long_["tree"].query(short["P"], distance_upper_bound=NEAR)
+    near = np.isfinite(d)
+    along = np.zeros(len(near), bool)
+    along[near] = np.abs(np.einsum(
+        "ij,ij->i", short["N"][near], long_["N"][idx[near]])) >= PARALLEL_COS
+    return float(along.mean())
+
+
+def label_overlap(a: dict, b: dict) -> float:
+    """The larger of overlap(a on b) and overlap(b on a) for two labels (0 when either has
+    no line). Used by merge to spot a label redrawn in review over a reverted delete."""
+    pa, pb = _label_points(a), _label_points(b)
+    if pa is None or pb is None:
+        return 0.0
+    return max(_overlap(pa, pb), _overlap(pb, pa))
+
+
 def _join_fix(short: dict, other: dict) -> tuple[dict | None, dict, str | None]:
     """(join_into fix, features, reason) for an overlapping_pieces pair, or (None, features,
     None) when ``join_overlapping`` refuses (the reason is in features["join"])."""
@@ -118,12 +137,7 @@ def detect(ctx: FrameContext) -> list[Issue]:
             # short = the label that carries the issue
             short, long_ = (a, b) if (a["len"], a["label"]["id"]) <= (b["len"], b["label"]["id"]) \
                 else (b, a)
-            d, idx = long_["tree"].query(short["P"], distance_upper_bound=NEAR)
-            near = np.isfinite(d)
-            along = np.zeros(len(near), bool)
-            along[near] = np.abs(np.einsum(
-                "ij,ij->i", short["N"][near], long_["N"][idx[near]])) >= PARALLEL_COS
-            ov = float(along.mean())
+            ov = _overlap(short, long_)
             sl, ll = short["label"], long_["label"]
             kind = _kind(sl["category"] == ll["category"], ov)
             if kind is None:

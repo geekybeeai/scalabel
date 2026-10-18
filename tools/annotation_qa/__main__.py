@@ -70,8 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     fx.add_argument("--version", type=int, required=True)
     fx.add_argument("--create-projects", action="store_true")
     fx.add_argument("--server", default="http://localhost:8686")
-    fx.add_argument("--force", action="store_true",
-                    help="override the calibration / unmerged-round / existing-tag / stale guards")
+    fx.add_argument("--force-stale", action="store_true",
+                    help="build from issues detected on an older working copy (staleness guard "
+                         "only; the unmerged-round and existing-tag guards cannot be overridden)")
+    fx.add_argument("--force-uncalibrated", action="store_true",
+                    help="build although a type's calibration did not PASS (rarely right)")
+    fx.add_argument("--force", action="store_true", help=argparse.SUPPRESS)  # removed: see C1
     pj = sub.add_parser("project", help="(re)create the Scalabel review project of one round")
     pj.add_argument("--round", required=True, help="round tag, e.g. <stem>_fix_<type>_v<N>")
     pj.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -81,6 +85,16 @@ def main(argv: list[str] | None = None) -> int:
     mg.add_argument("--reviewed", type=Path, required=True)
     mg.add_argument("--round", required=True, help="round tag, e.g. <stem>_fix_<type>_v<N>")
     mg.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    mg.add_argument("--remerge", action="store_true",
+                    help="merge a round that is already merged again (e.g. a corrected export)")
+    mg.add_argument("--allow-changed-frames", nargs="+", default=[], metavar="FRAME",
+                    help="merge these round frames although the work copy changed since the "
+                         "round was built (names, space- or comma-separated)")
+    ar = sub.add_parser("archive-round",
+                        help="set an unwanted round aside (files, reverts and progress) so it "
+                             "can be rebuilt or a later round built")
+    ar.add_argument("--round", required=True, help="round tag")
+    ar.add_argument("--out", type=Path, default=DEFAULT_OUT)
     vb = sub.add_parser("viewb", help="serve the review page (View B is at /viewb)")
     vb.add_argument("--out", type=Path, default=DEFAULT_OUT)
     vb.add_argument("--port", type=int, default=8790)
@@ -176,15 +190,34 @@ def main(argv: list[str] | None = None) -> int:
         from annotation_qa.calibrate import calibrate_yellow
         print(json.dumps(calibrate_yellow(_expand(a.exports), a.root, a.out), indent=1))
         return 0
+    if a.cmd == "archive-round":
+        from annotation_qa.archive import archive_round
+        try:
+            r = archive_round(a.out, a.round)
+        except ValueError as e:
+            print(f"REFUSED: {e}")
+            return 2
+        print(f"archived {a.round} -> {r['dest']}: {len(r['files'])} files"
+              f"{', reverts' if r['reverts'] else ''}{', progress' if r['progress'] else ''}"
+              f"{'; merge markers kept' if r['merged'] else ''}")
+        return 0
     if a.cmd == "fix":
         from annotation_qa.fix import FixRefused, apply
+        if a.force:
+            print("REFUSED: --force was removed. Use --force-stale to build from issues detected "
+                  "on an older working copy, or --force-uncalibrated to skip the calibration "
+                  "gate. Unmerged earlier rounds and existing round tags cannot be overridden: "
+                  "merge the round, or set it aside with archive-round --round <tag>.")
+            return 2
         try:
-            r = apply(a.type, a.out, a.version, force=a.force, name=a.name)
+            r = apply(a.type, a.out, a.version, force_stale=a.force_stale,
+                      force_uncalibrated=a.force_uncalibrated, name=a.name)
         except FixRefused as e:
             print(f"REFUSED: fix --type {a.type} --version {a.version}")
             for why in e.reasons:
                 print(f"  - {why}")
-            print("Nothing was written. Fix the above, or pass --force to override.")
+            print("Nothing was written. Fix the above (--force-stale / --force-uncalibrated "
+                  "override only the staleness / calibration refusals).")
             return 2
         for why in r.forced:
             print(f"warning: forced past: {why}")
@@ -203,12 +236,19 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if _create_projects(a.out, [a.round], a.server) else 0
     if a.cmd == "merge":
         from annotation_qa.merge import MergeRefused, merge_reviewed
+        allow = [x for v in a.allow_changed_frames for x in v.split(",") if x]
         try:
-            n = merge_reviewed(a.stem, a.reviewed, a.out, round_tag=a.round)
+            r = merge_reviewed(a.stem, a.reviewed, a.out, round_tag=a.round,
+                               remerge=a.remerge, allow_changed_frames=allow)
         except MergeRefused as e:
             print(f"REFUSED: {e}\nNothing was merged.")
             return 2
-        print(f"merged {n} frames")
+        print(f"merged {r.frames} frames; reverted_applied={r.reverted_applied} "
+              f"reverted_conflicts={r.reverted_conflicts} unmatched={r.unmatched_reverts}"
+              + (f" skipped_redrawn={r.reverted_skipped_overlap}"
+                 if r.reverted_skipped_overlap else ""))
+        print(f"review outcome: {r.excluded_added} issue keys excluded (rejected in review), "
+              f"{r.marks_dropped} real marks dropped (kept fixes); backup {r.backup}")
         return 0
     if a.cmd == "review":
         from annotation_qa.review_server import serve

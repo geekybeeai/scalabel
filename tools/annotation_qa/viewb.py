@@ -30,7 +30,7 @@ from annotation_qa.imaging import FrameImage
 from annotation_qa.progress import is_reviewed
 from annotation_qa.reverts import read_reverts
 from annotation_qa.render import RENDER_VERSION, issue_crop
-from annotation_qa.rounds import merged_tags, round_files  # noqa: F401 - re-exported
+from annotation_qa.rounds import merged_tags, read_verdicts, round_files  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 SCALABEL = "http://localhost:8686"
@@ -230,11 +230,8 @@ VERDICT_RANK = {"bad": 0, "check": 1, "unverified": 1, "ok": 2}
 
 
 def _verdicts(out: Path, tag: str) -> dict:
-    p = Path(out) / "rounds" / f"{tag}_verify.json"
-    try:
-        return _changes(p)
-    except (OSError, ValueError):
-        return {}
+    """The round's verdicts; {} when there are none for its current changes.json (I1)."""
+    return read_verdicts(out, tag) or {}
 
 
 def _finish_row(rw: dict) -> None:

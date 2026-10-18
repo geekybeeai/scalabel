@@ -15,6 +15,7 @@ features stored with the issue; deletes / vertex drops are always "check"; ``set
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ from annotation_qa.geometry import (LINE_WIDTH, _dist_to_polyline, dense, double
                                       resample, self_crossings)
 from annotation_qa.imaging import FrameImage, profile
 from annotation_qa.issues import load_issues_tolerant
-from annotation_qa.rounds import round_files
+from annotation_qa.rounds import VERIFY_META, read_verdicts, round_files
 from annotation_qa.viewb import frames_by_name
 
 HAND = "__hand__"
@@ -571,17 +572,25 @@ def _clean(o):
     return o
 
 
-def write_verify(out: Path, tag: str, verdicts: dict) -> Path:
+def write_verify(out: Path, tag: str, verdicts: dict, changes_sha1: str | None = None) -> Path:
+    """Write the verdicts with ``__meta__.changes_sha1`` (the changes.json they judge), so
+    View B and ``exclude`` ignore them once the round is rebuilt."""
     p = verdict_path(out, tag)
+    if changes_sha1 is None:
+        changes_sha1 = hashlib.sha1(
+            (Path(out) / "rounds" / f"{tag}_changes.json").read_bytes()).hexdigest()
+    body = {**_clean(verdicts), VERIFY_META: {"changes_sha1": changes_sha1}}
     tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(json.dumps(_clean(verdicts)))
+    tmp.write_text(json.dumps(body))
     os.replace(tmp, p)
     return p
 
 
 def counts(verdicts: dict) -> dict[str, int]:
     c = {"ok": 0, "check": 0, "bad": 0}
-    for labels in verdicts.values():
+    for fname, labels in verdicts.items():
+        if fname == VERIFY_META:
+            continue
         for lid, v in labels.items():
             if lid != HAND:
                 c[v["verdict"]] += 1
@@ -589,7 +598,8 @@ def counts(verdicts: dict) -> dict[str, int]:
 
 
 def run(out: Path, tag: str | None, all_rounds: bool, repo_root: Path | None = None) -> dict[str, dict]:
-    """Verify one round (``tag``) or every round without a verdict file; {tag: counts}."""
+    """Verify one round (``tag``) or every round without a current verdict file (none, or
+    one written for an older changes.json); {tag: counts}."""
     out = Path(out)
     rounds = round_files(out)
     if not all_rounds:
@@ -597,11 +607,12 @@ def run(out: Path, tag: str | None, all_rounds: bool, repo_root: Path | None = N
         if not rounds:
             raise SystemExit(f"no such round: {tag}")
     else:
-        rounds = [r for r in rounds if not verdict_path(out, r["tag"]).exists()]
+        rounds = [r for r in rounds if read_verdicts(out, r["tag"]) is None]
     summary = {}
     for r in rounds:
+        sha = hashlib.sha1(Path(r["changes"]).read_bytes()).hexdigest()  # what is judged
         v = verify_round(out, r, repo_root)
-        write_verify(out, r["tag"], v)
+        write_verify(out, r["tag"], v, sha)
         summary[r["tag"]] = counts(v)
         print(f"{r['tag']}: {summary[r['tag']]}", flush=True)
     return summary

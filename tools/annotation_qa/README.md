@@ -41,20 +41,22 @@ python3 -m annotation_qa review --out $OUT        # http://localhost:8790/
 python3 -m annotation_qa fix --type T --version 1 --out $OUT --create-projects
 ```
 
-- This writes `$OUT/work/<stem>_fix_T_v1.json`, `$OUT/rounds/<stem>_fix_T_v1_{items,changes}.json`, and one Scalabel project per batch, named `<stem>_fix_T_v1` (with auto-correct off and task size 50).
+- This writes `$OUT/work/<stem>_fix_T_v1.json`, `$OUT/rounds/<stem>_fix_T_v1_{items,changes,base}.json`, and one Scalabel project per batch, named `<stem>_fix_T_v1` (with auto-correct off and task size 50). `base.json` records when the round was built and the sha1 of each round frame's labels in the working copy, for `merge`'s checks.
 - A project only holds the frames that changed, plus "draw by hand" frames, which are left unchanged for you to fix.
 - `fix` **refuses** and writes nothing when:
-  - the type is not PASS;
-  - an earlier round of that batch is not merged;
-  - the round tag already exists (use the next `--version`);
-  - the issues were detected on an older working copy (re-scan first, step 5).
+  - the type was dropped by calibration this revision (`DISABLED_FOR_ROUNDS` in `fix.py`: `edge_position`, `edge_on_paint`, `curb_soft_split`, `yellow_structure`, `solid_dashed`). Scan and calibrate still work for them. No flag overrides this.
+  - an earlier round of that batch is not merged. No flag overrides this: merge it, or set it aside with `archive-round` (below).
+  - the round tag already exists (any of its files, or View B reverts / progress for it), or was merged before. No flag overrides this: use the next `--version`, or `archive-round` an unmerged round to rebuild it.
+  - the issues were detected on an older working copy (re-scan first, step 5). `--force-stale` overrides only this one.
+  - the type is not PASS. `--force-uncalibrated` overrides only this one (rarely right).
 
-  `--force` overrides each of these.
+  The old `--force` is gone; passing it prints an error naming the new flags. `--name` must match `[A-Za-z0-9_+-]+`.
+- `python3 -m annotation_qa archive-round --round <tag> --out $OUT` sets a round aside: it moves `rounds/<tag>_{items,changes,verify,base}.json`, `work/<tag>.json` and the round's entries in `reverts.json` and `viewb_progress.json` into `$OUT/backup/archived_rounds/<tag>/`. Its merge markers are kept (what was merged stays merged, and a merged tag is never rebuilt). Use it before rebuilding a round, or to drop a round you will not review.
 - If creating a project fails, the server's answer is printed and the other batches carry on. Re-create one with `python3 -m annotation_qa project --round <stem>_fix_T_v1 --out $OUT`. Names that already exist are skipped.
 
 Review each project at `http://localhost:8686/dashboard?project_name=<stem>_fix_T_v1`. Fix what is wrong, then export the project's labels to a JSON file.
 
-After `verify`, `python3 -m annotation_qa exclude --round <tag> --verdict bad` records the verifier-rejected auto-fixes in `OUT/excluded.json`. The next `fix --version <N+1>` skips them (listed as skipped, their frames stay out of the round unless another fix touches them) and View A marks them "auto-fix rejected", so you don't undo them by hand.
+`verify` records the sha1 of the `changes.json` it judged; View B and `exclude` ignore a verify file written for another version of the round (re-run `verify`). After `verify`, `python3 -m annotation_qa exclude --round <tag> --verdict bad` records the verifier-rejected auto-fixes in `OUT/excluded.json`. The next `fix --version <N+1>` skips them (listed as skipped, their frames stay out of the round unless another fix touches them) and View A marks them "auto-fix rejected", so you don't undo them by hand.
 
 ### Combined rounds (review each frame once)
 
@@ -62,7 +64,7 @@ After `verify`, `python3 -m annotation_qa exclude --round <tag> --verdict bad` r
 python3 -m annotation_qa fix --type curb_soft,edge_on_paint --version 1 [--name edges] --out $OUT
 ```
 
-- Several types in one round, tagged `<stem>_fix_<name>_v<N>` (`--name` defaults to the types joined by `+`, e.g. `..._fix_edges_v1`). Every listed type must PASS its calibration (or `--force`); the guards run per stem over the whole round. Only issues marked real are applied.
+- Several types in one round, tagged `<stem>_fix_<name>_v<N>` (`--name` defaults to the types joined by `+`, e.g. `..._fix_edges_v1`). Every listed type must PASS its calibration (or `--force-uncalibrated`); the guards run per stem over the whole round. Only issues marked real are applied.
 - Per label the fixes are composed: set_category first, then the geometry fix. A delete wins over everything and is recorded alone. Two geometry fixes of different types on one label keep the higher-confidence one; the other is listed as skipped ("conflicting geometry fix"). Inside one type the old "first fix by confidence only" rule still holds.
 - `changes.json` records `issue_types` and `ops` (parallel lists) next to before/after/anchor; single-type rounds also keep `issue_type`.
 - `verify` gives a combined change the worst verdict of its parts. View B shows the ops ("soft edge → CURB + moved 6 px") and draws the before side in its old class colour and the after side in its new one.
@@ -74,7 +76,14 @@ python3 -m annotation_qa fix --type curb_soft,edge_on_paint --version 1 [--name 
 python3 -m annotation_qa merge --stem <stem> --reviewed <exported.json> --round <stem>_fix_T_v1 --out $OUT
 ```
 
-`merge` refuses, and writes nothing, unless the export's frames and urls are exactly that round's frames. The Random and TMI batches share frame names, so this check matters. Your export replaces those frames' labels in `$OUT/work/<stem>.json`.
+`merge` refuses, and writes nothing, unless the export's frames and urls are exactly that round's frames. The Random and TMI batches share frame names, so this check matters. Your export replaces those frames' labels in `$OUT/work/<stem>.json`. It also refuses when:
+
+- the round is merged already. `--remerge` merges it again (e.g. a corrected export).
+- another round of the same batch was merged after this round was built. Merging would put older labels over that merge; archive the round and rebuild it.
+- a round frame's labels in the work copy differ from the round's `base.json` ("work copy changed since the round was built — re-run the live-edit import after merge or rebuild"), e.g. after a live-edit import. `--allow-changed-frames <names>` (space- or comma-separated) merges those frames anyway. A legacy round, built before `base.json` existed, skips this check with a warning ("legacy round (no base snapshot)"); the other checks still run.
+- the round has View B reverts but its `changes.json` cannot be read.
+
+Before saving, the work copy is copied to `$OUT/backup/work/<stem>.<timestamp>.json`. `merge` prints `reverted_applied` / `reverted_conflicts` / `unmatched` (reverts that matched no change, also warned about). It records the review outcome: issue keys of changes you changed or reverted go to `excluded.json` ("rejected in review (<tag>)"), so a rescan cannot re-apply them; the real marks of changes you kept are dropped from `marks.json` (except calibration-sample keys), so a re-detection on the merged copy needs new triage.
 
 ## 5. Re-detect on the merged copy, then do the next type
 
@@ -94,7 +103,7 @@ python3 -m annotation_qa final --out $OUT               # $OUT/final/<stem>_qa_2
 ```
 
 - View B lists every edited frame. For merged rounds, "after" is what will ship.
-- View B **Revert** (button, or `X` on the current/focused change) marks a tool change to undo without opening Scalabel. Nothing is written to Scalabel: marks go to `OUT/reverts.json` and `merge` applies them. A label still equal to the tool's result gets the original category and geometry back (a tool-deleted label is re-added); a label you edited or deleted in Scalabel keeps your version (warning printed). The merge marker records `reverted_applied` / `reverted_conflicts`; `final` counts applied reverts as no change. Reverting is only possible before the round is merged.
+- View B **Revert** (button, or `X` on the current/focused change) marks a tool change to undo without opening Scalabel. Nothing is written to Scalabel: marks go to `OUT/reverts.json` and `merge` applies them. A label still equal to the tool's result gets the original category and geometry back (a tool-deleted label is re-added, unless you drew a new label of the same class over it in Scalabel: then the re-add is skipped with a warning); a label you edited or deleted in Scalabel keeps your version (warning printed). The merge marker records `reverted_applied` / `reverted_conflicts`; `final` counts applied reverts as no change. Reverting is only possible before the round is merged.
 - View B shows where you are: each card says "Image i of N" (position in the current round/filter/order) and "Scalabel frame k" ("task t, frame k" for multi-task projects), and a sticky bar shows "Reviewed r / N" with a progress bar. `J` marks the current frame reviewed and moves on (or tick "reviewed" on the card); `U` / **Resume** jumps to the first unreviewed image; "show: not yet reviewed" hides the rest. Progress is kept in `OUT/viewb_progress.json` (`POST /viewb/progress`, `GET /viewb/progress?round=`); merged rounds always count as reviewed.
 - It flags "changed in review" or "reverted", and lists labels added or deleted in review.
 - `final` writes one export per batch:

@@ -237,10 +237,11 @@ def test_final_skips_stem_with_one_unmerged_round(out, tmp_path, capsys):
 
 def test_final_exports_when_all_rounds_merged_counting_both(out, tmp_path, capsys):
     t1 = _round(out, "shape", 1, _two_changes(), [_frame("f1.png", [])])
-    t2 = _round(out, "position", 2, {"f1.png": {"3": {"before": _snap(_label("3")), "after": None}}},
-                [_frame("f1.png", [])])
     _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [])]))
     _merge(out, t1, tmp_path)
+    # round 2 is built after round 1 was merged (C2 refuses the other order)
+    t2 = _round(out, "position", 2, {"f1.png": {"3": {"before": _snap(_label("3")), "after": None}}},
+                [_frame("f1.png", [])])
     _merge(out, t2, tmp_path)
     assert cli.main(["final", "--out", str(out)]) == 0
     assert (out / "final" / f"{STEM}_qa_2026_10_17.json").exists()
@@ -261,7 +262,7 @@ def test_viewb_marks_unmerged_rounds(out, repo, tmp_path):
 def test_merge_marker_written(out, tmp_path):
     t1 = _round(out, "shape", 1, {}, [_frame("f1.png", [])])
     _write(out / "work" / f"{STEM}.json", _export([_frame("f1.png", [])]))
-    assert _merge(out, t1, tmp_path) == 1
+    assert _merge(out, t1, tmp_path).frames == 1
     (m,) = json.loads((out / "rounds" / "merged.json").read_text())
     assert m["stem"] == STEM and m["tag"] == t1 and m["merged_frames"] == 1
     assert m["reviewed_path"] and m["timestamp"]

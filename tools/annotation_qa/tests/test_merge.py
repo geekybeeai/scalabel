@@ -45,7 +45,7 @@ def test_merge_only_touches_round_frames_of_same_stem(env):
     orig, out, tmp = env
     rev = _reviewed(tmp, [_frame("shared.png", [_label("1", "curb_road_edge"),
                                                 _label("9", "dashed_white_line")])])
-    assert merge_reviewed("exportA", rev, out, round_tag=TAG) == 1
+    assert merge_reviewed("exportA", rev, out, round_tag=TAG).frames == 1
     a = {f["name"]: f for f in json.load(open(out / "work" / "exportA.json"))["frames"]}
     assert [l["id"] for l in a["shared.png"]["labels"]] == ["1", "9"]
     assert a["shared.png"]["labels"][0]["category"] == "curb_road_edge"

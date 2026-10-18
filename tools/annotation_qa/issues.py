@@ -182,6 +182,19 @@ def calibration_keys(out: Path, issue_type: str, issues: list[Issue]) -> list[st
     return keys
 
 
+def frozen_calibration_keys(out: Path) -> set[str]:
+    """Every key of every persisted calibration sample (nothing is drawn or written)."""
+    keys: set[str] = set()
+    for p in sorted((Path(out) / "calibration").glob("sample_*.json")):
+        try:
+            k = json.loads(p.read_text())["keys"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if isinstance(k, list):
+            keys.update(str(x) for x in k)
+    return keys
+
+
 def calibration_sample(out: Path, issue_type: str, issues: list[Issue]) -> list[Issue]:
     """The live issues of the persisted sample (vanished keys have nothing to show)."""
     by_key = {i.key: i for i in issues}

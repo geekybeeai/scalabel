@@ -6,6 +6,7 @@ viewb and final.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -78,10 +79,93 @@ def record_merge(out: Path, stem: str, tag: str, reviewed: Path, frames: list[st
     _write_markers(out, entries)
 
 
-def drop_markers(out: Path, stem: str, tag: str) -> int:
-    """Remove the markers of one round (used when a round is forcibly rebuilt)."""
-    entries = merge_markers(out)
-    keep = [e for e in entries if (e.get("stem"), e.get("tag")) != (stem, tag)]
-    if len(keep) != len(entries):
-        _write_markers(out, keep)
-    return len(entries) - len(keep)
+def last_marker(out: Path, stem: str, tag: str) -> dict | None:
+    """The newest merge marker of one round, or None."""
+    hits = [m for m in merge_markers(out) if (m.get("stem"), m.get("tag")) == (stem, tag)]
+    return hits[-1] if hits else None
+
+
+# ---- round base snapshots: OUT/rounds/<tag>_base.json ----
+def labels_sha1(labels) -> str:
+    """Canonical sha1 of a frame's label list (key order does not matter)."""
+    return hashlib.sha1(json.dumps(labels or [], sort_keys=True, separators=(",", ":"))
+                        .encode()).hexdigest()
+
+
+def base_path(out: Path, tag: str) -> Path:
+    return Path(out) / "rounds" / f"{tag}_base.json"
+
+
+def write_base(out: Path, stem: str, tag: str, frames: dict[str, list]) -> dict:
+    """Record when the round was built and the sha1 of each round frame's labels in the
+    working copy it was built from (``frames``: name -> labels), atomically."""
+    rec = {"stem": stem, "tag": tag,
+           "built_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+           "frames": {n: labels_sha1(l) for n, l in sorted(frames.items())}}
+    p = base_path(out, tag)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(rec, indent=1))
+    os.replace(tmp, p)
+    return rec
+
+
+def read_base(out: Path, tag: str) -> dict | None:
+    """The round's base snapshot, or None for a legacy round (built before base files)."""
+    try:
+        d = json.loads(base_path(out, tag).read_text())
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) and isinstance(d.get("frames"), dict) else None
+
+
+def built_at(out: Path, tag: str, base: dict | None = None) -> datetime | None:
+    """When the round was built: the base snapshot's time, else (a legacy round) the
+    mtime of its changes / items file."""
+    base = base if base is not None else read_base(out, tag)
+    if base is not None:
+        t = marker_time({"timestamp": base.get("built_at")})
+        if t is not None:
+            return t
+    for suffix in ("changes", "items"):
+        p = Path(out) / "rounds" / f"{tag}_{suffix}.json"
+        if p.exists():
+            return datetime.fromtimestamp(p.stat().st_mtime, timezone.utc)
+    return None
+
+
+# ---- verify files: OUT/rounds/<tag>_verify.json ----
+VERIFY_META = "__meta__"
+
+
+def verdicts_current(out: Path, tag: str, raw: dict) -> bool:
+    """Was the verify file ``raw`` written for the round's current changes.json?
+
+    It records ``__meta__.changes_sha1``; a legacy file without it counts while it is not
+    older than changes.json."""
+    rounds_dir = Path(out) / "rounds"
+    changes = rounds_dir / f"{tag}_changes.json"
+    if not changes.exists():
+        return False
+    meta = raw.get(VERIFY_META) if isinstance(raw, dict) else None
+    if isinstance(meta, dict) and meta.get("changes_sha1"):
+        h = hashlib.sha1(changes.read_bytes()).hexdigest()
+        return meta["changes_sha1"] == h
+    vpath = rounds_dir / f"{tag}_verify.json"
+    try:
+        return vpath.stat().st_mtime_ns >= changes.stat().st_mtime_ns
+    except OSError:
+        return False
+
+
+def read_verdicts(out: Path, tag: str) -> dict | None:
+    """{frame: {label: verdict}} of the round, without the meta entry; None when the file is
+    missing or unreadable, or was written for another version of changes.json."""
+    p = Path(out) / "rounds" / f"{tag}_verify.json"
+    try:
+        raw = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict) or not verdicts_current(out, tag, raw):
+        return None
+    return {k: v for k, v in raw.items() if k != VERIFY_META}

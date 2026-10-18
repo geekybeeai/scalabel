@@ -6,13 +6,14 @@ import copy
 import hashlib
 import json
 import logging
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
-from annotation_qa import rounds
+from annotation_qa import progress, reverts, rounds
 from annotation_qa.data import ORIGINALS_DIR, load_export, save_export
 from annotation_qa.exclude import read_excluded
 from annotation_qa.geometry import (LINE_WIDTH, ShiftNotRepresentable, _segments, change_anchor,
@@ -21,6 +22,13 @@ from annotation_qa.issues import (Issue, calibration_status, file_sha1, format_c
                                   load_issues_tolerant, read_marks, read_meta)
 
 log = logging.getLogger(__name__)
+
+# Detectors dropped by calibration this revision (R30 edge_position, R32 edge_on_paint,
+# R35 curb_soft_split, R37 yellow_structure, R38 solid_dashed): scan and calibrate still
+# work, but `fix` refuses to build a round from them. There is no override flag.
+DISABLED_FOR_ROUNDS = frozenset({"edge_position", "edge_on_paint", "curb_soft_split",
+                                 "yellow_structure", "solid_dashed"})
+NAME_RE = re.compile(r"^[A-Za-z0-9_+-]+$")
 
 
 @dataclass
@@ -79,6 +87,27 @@ def _drop_vertices(poly: dict, indices: list[int]) -> dict:
     return out
 
 
+_C_RUN = re.compile(r"C+")
+
+
+def types_problem(types: str, n: int, closed: bool) -> str | None:
+    """Why ``types`` is not a valid Scalabel types string for ``n`` vertices, or None.
+
+    One letter per vertex, "L" first, only "L"/"C"; every "C" run is exactly 2 long (the two
+    control points) and is followed by an "L" (its end point) -- or, for a closed poly, by
+    the end of the string (the curve ends on vertex 0)."""
+    if len(types) != n:
+        return f"{n} vertices but {len(types)} types"
+    if not types or set(types) - {"L", "C"} or types[0] != "L":
+        return f"bad types {types!r}"
+    for m in _C_RUN.finditer(types):
+        if len(m.group()) != 2:
+            return f"a C run of {len(m.group())} at vertex {m.start()} (must be 2)"
+        if m.end() == n and not closed:
+            return f"curve at vertex {m.start()} has no end point (open poly ends in C)"
+    return None
+
+
 def _set_poly(poly: dict, fix: dict) -> dict:
     """op "set_poly": replace the poly's geometry (vertices, types, closed; other keys kept)."""
     verts = [[float(x), float(y)] for x, y in fix["vertices"]]
@@ -88,8 +117,9 @@ def _set_poly(poly: dict, fix: dict) -> dict:
         raise ValueError(f"set_poly: {len(verts)} vertices but {len(types)} types")
     if len(verts) < (3 if closed else 2) or not np.isfinite(np.asarray(verts, float)).all():
         raise ValueError("set_poly: too few or non-finite vertices")
-    if set(types) - {"L", "C"} or types[0] != "L":
-        raise ValueError(f"set_poly: bad types {types!r}")
+    why = types_problem(types, len(verts), closed)
+    if why:
+        raise ValueError(f"set_poly: {why}")
     out = dict(poly)
     out["vertices"], out["types"], out["closed"] = verts, types, closed
     return out
@@ -222,37 +252,53 @@ def _staleness(out: Path, issue_type: str, stem: str, meta: dict | None) -> str 
     return None
 
 
+ROUND_SIDE_FILES = ("items", "changes", "verify", "base")
+
+
+@dataclass
+class _Refusals:
+    hard: list[str] = field(default_factory=list)  # no flag overrides these
+    stale: list[str] = field(default_factory=list)  # --force-stale
+    calibration: list[str] = field(default_factory=list)  # --force-uncalibrated
+
+
 def _guards(types: list[str], name: str, out: Path, version: int,
             by_stem: dict[str, list[Issue]], issues_by_type: dict[str, list[Issue]],
-            marks: dict[str, str]) -> list[str]:
-    reasons = []
+            marks: dict[str, str]) -> _Refusals:
+    ref = _Refusals()
     for t in types:  # every listed type must have passed its calibration
         cal = calibration_refusal(issues_by_type[t], marks, t, out)
         if cal:
-            reasons.append(cal)
+            ref.calibration.append(cal)
     merged = rounds.merged_tags(out)
     all_rounds = rounds.round_files(out)
     metas = {t: read_meta(out, t) for t in types}
+    rev, prog = reverts.read_reverts(out), progress.read_progress(out)
     for stem in sorted(by_stem):
         tag = rounds.round_tag(stem, name, version)
         open_ = [r["tag"] for r in all_rounds
                  if r["stem"] == stem and r["tag"] != tag and (stem, r["tag"]) not in merged]
         if open_:
-            reasons.append(f"{stem}: round(s) not merged yet: {', '.join(open_)}; review and "
-                           f"merge them first (merge --stem {stem} --reviewed <export> --round <tag>)")
-        exists = [p.name for p in (out / "rounds" / f"{tag}_items.json",
-                                   out / "rounds" / f"{tag}_changes.json",
-                                   out / "work" / f"{tag}.json") if p.exists()]
+            ref.hard.append(f"{stem}: round(s) not merged yet: {', '.join(open_)}; review and "
+                            f"merge them first (merge --stem {stem} --reviewed <export> --round "
+                            "<tag>), or set one aside with archive-round --round <tag>")
+        exists = [p.name for p in [out / "rounds" / f"{tag}_{k}.json" for k in ROUND_SIDE_FILES]
+                  + [out / "work" / f"{tag}.json"] if p.exists()]
+        exists += [f"{f}[{tag}]" for f, d in (("reverts.json", rev),
+                                              ("viewb_progress.json", prog)) if tag in d]
         if exists:
-            reasons.append(f"{stem}: round {tag} already exists ({', '.join(exists)}); "
-                           "use the next --version")
+            ref.hard.append(f"{stem}: round {tag} already exists ({', '.join(exists)}); use the "
+                            f"next --version, or archive-round --round {tag} to rebuild it")
+        elif (stem, tag) in merged:
+            ref.hard.append(f"{stem}: round {tag} was merged before (merge marker in "
+                            "rounds/merged.json); use the next --version")
         for t in types:
             if not any(i.issue_type == t for i in by_stem[stem]):
                 continue
             stale = _staleness(out, t, stem, metas[t])
             if stale:
-                reasons.append(stale)
-    return reasons
+                ref.stale.append(stale)
+    return ref
 
 
 def split_types(issue_type: str | list[str]) -> list[str]:
@@ -270,8 +316,8 @@ def split_types(issue_type: str | list[str]) -> list[str]:
 _GEOMETRY_OPS = ("shift", "drop_vertices", "set_poly")
 
 
-def apply(issue_type: str | list[str], out: Path, version: int, force: bool = False,
-          name: str | None = None) -> FixResult:
+def apply(issue_type: str | list[str], out: Path, version: int, force_stale: bool = False,
+          force_uncalibrated: bool = False, name: str | None = None) -> FixResult:
     """Apply the real-marked fixes of one or more types to the working copies, one round per stem.
 
     ``issue_type`` may list several types ("curb_soft,edge_on_paint"): a combined round,
@@ -287,14 +333,25 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
     the issue label as {"before": A, "after": null, "join": {"target", "poly_index",
     "before": B, "after": B'}}.
 
-    Refuses (FixRefused, nothing written) when a type's calibration did not PASS,
-    a stem has an unmerged earlier round, the round tag exists already, or the
-    issues were detected on a different version of the working copy. ``force``
-    overrides every refusal (they are returned in ``FixResult.forced``).
+    Refuses (FixRefused, nothing written) when a type is in DISABLED_FOR_ROUNDS, ``name``
+    is not [A-Za-z0-9_+-]+, a stem has an unmerged earlier round, the round tag exists
+    already (any of its files or review state) or was merged before -- these always --, when
+    the issues were detected on a different version of the working copy (``force_stale``
+    overrides), or when a type's calibration did not PASS (``force_uncalibrated``
+    overrides). Overridden refusals are returned in ``FixResult.forced``.
+
+    Each round also gets ``rounds/<tag>_base.json``: when it was built and the sha1 of each
+    round frame's labels in the working copy, so ``merge`` can tell when they changed.
     """
     out = Path(out)
     types = split_types(issue_type)
+    off = [t for t in types if t in DISABLED_FOR_ROUNDS]
+    if off:
+        raise FixRefused([f"{t}: dropped by calibration this revision; no fix rounds are built "
+                          f"from it (scan and calibrate still work)" for t in off])
     name = name or "+".join(types)
+    if not NAME_RE.match(name):
+        raise FixRefused([f"--name {name!r} must match [A-Za-z0-9_+-]+"])
     combined = len(types) > 1
     issues_by_type = {t: load_issues_tolerant(out / f"issues_{t}.jsonl") for t in types}
     marks = read_marks(out / "marks.json")
@@ -310,16 +367,19 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
     for stem, lst in by_stem.items():
         for i in lst:
             if i.key in excluded:
-                msg = f"{i.key}: excluded: auto-fix rejected by verifier"
+                why = (excluded[i.key] or {}).get("reason") or "auto-fix rejected by verifier"
+                msg = f"{i.key}: excluded: {why}"
                 res.skipped.append(msg)
                 log.warning("skipped %s", msg)
             else:
                 kept.setdefault(stem, []).append(i)
     by_stem = kept
-    reasons = _guards(types, name, out, version, by_stem, issues_by_type, marks)
-    if reasons and not force:
-        raise FixRefused(reasons)
-    res.forced = reasons
+    ref = _guards(types, name, out, version, by_stem, issues_by_type, marks)
+    blocking = ref.hard + ([] if force_stale else ref.stale) \
+        + ([] if force_uncalibrated else ref.calibration)
+    if blocking:
+        raise FixRefused(blocking)
+    res.forced = ref.stale + ref.calibration
     for stem, stem_issues in sorted(by_stem.items()):
         exp = load_export(working_copy(stem, out))
         frames = {f["name"]: f for f in exp.frames}
@@ -490,10 +550,9 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
         if not changed and not hand:
             continue  # nothing to review: no round files for this stem
         tag = rounds.round_tag(stem, name, version)
-        if rounds.drop_markers(out, stem, tag):  # a forced rebuild needs a fresh merge
-            print(f"warning: {tag} rebuilt; its old merge marker was removed", flush=True)
         save_export(exp, out / "work" / f"{tag}.json")
         keep = set(changed) | set(hand)
+        rounds.write_base(out, stem, tag, {n: before[n].get("labels") or [] for n in keep})
         subset = type(exp)(exp.path, [f for f in exp.frames if f["name"] in keep], exp.config)
         save_export(subset, out / "rounds" / f"{tag}_items.json")
         chg = out / "rounds" / f"{tag}_changes.json"
