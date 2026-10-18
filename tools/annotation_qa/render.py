@@ -65,9 +65,15 @@ def issue_crop(image: FrameImage, frame: dict, issue, half: int = 90, zoom: int 
     origin = np.array([x0, y0], dtype=float)
     related = set(issue.related_label_ids)
     labels = frame.get("labels") or []
+    # split pieces etc.: label id -> category, each drawn in its class colour
+    hls = dict(getattr(issue, "highlights", None) or {})
     for lab in labels:
-        if lab["id"] != issue.label_id and lab["id"] not in related:
+        if lab["id"] != issue.label_id and lab["id"] not in related and lab["id"] not in hls:
             _draw_label(right, lab, origin, zoom, COLORS.get(lab.get("category"), DEFAULT_COLOR), 2)
+    for lab in labels:
+        if lab["id"] in hls and lab["id"] != issue.label_id:
+            _draw_label(right, lab, origin, zoom, (255, 255, 255), 6)
+            _draw_label(right, lab, origin, zoom, hilite_color(hls[lab["id"]]), 4)
     for lab in labels:
         if lab["id"] in related and lab["id"] != issue.label_id:
             _draw_label(right, lab, origin, zoom, CYAN, 3)
@@ -79,6 +85,10 @@ def issue_crop(image: FrameImage, frame: dict, issue, half: int = 90, zoom: int 
                 _draw_label(right, lab, origin, zoom, hilite_color(hl), 4)
             else:
                 _draw_label(right, lab, origin, zoom, MAGENTA, 3)
+    for x, y in getattr(issue, "markers", None) or []:  # e.g. split cut points
+        c = (int(round((x - x0) * zoom)), int(round((y - y0) * zoom)))
+        cv2.circle(right, c, 9, (255, 255, 255), 3)
+        cv2.circle(right, c, 9, (0, 0, 0), 1)
     if getattr(issue, "panel_tag", None):
         _tag(right, issue.panel_tag)
     gap = np.full((left.shape[0], GAP, 3), 40, np.uint8)

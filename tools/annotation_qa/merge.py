@@ -52,6 +52,24 @@ def apply_reverts(frames: list[dict], old_labels: dict[str, list], out: Path, ro
                 continue  # unknown change, or an added label (nothing to restore)
             before, after = rec["before"], rec.get("after")
             cur = next((l for l in frame["labels"] if str(l.get("id")) == lid), None)
+            if isinstance(after, list):  # a split: restore the original, drop the other pieces
+                ids = [str(p.get("id")) for p in after[1:]]
+                rest = [next((l for l in frame["labels"] if str(l.get("id")) == i), None)
+                        for i in ids]
+                if (cur is not None and _same(_snapshot(cur), after[0])
+                        and all(r is not None and _same(_snapshot(r), p)
+                                for r, p in zip(rest, after[1:]))):
+                    cur["category"] = before["category"]
+                    cur["poly2d"] = before["poly2d"]
+                    frame["labels"] = [l for l in frame["labels"] if str(l.get("id")) not in ids]
+                    applied += 1
+                elif cur is not None and _same(_snapshot(cur), before) and not any(rest):
+                    applied += 1  # already the original
+                else:
+                    conflicts += 1
+                    print(f"WARNING: {fname}: split label {lid} was edited in Scalabel; "
+                          "Scalabel edit wins over the revert")
+                continue
             if after is None:
                 if cur is None:
                     tmpl = next((l for l in old_labels.get(fname, []) if str(l.get("id")) == lid), None)

@@ -509,3 +509,45 @@ def change_anchor(before: dict | None, after: dict | None) -> list[int] | None:
     if at is None or best < 0.05:
         return mid(pb)
     return [int(round(at[0])), int(round(at[1]))]
+
+
+def point_at_arc(poly: dict, arc: float) -> list[float]:
+    """[x, y] at ``arc`` px along ``dense(poly)`` (clamped to the ends)."""
+    d = np.asarray(dense(poly), float)
+    cum = _arc(d)
+    return [float(np.interp(arc, cum, d[:, 0])), float(np.interp(arc, cum, d[:, 1]))]
+
+
+MIN_SPLIT_PIECE = 3.0  # px: no piece of a split may be shorter
+
+
+def split_poly(poly: dict, cuts: list[float], tol: float = SIMPLIFY_TOL) -> list[dict]:
+    """Cut an open poly's dense curve at ``cuts`` (arc px, increasing) into len(cuts)+1
+    all-L pieces. Each piece is Douglas-Peucker simplified (``tol``) with its ends kept
+    exactly; neighbouring pieces share their cut point exactly, the first piece starts at the
+    poly's first vertex and the last ends at its last vertex. Bezier segments are sampled with
+    ``dense`` (poly_to_points), so a curve becomes a polyline within ``tol`` of it."""
+    if poly.get("closed"):
+        raise ValueError("closed polys are not split")
+    d = np.asarray(dense(poly), float)
+    if len(d) < 2 or not np.isfinite(d).all():
+        raise ValueError("poly has no drawable curve")
+    keep = np.concatenate([[True], np.linalg.norm(np.diff(d, axis=0), axis=1) > 1e-9])
+    d = d[keep]
+    cum = _arc(d)
+    total = float(cum[-1])
+    cuts = [float(c) for c in cuts]
+    bounds = [0.0] + cuts + [total]
+    if not cuts or any(b - a < MIN_SPLIT_PIECE for a, b in zip(bounds, bounds[1:])):
+        raise ValueError(f"bad split cuts {cuts} for a {total:.1f} px line")
+    cut_pts = [np.array([np.interp(c, cum, d[:, 0]), np.interp(c, cum, d[:, 1])]) for c in cuts]
+    ends = [d[0]] + cut_pts + [d[-1]]
+    out = []
+    for k, (a, b) in enumerate(zip(bounds, bounds[1:])):
+        inner = d[(cum > a + 1e-6) & (cum < b - 1e-6)]
+        pts = np.vstack([ends[k][None], inner, ends[k + 1][None]])
+        v = _dp_poly(pts, False, tol)
+        verts = v.tolist()
+        verts[0], verts[-1] = ends[k].tolist(), ends[k + 1].tolist()  # exact shared ends
+        out.append({"vertices": verts, "types": "L" * len(verts), "closed": False})
+    return out

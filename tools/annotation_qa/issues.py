@@ -30,7 +30,8 @@ class Issue:
     reason: str  # one line, human readable
     anchor: tuple[float, float]  # image x, y for the crop centre
     # {"op":"set_category","to":str} | {"op":"shift","poly_index":int,"offsets":list[float]}
-    # | {"op":"delete"} | {"op":"drop_vertices","poly_index":int,"indices":list[int]} | None
+    # | {"op":"delete"} | {"op":"drop_vertices","poly_index":int,"indices":list[int]}
+    # | {"op":"split","poly_index":int,"cuts":list[float],"categories":list[str]} | None
     fix: dict | None
     hand_fix: bool  # True -> cannot auto-fix; frame goes to review unchanged
     related_label_ids: list[str] = field(default_factory=list)

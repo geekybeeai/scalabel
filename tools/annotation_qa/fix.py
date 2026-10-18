@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import shutil
@@ -15,7 +16,7 @@ from annotation_qa import rounds
 from annotation_qa.data import ORIGINALS_DIR, load_export, save_export
 from annotation_qa.exclude import read_excluded
 from annotation_qa.geometry import (LINE_WIDTH, ShiftNotRepresentable, _segments, change_anchor,
-                                      max_move, partial_shift)
+                                      max_move, partial_shift, point_at_arc, split_poly)
 from annotation_qa.issues import (Issue, calibration_status, file_sha1, format_calibration,
                                   load_issues_tolerant, read_marks, read_meta)
 
@@ -78,12 +79,53 @@ def _drop_vertices(poly: dict, indices: list[int]) -> dict:
     return out
 
 
-def _apply_op(label: dict, fix: dict) -> bool:
-    """Mutate ``label``; return False when the label should be deleted."""
+_ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def new_label_id(seed: str, taken: set[str]) -> str:
+    """A 16-char [A-Za-z0-9] id like Scalabel's, derived from ``seed`` (so a rebuilt round
+    gets the same ids) and not in ``taken``; it is added to ``taken``."""
+    salt = 0
+    while True:
+        h = hashlib.sha256(f"{seed}|{salt}".encode()).digest()
+        nid = "".join(_ID_CHARS[b % len(_ID_CHARS)] for b in h[:16])
+        if nid not in taken:
+            taken.add(nid)
+            return nid
+        salt += 1
+
+
+def _split(label: dict, fix: dict, new_labels: list, taken: set[str]) -> None:
+    """op "split": cut poly ``poly_index`` at ``cuts`` (arc px along its dense curve). The
+    first piece stays in ``label`` (same id, attributes and other polys); every other piece
+    becomes a new label (new unique id, same attributes) appended to ``new_labels``."""
+    i = fix.get("poly_index", 0)
+    cats = list(fix["categories"])
+    pieces = split_poly(label["poly2d"][i], fix["cuts"])
+    if len(cats) != len(pieces):
+        raise ValueError(f"split: {len(pieces)} pieces but {len(cats)} categories")
+    taken.add(str(label["id"]))
+    for k, (piece, cat) in enumerate(zip(pieces[1:], cats[1:]), 1):
+        new = copy.deepcopy(label)
+        new["id"] = new_label_id(f"{label['id']}|{i}|{k}|{fix['cuts']}", taken)
+        new["category"] = cat
+        new["poly2d"] = [piece]
+        new_labels.append(new)
+    label["poly2d"][i] = pieces[0]
+    label["category"] = cats[0]
+
+
+def _apply_op(label: dict, fix: dict, new_labels: list | None = None,
+              taken: set[str] | None = None) -> bool:
+    """Mutate ``label``; return False when the label should be deleted. A "split" appends
+    its extra pieces (new labels, ids not in ``taken``) to ``new_labels``."""
     op = fix["op"]
     if op == "delete":
         return False
-    if op == "set_category":
+    if op == "split":
+        _split(label, fix, new_labels if new_labels is not None else [],
+               taken if taken is not None else set())
+    elif op == "set_category":
         label["category"] = fix["to"]
     elif op == "shift":
         i = fix.get("poly_index", 0)
@@ -295,11 +337,13 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
             plan = reps
             if combined and len(reps) > 1:
                 dels = [i for i in reps if i.fix["op"] == "delete"]
-                if dels:
-                    plan = dels[:1]
+                splits = [i for i in reps if i.fix["op"] == "split"]
+                if dels or splits:  # a delete wins, then a split (it sets the classes)
+                    plan = (dels or splits)[:1]
+                    verb = "deleted" if dels else "split"
                     for i in reps:
                         if i is not plan[0]:
-                            skip(i, f"label deleted by {plan[0].key}")
+                            skip(i, f"label {verb} by {plan[0].key}")
                 else:
                     plan, geo = [], None
                     for i in reps:
@@ -318,9 +362,11 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
             trial = copy.deepcopy(label)
             applied: list[Issue] = []
             keep_label = True
+            pieces: list[dict] = []
+            taken = {str(l["id"]) for l in labels}
             for iss in plan:
                 try:
-                    keep_label = _apply_op(trial, iss.fix)
+                    keep_label = _apply_op(trial, iss.fix, pieces, taken)
                 except Exception as e:  # noqa: BLE001
                     skip(iss, f"{type(e).__name__}: {e}")
                     continue
@@ -332,10 +378,20 @@ def apply(issue_type: str | list[str], out: Path, version: int, force: bool = Fa
                 after = None
             else:
                 labels[idx] = trial
+                labels[idx + 1:idx + 1] = pieces  # split pieces follow the original
                 after = trial
             snap = _snapshot(next(l for l in before[fname]["labels"] if l["id"] == lid))
-            rec = {"before": snap, "after": _snapshot(after)}
-            rec["anchor"] = change_anchor(rec["before"], rec["after"])
+            if pieces:  # a split: "after" is the list of piece labels, the first keeps the id
+                rec = {"before": snap,
+                       "after": [{"id": l["id"], **_snapshot(l)} for l in [trial] + pieces]}
+                sp = next(i.fix for i in applied if i.fix["op"] == "split")
+                bpoly = snap["poly2d"][sp.get("poly_index", 0)]
+                rec["anchor"] = [int(round(v)) for v in point_at_arc(bpoly, sp["cuts"][0])]
+                rec["cut_points"] = [[round(v, 2) for v in point_at_arc(bpoly, c)]
+                                     for c in sp["cuts"]]
+            else:
+                rec = {"before": snap, "after": _snapshot(after)}
+                rec["anchor"] = change_anchor(rec["before"], rec["after"])
             rec["issue_types"] = [i.issue_type for i in applied]
             rec["ops"] = [i.fix["op"] for i in applied]
             if not combined:

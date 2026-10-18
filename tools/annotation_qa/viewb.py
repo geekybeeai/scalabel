@@ -128,8 +128,28 @@ def _word(cat: str) -> str:
     return _CLASS_WORD.get(cat) or cat.replace("_", " ").upper()
 
 
+def split_pieces(after) -> list[dict] | None:
+    """The piece snapshots of a split change ("after" is a list), else None."""
+    return after if isinstance(after, list) else None
+
+
+def _main(after):
+    """The label that keeps the id: the first piece of a split, else ``after`` itself."""
+    return after[0] if isinstance(after, list) else after
+
+
+def _split_text(before: dict, pieces: list[dict]) -> str:
+    words = " | ".join(_word(p["category"]) if p["category"] != before["category"]
+                       else _word(p["category"]).lower() for p in pieces)
+    return f"{_word(before['category']).lower()} → split in {len(pieces)}: {words}"
+
+
 def class_change(before: dict | None, after: dict | None) -> str:
-    """"soft edge → CURB" style text when the category changed, else ""."""
+    """"soft edge → CURB" style text when the category changed, else "". A split reads
+    "curb → split in 2: SOFT EDGE | curb" (changed classes in capitals)."""
+    pieces = split_pieces(after)
+    if before and pieces:
+        return _split_text(before, pieces)
     if not before or not after or before["category"] == after["category"]:
         return ""
     return f"{_word(before['category']).lower()} → {_word(after['category'])}"
@@ -141,6 +161,8 @@ def ops_text(before: dict | None, after: dict | None) -> str:
     cc = class_change(before, after)
     if not cc:
         return ""
+    if split_pieces(after):
+        return cc
     rest = [p for p in describe(before, after).split(" + ")
             if p != f"{before['category']} → {after['category']}"]
     return " + ".join([cc] + rest)
@@ -151,6 +173,10 @@ def describe(before: dict | None, after: dict | None) -> str:
         return "deleted"
     if before is None:
         return "added"
+    pieces = split_pieces(after)
+    if pieces:
+        return f"split into {len(pieces)} pieces (" + ", ".join(
+            f"{p.get('id')}: {p['category']}" for p in pieces) + ")"
     parts = []
     if before["category"] != after["category"]:
         parts.append(f"{before['category']} → {after['category']}")
@@ -300,14 +326,22 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
                      "class_change": class_change(rec.get("before"), rec.get("after")),
                      "ops_text": ops_text(rec.get("before"), rec.get("after")),
                      "what": describe(rec.get("before"), rec.get("after")),
-                     "anchor": rec.get("anchor") or change_anchor(rec.get("before"), rec.get("after")),
+                     "anchor": rec.get("anchor") or change_anchor(rec.get("before"), _main(rec.get("after"))),
                      "merged": is_merged, "review": "", "shipped": "",
                      "reverted": False, "revert_state": "", "round_tag": r["tag"], "frame_name": fname,
                      "before_crop": f"/viewb/crop?{q}&side=before",
                      "after_crop": f"/viewb/crop?{q}&side=after"}
                 if is_merged and fname in cur:
                     now = _snapshot(shipped.get(lid))
-                    if not _same(now, rec.get("after")):
+                    pieces = split_pieces(rec.get("after"))
+                    if pieces:  # a split ships when every piece is still there, unchanged
+                        rest = [_snapshot(shipped.get(p.get("id"))) for p in pieces[1:]]
+                        if not (_same(now, pieces[0]) and all(
+                                _same(n, p) for n, p in zip(rest, pieces[1:]))):
+                            c["review"] = ("reverted" if _same(now, rec.get("before"))
+                                           and not any(rest) else "changed in review")
+                            c["shipped"] = describe(rec.get("before"), now)
+                    elif not _same(now, rec.get("after")):
                         c["review"] = ("reverted" if _same(now, rec.get("before"))
                                        else "changed in review")
                         c["shipped"] = describe(rec.get("before"), now)
@@ -368,6 +402,11 @@ def frame_specs(out: Path, stem: str, frame_name: str) -> dict[tuple[str, str, s
         if (stem, r["tag"]) in merged:
             shipped = _work_frames(out, stem).get(frame_name, (0, None))[1]
         for lid, rec in changes.items():
+            pieces = split_pieces(rec.get("after"))
+            if pieces:
+                specs.update(_split_specs(out, r["tag"], frame_name, lid, rec, pieces,
+                                          proposed, shipped))
+                continue
             ref = rec.get("before") or rec.get("after")
             pts = [p for poly in (ref or {}).get("poly2d") or [] for p in dense(poly)]
             if not pts:
@@ -393,6 +432,47 @@ def frame_specs(out: Path, stem: str, frame_name: str) -> dict[tuple[str, str, s
                         anchor=anchor, label_id=lid, related_label_ids=[], highlight_category=hl,
                         panel_tag=f"{side}: {cat}" if hl else None),
                     "dest": out / "viewb" / f"{_crop_name(key)}.jpg"}
+    return specs
+
+
+def _split_specs(out: Path, tag: str, frame_name: str, lid: str, rec: dict, pieces: list[dict],
+                 proposed: dict, shipped: dict | None) -> dict:
+    """Crop specs of a split: before = the original line in its class colour; after = every
+    piece in its class colour (red curb / green soft) with white cut markers. Centred on the
+    first cut."""
+    before = rec.get("before") or {}
+    ids = {str(p.get("id")) for p in pieces} | {str(lid)}
+    cuts = [list(map(float, c)) for c in rec.get("cut_points") or []]
+    anchor = tuple(float(v) for v in (rec.get("anchor") or (cuts[0] if cuts else [0, 0])))
+    specs = {}
+    for side in ("before", "after"):
+        if side == "after" and shipped is not None:
+            base, labels = shipped, list(_labels(shipped))
+        else:
+            base = proposed
+            labels = [l for l in _labels(proposed) if str(l["id"]) not in ids]
+            if side == "before":
+                labels.append({"id": lid, **before})
+            else:
+                labels += [dict(p) for p in pieces]
+        if side == "before":
+            hl, hls, marks = before.get("category"), {}, []
+            tag_txt = f"before: {before.get('category')}"
+        else:
+            present = {str(l["id"]): l.get("category") for l in labels}
+            hls = {str(p.get("id")): present[str(p.get("id"))] for p in pieces[1:]
+                   if str(p.get("id")) in present}
+            hl, marks = present.get(str(lid)), cuts
+            tag_txt = f"after: split in {len(pieces)}"
+        frame = {"name": frame_name, "url": base["url"], "labels": labels}
+        key = json.dumps([RENDER_VERSION, "split", frame["url"], labels, anchor, lid, marks],
+                         sort_keys=True)
+        specs[(tag, lid, side)] = {
+            "frame": frame,
+            "issue": SimpleNamespace(anchor=anchor, label_id=lid, related_label_ids=[],
+                                     highlight_category=hl, highlights=hls, markers=marks,
+                                     panel_tag=tag_txt),
+            "dest": Path(out) / "viewb" / f"{_crop_name(key)}.jpg"}
     return specs
 
 

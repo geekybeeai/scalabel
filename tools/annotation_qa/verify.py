@@ -314,10 +314,34 @@ def _set_category(issue, rec) -> dict:
             "reasons": [("strong support: " if ok else "weak support: ") + facts]}
 
 
+# calibrated 2026-10-18 on Roshan's curb_soft_v2 review (annotation_qa/eval/split_eval.py):
+# a split is "ok" only when every piece's vote margin reaches this, else "check"
+SPLIT_OK_MARGIN = 0.6
+SPLIT_OK_VOTES = 2  # voting stretches each piece needs for "ok"
+
+
+def _split(issue, rec) -> dict:
+    """A curb_soft_split change: judged from the per-piece votes stored with the issue."""
+    if issue is None or not (issue.features or {}).get("pieces"):
+        return {"verdict": "check", "reasons": ["split: no stored votes to judge it by"]}
+    pieces = issue.features["pieces"]
+    weak = [pc for pc in pieces
+            if pc.get("margin", 0.0) < SPLIT_OK_MARGIN or pc.get("n_votes", 0) < SPLIT_OK_VOTES]
+    facts = [f"{'curb' if pc['category'] == 'curb_road_edge' else 'soft'} "
+             f"{pc['s1'] - pc['s0']:.0f} px: margin {pc.get('margin', 0.0):.2f} "
+             f"({pc.get('n_for', 0)}/{pc.get('n_votes', 0)} votes)" for pc in pieces]
+    if weak:
+        return {"verdict": "check", "reasons": [
+            f"weak piece votes (margin < {SPLIT_OK_MARGIN} or < {SPLIT_OK_VOTES} votes)"] + facts}
+    return {"verdict": "ok", "reasons": ["every piece strongly supported"] + facts}
+
+
 def verify_frame_change(img, issue, rec, frame, label_id) -> dict:
     before, after = rec.get("before"), rec.get("after")
     if before is None or after is None:
         return {"verdict": "check", "reasons": ["label deleted: confirm by eye"]}
+    if isinstance(after, list):  # a split: "after" lists the pieces
+        return _split(issue, rec)
     op = (issue.fix or {}).get("op") if issue else None
     if op is None:
         op = "set_category" if before.get("category") != after.get("category") else "shift"
@@ -337,7 +361,9 @@ def verify_combined(img, issues_by_type: dict, rec: dict, frame, label_id) -> di
     parts = []
     for t, op in zip(rec["issue_types"], rec["ops"]):
         issue = issues_by_type.get(t)
-        if op == "set_category":
+        if op == "split" or isinstance(rec.get("after"), list):
+            v = _split(issue, rec)
+        elif op == "set_category":
             v = _set_category(issue, rec)
         elif op == "shift":
             v = _shift(img, rec["after"].get("category"), issue, {**rec, "label_id": label_id},
