@@ -136,6 +136,18 @@ def built_at(out: Path, tag: str, base: dict | None = None) -> datetime | None:
 
 # ---- verify files: OUT/rounds/<tag>_verify.json ----
 VERIFY_META = "__meta__"
+_sha_cache: dict[Path, tuple[int, int, str]] = {}
+
+
+def _file_sha1(path: Path) -> str:
+    """sha1 of a file's bytes, cached by (mtime_ns, size) (View B asks on every request)."""
+    st = path.stat()
+    hit = _sha_cache.get(path)
+    if hit and hit[:2] == (st.st_mtime_ns, st.st_size):
+        return hit[2]
+    h = hashlib.sha1(path.read_bytes()).hexdigest()
+    _sha_cache[path] = (st.st_mtime_ns, st.st_size, h)
+    return h
 
 
 def verdicts_current(out: Path, tag: str, raw: dict) -> bool:
@@ -149,8 +161,7 @@ def verdicts_current(out: Path, tag: str, raw: dict) -> bool:
         return False
     meta = raw.get(VERIFY_META) if isinstance(raw, dict) else None
     if isinstance(meta, dict) and meta.get("changes_sha1"):
-        h = hashlib.sha1(changes.read_bytes()).hexdigest()
-        return meta["changes_sha1"] == h
+        return meta["changes_sha1"] == _file_sha1(changes)
     vpath = rounds_dir / f"{tag}_verify.json"
     try:
         return vpath.stat().st_mtime_ns >= changes.stat().st_mtime_ns
