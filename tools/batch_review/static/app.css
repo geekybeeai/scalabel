@@ -74,12 +74,7 @@ body.noside #side { display: none; }
 .pane.drag { cursor: grabbing; }
 .pane .cap { position: absolute; z-index: 2; top: 4px; left: 6px; background: rgba(0,0,0,.55);
   padding: 1px 6px; border-radius: 3px; font-size: 11px; pointer-events: none; }
-.stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
-.stage img { display: block; user-select: none; -webkit-user-drag: none; image-rendering: auto; }
-.stage svg { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
-.stage svg path { fill: none; stroke-linecap: round;
-  stroke-linejoin: round; pointer-events: visibleStroke; }
-.stage svg.nolines { display: none; }
+.pane canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 #loading { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
   background: rgba(0,0,0,.35); font-size: 16px; pointer-events: none; }
 #loading.on { display: flex; }
@@ -94,6 +89,8 @@ body.noside #side { display: none; }
   border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; font-size: 13px;
   box-shadow: 0 6px 24px rgba(0,0,0,.5); }
 #help div { margin-top: 6px; color: var(--muted); }
+#tip { position: fixed; z-index: 12; background: rgba(0,0,0,.85); border: 1px solid var(--line);
+  padding: 2px 7px; border-radius: 3px; font-size: 12px; pointer-events: none; white-space: nowrap; }
 #toast { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); background: #111;
   border: 1px solid var(--line); padding: 6px 14px; border-radius: 5px; opacity: 0;
   transition: opacity .2s; pointer-events: none; z-index: 10; }

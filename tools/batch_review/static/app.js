@@ -80,9 +80,6 @@ function toggleCat(name, on) {
   lsSet("hidden", [...S.hidden]);
   renderCats(); applyHidden();
 }
-function applyHidden() {
-  for (const g of $("#paneR svg").querySelectorAll("g[data-cat]")) g.style.display = S.hidden.has(g.dataset.cat) ? "none" : "";
-}
 
 // ---------- one frame ----------
 function pathD(poly) { // Scalabel poly2d: "C" vertices are cubic Bezier control points
@@ -96,33 +93,97 @@ function pathD(poly) { // Scalabel poly2d: "C" vertices are cubic Bezier control
   }
   return poly.closed ? d + " Z" : d;
 }
-function renderLabels() {
-  const svg = $("#paneR svg");
+// ---------- drawing ----------
+// One screen-sized canvas per pane, like Scalabel. Full-size image and overlay layers of these
+// ~6000 x 13000 px images need hundreds of MB of GPU memory each and made Chrome drop tiles.
+const LOW_MAX = 4096; // longest side of the zoomed-out copy
+let paths = []; // one entry per poly: {cat, display, id, color, path: Path2D, verts}
+function buildPaths() {
   const cat = {};
   (S.batch ? S.batch.categories : []).forEach((c) => { cat[c.name] = c; });
-  const w = +$("#lineW").value, op = +$("#lineO").value, showV = $("#showVerts").checked;
-  const groups = {};
+  paths = [];
   for (const l of (S.frame && S.frame.labels) || []) {
     const c = cat[l.category] || { color: [255, 255, 255], display: l.category };
-    const col = rgb(c.color);
-    let s = "";
     for (const poly of l.poly2d) {
-      s += `<path d="${pathD(poly)}" stroke="${col}" stroke-opacity="${op}"><title>${esc(c.display)} · ${esc(l.id)}</title></path>`;
-      if (showV) {
-        const t = poly.types || "";
-        poly.vertices.forEach((pt, k) => {
-          const ctl = t[k] === "C";
-          s += `<circle class="v" cx="${pt[0]}" cy="${pt[1]}" fill="${ctl ? "#fff" : col}" stroke="#000" stroke-width="${0.6 / S.view.s}" r="${(ctl ? 2.5 : 3.5) / S.view.s}" data-r="${ctl ? 2.5 : 3.5}"/>`;
-        });
+      const d = pathD(poly);
+      if (!d) continue;
+      const t = poly.types || "";
+      paths.push({ cat: l.category, display: c.display, id: l.id, color: rgb(c.color), path: new Path2D(d),
+        verts: poly.vertices.map((p, k) => [p[0], p[1], t[k] === "C"]) });
+    }
+  }
+  S.hover = null;
+}
+function renderLabels() { buildPaths(); draw(); }
+function applyHidden() { if (S.hover && S.hidden.has(S.hover.cat)) S.hover = null; draw(); }
+
+function makeLow(img) { // a smaller copy, drawn when zoomed out (fast, and smoother)
+  const k = Math.min(1, LOW_MAX / Math.max(img.naturalWidth, img.naturalHeight));
+  if (k >= 1) return null;
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+  const x = c.getContext("2d");
+  x.imageSmoothingQuality = "high";
+  x.drawImage(img, 0, 0, c.width, c.height);
+  return { src: c, k: c.width / img.naturalWidth };
+}
+
+let rafD = 0;
+function draw() { cancelAnimationFrame(rafD); rafD = requestAnimationFrame(drawNow); }
+function drawNow() {
+  const dpr = window.devicePixelRatio || 1, v = S.view, bright = +$("#bright").value;
+  for (const pane of [$("#paneL"), $("#paneR")]) {
+    const cv = pane.querySelector("canvas"), r = pane.getBoundingClientRect();
+    const cw = Math.max(1, Math.round(r.width * dpr)), ch = Math.max(1, Math.round(r.height * dpr));
+    if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+    const x = cv.getContext("2d");
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    x.fillStyle = "#000"; x.fillRect(0, 0, cw, ch);
+    if (!S.img) continue;
+    x.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * v.tx, dpr * v.ty);
+    // only the visible part of the image (image px)
+    const x0 = Math.max(0, -v.tx / v.s), y0 = Math.max(0, -v.ty / v.s);
+    const x1 = Math.min(S.W, (r.width - v.tx) / v.s), y1 = Math.min(S.H, (r.height - v.ty) / v.s);
+    if (x1 > x0 && y1 > y0) {
+      const src = S.low && v.s * dpr <= S.low.k * 1.25 ? S.low : { src: S.img, k: 1 };
+      x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+      if ("filter" in x) x.filter = bright !== 1 ? `brightness(${bright})` : "none";
+      x.drawImage(src.src, x0 * src.k, y0 * src.k, (x1 - x0) * src.k, (y1 - y0) * src.k, x0, y0, x1 - x0, y1 - y0);
+      if ("filter" in x) x.filter = "none";
+    }
+    if (pane.id === "paneR" && $("#showLines").checked) drawLines(x, v.s);
+  }
+}
+function drawLines(x, s) {
+  const w = +$("#lineW").value, op = +$("#lineO").value, showV = $("#showVerts").checked;
+  x.lineCap = "round"; x.lineJoin = "round";
+  x.globalAlpha = op; x.lineWidth = w / s;
+  for (const p of paths) if (!S.hidden.has(p.cat)) { x.strokeStyle = p.color; x.stroke(p.path); }
+  x.globalAlpha = 1;
+  if (showV) {
+    x.lineWidth = 0.8 / s; x.strokeStyle = "#000";
+    for (const p of paths) {
+      if (S.hidden.has(p.cat)) continue;
+      for (const [vx, vy, ctl] of p.verts) {
+        x.beginPath(); x.arc(vx, vy, (ctl ? 2.5 : 3.5) / s, 0, 2 * Math.PI);
+        x.fillStyle = ctl ? "#fff" : p.color; x.fill(); x.stroke();
       }
     }
-    (groups[l.category] = groups[l.category] || []).push(s);
   }
-  S.lineW = w;
-  svg.setAttribute("stroke-width", w / S.view.s); // constant on screen; applyView keeps it so
-  svg.innerHTML = Object.entries(groups).map(([k, v]) => `<g data-cat="${esc(k)}">${v.join("")}</g>`).join("");
-  svg.classList.toggle("nolines", !$("#showLines").checked);
-  applyHidden();
+  if (S.hover) { // the line under the mouse: white halo
+    x.lineWidth = (w + 4) / s; x.strokeStyle = "#fff"; x.stroke(S.hover.path);
+    x.lineWidth = w / s; x.strokeStyle = S.hover.color; x.stroke(S.hover.path);
+  }
+}
+const hitCtx = document.createElement("canvas").getContext("2d");
+function hitTest(ix, iy) { // the topmost visible line within a few screen px of image point (ix, iy)
+  if (!$("#showLines").checked) return null;
+  hitCtx.lineWidth = Math.max(+$("#lineW").value, 8) / S.view.s;
+  for (let k = paths.length - 1; k >= 0; k--) {
+    const p = paths[k];
+    if (!S.hidden.has(p.cat) && hitCtx.isPointInStroke(p.path, ix, iy)) return p;
+  }
+  return null;
 }
 
 function taskItem(link) {
@@ -169,18 +230,15 @@ async function go(i, fresh) {
   lsSet("idx:" + S.batch.name, i);
   history.replaceState(null, "", `#b=${encodeURIComponent(S.batch.name)}&i=${i + 1}`);
   renderInfo();
-  const imgs = document.querySelectorAll(".stage img");
   const keep = $("#keepZoom").checked && !fresh;
-  if (imgs[0].getAttribute("src") === f.image) { renderLabels(); return; }
+  if (S.imgUrl === f.image) { renderLabels(); return; }
   $("#loading").classList.add("on");
   const pending = new Image();
   pending.onload = () => {
     if (tok !== S.token) return;
     const sameSize = pending.naturalWidth === S.W && pending.naturalHeight === S.H;
     S.W = pending.naturalWidth; S.H = pending.naturalHeight;
-    imgs.forEach((im) => { im.src = f.image; im.width = S.W; im.height = S.H; });
-    const svg = $("#paneR svg");
-    svg.setAttribute("width", S.W); svg.setAttribute("height", S.H); svg.setAttribute("viewBox", `0 0 ${S.W} ${S.H}`);
+    S.img = pending; S.imgUrl = f.image; S.low = makeLow(pending);
     applyLayout();
     if (!(keep && sameSize)) fit();
     renderLabels(); applyView();
@@ -221,19 +279,9 @@ function fit() {
   S.view = { s, tx: (pw - S.W * s) / 2, ty: (ph - S.H * s) / 2 };
   applyView();
 }
-let rafV = 0;
 function applyView() {
-  const v = S.view, tf = `translate(${v.tx}px, ${v.ty}px) scale(${v.s})`;
-  document.querySelectorAll(".stage").forEach((st) => { st.style.transform = tf; });
-  $("#zoomPct").textContent = Math.round(v.s * 1000) / 10 + "%";
-  cancelAnimationFrame(rafV);
-  rafV = requestAnimationFrame(() => { // keep lines and vertex dots a constant size on screen
-    // (vector-effect: non-scaling-stroke ignores the CSS transform, so scale by hand)
-    $("#paneR svg").setAttribute("stroke-width", (S.lineW || 2.5) / v.s);
-    for (const c of $("#paneR svg").querySelectorAll("circle.v")) {
-      c.setAttribute("r", (+c.dataset.r) / v.s); c.setAttribute("stroke-width", 0.6 / v.s);
-    }
-  });
+  $("#zoomPct").textContent = Math.round(S.view.s * 1000) / 10 + "%";
+  draw();
 }
 function zoomAt(px, py, f) {
   const v = S.view, ns = Math.min(Math.max(v.s * f, 0.005), 40);
@@ -256,14 +304,32 @@ function setupPanes() {
       pane.setPointerCapture(e.pointerId); pane.classList.add("drag");
     });
     pane.addEventListener("pointermove", (e) => {
-      if (!drag) return;
+      if (!drag) { hover(pane, e); return; }
       S.view.tx = drag.tx + e.clientX - drag.x; S.view.ty = drag.ty + e.clientY - drag.y; applyView();
     });
     const end = () => { drag = null; pane.classList.remove("drag"); };
     pane.addEventListener("pointerup", end); pane.addEventListener("pointercancel", end);
+    pane.addEventListener("pointerleave", () => { $("#tip").hidden = true; if (S.hover) { S.hover = null; draw(); } });
     pane.addEventListener("dblclick", (e) => { const r = pane.getBoundingClientRect(); zoomAt(e.clientX - r.left, e.clientY - r.top, 2); });
   }
   window.addEventListener("resize", relayout);
+}
+
+let hoverBusy = false;
+function hover(pane, e) {
+  if (hoverBusy) return;
+  hoverBusy = true;
+  requestAnimationFrame(() => {
+    hoverBusy = false;
+    const r = pane.getBoundingClientRect();
+    const h = hitTest((e.clientX - r.left - S.view.tx) / S.view.s, (e.clientY - r.top - S.view.ty) / S.view.s);
+    const tip = $("#tip");
+    if (h) {
+      tip.textContent = `${h.display} · ${h.id}`;
+      tip.style.left = e.clientX + 14 + "px"; tip.style.top = e.clientY + 14 + "px"; tip.hidden = false;
+    } else tip.hidden = true;
+    if (h !== S.hover) { S.hover = h; draw(); }
+  });
 }
 
 // ---------- url hash ----------
@@ -302,7 +368,7 @@ function wire() {
   $("#layout").onchange = () => { lsSet("#layout", $("#layout").value); relayout(); };
   $("#sideBtn").onclick = toggleSide;
   $("#helpBtn").onclick = () => { $("#help").hidden = !$("#help").hidden; };
-  $("#bright").oninput = () => { lsSet("#bright", $("#bright").value); document.querySelectorAll(".stage img").forEach((im) => { im.style.filter = `brightness(${$("#bright").value})`; }); };
+  $("#bright").oninput = () => { lsSet("#bright", $("#bright").value); draw(); };
   $("#zIn").onclick = () => zoomCenter(1.4); $("#zOut").onclick = () => zoomCenter(1 / 1.4);
   $("#zFit").onclick = fit;
   $("#z100").onclick = () => { const [pw, ph] = paneSize(); zoomAt(pw / 2, ph / 2, 1 / S.view.s); };
@@ -348,7 +414,6 @@ function restorePrefs() {
   S.hidden = new Set(lsGet("hidden", []));
   for (const id of ["#showLines", "#showVerts", "#keepZoom"]) { const v = lsGet(id, null); if (v !== null) $(id).checked = v; }
   for (const id of ["#lineW", "#lineO", "#bright"]) { const v = lsGet(id, null); if (v !== null) $(id).value = v; }
-  document.querySelectorAll(".stage img").forEach((im) => { im.style.filter = `brightness(${$("#bright").value})`; });
 }
 
 restorePrefs(); wire(); setupPanes();

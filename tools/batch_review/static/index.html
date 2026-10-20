@@ -52,8 +52,8 @@
       </span>
     </div>
     <div id="panes">
-      <div class="pane" id="paneL"><div class="cap">Original</div><div class="stage"><img alt="original image"></div></div>
-      <div class="pane" id="paneR"><div class="cap">Annotated</div><div class="stage"><img alt="annotated image"><svg xmlns="http://www.w3.org/2000/svg"></svg></div></div>
+      <div class="pane" id="paneL"><div class="cap">Original</div><canvas aria-label="original image"></canvas></div>
+      <div class="pane" id="paneR"><div class="cap">Annotated</div><canvas aria-label="annotated image"></canvas></div>
       <div id="loading">Loading…</div>
     </div>
     <footer id="player">
@@ -74,6 +74,7 @@
   <div><kbd>H</kbd> hide / show lines &nbsp; <kbd>1</kbd>…<kbd>9</kbd> toggle a category</div>
   <div><kbd>B</kbd> side panel &nbsp; <kbd>V</kbd> next layout &nbsp; <kbd>?</kbd> this help</div>
 </div>
+<div id="tip" hidden></div>
 <div id="toast"></div>
 <script src="/static/app.js"></script>
 </body>
