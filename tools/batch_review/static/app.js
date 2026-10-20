@@ -136,20 +136,22 @@ function renderInfo() {
   $("#fname").textContent = f.name.split("/").pop();
   $("#fname").title = f.name + " (click to copy)";
   $("#openSc").href = f.scalabel;
-  $("#taskItem").textContent = `${S.batch.project} · ${taskItem(f.scalabel)}`;
+  $("#taskItem").textContent = taskItem(f.scalabel);
+  $("#taskItem").title = "Scalabel project " + S.batch.project;
   if (f.geo) {
     const lat = f.geo.lat.toFixed(7).replace(/0+$/, "").replace(/\.$/, ""), lon = f.geo.lon.toFixed(7).replace(/0+$/, "").replace(/\.$/, "");
-    $("#geo").innerHTML = `<span class="geo">Lat <span class="val mono">${lat}</span><button class="small" data-copy="${lat}" data-what="latitude">Copy</button>`
-      + ` Lon <span class="val mono">${lon}</span><button class="small" data-copy="${lon}" data-what="longitude">Copy</button>`
-      + `<button class="small" data-copy="${lat}, ${lon}" data-what="lat, lon">Copy both</button>`
-      + `<a class="btn" id="mapsA" href="${esc(f.geo.maps)}" target="_blank" rel="noopener">Google Maps</a>`
-      + `<a class="btn" id="svA" href="${esc(f.geo.streetview)}" target="_blank" rel="noopener">Street View</a></span>`;
+    // click a value to copy it; the button copies both
+    $("#geo").innerHTML = `<span class="geo"><span class="val mono copyable" data-copy="${lat}" data-what="latitude" title="Latitude, click to copy">${lat}</span>`
+      + `<span class="val mono copyable" data-copy="${lon}" data-what="longitude" title="Longitude, click to copy">${lon}</span>`
+      + `<button class="small" data-copy="${lat}, ${lon}" data-what="lat, lon" title="Copy lat, lon (L)">Copy</button>`
+      + `<a class="btn" href="${esc(f.geo.maps)}" target="_blank" rel="noopener" title="Google Maps (M)">Maps</a>`
+      + `<a class="btn" href="${esc(f.geo.streetview)}" target="_blank" rel="noopener" title="Street View (S)">Street View</a></span>`;
   } else {
-    $("#geo").innerHTML = `<span class="muted">No lat/lon for this image in the CSV</span>`;
+    $("#geo").innerHTML = `<span class="muted" title="No row for this image in the lat/lon CSV">no lat/lon</span>`;
   }
   $("#cad").innerHTML = f.cad
-    ? `<a class="btn" href="${esc(f.cad.url)}" target="_blank" rel="noopener" title="${esc(f.cad.file)}">CAD image</a>`
-    : `<span class="muted">No CAD image</span>`;
+    ? `<a class="btn" href="${esc(f.cad.url)}" target="_blank" rel="noopener" title="CAD image ${esc(f.cad.file)}">CAD</a>`
+    : `<span class="muted">no CAD</span>`;
   $("#jump").value = f.index + 1; $("#slider").value = f.index + 1;
   renderCats();
 }
@@ -179,6 +181,7 @@ async function go(i, fresh) {
     imgs.forEach((im) => { im.src = f.image; im.width = S.W; im.height = S.H; });
     const svg = $("#paneR svg");
     svg.setAttribute("width", S.W); svg.setAttribute("height", S.H); svg.setAttribute("viewBox", `0 0 ${S.W} ${S.H}`);
+    applyLayout();
     if (!(keep && sameSize)) fit();
     renderLabels(); applyView();
     $("#loading").classList.remove("on");
@@ -200,6 +203,17 @@ async function preload(i) {
 
 // ---------- synced zoom / pan ----------
 function paneSize() { const r = $("#paneL").getBoundingClientRect(); return [r.width, r.height]; }
+// side by side or top and bottom: "auto" picks the one that shows the image larger
+function applyLayout() {
+  const mode = $("#layout").value, p = $("#panes").getBoundingClientRect();
+  let col = mode === "col";
+  if (mode === "auto" && S.W && S.H) {
+    const g = 3, row = Math.min((p.width - g) / 2 / S.W, p.height / S.H);
+    col = Math.min(p.width / S.W, (p.height - g) / 2 / S.H) > row;
+  }
+  $("#panes").classList.toggle("col", col);
+}
+function relayout() { applyLayout(); fit(); }
 function fit() {
   const [pw, ph] = paneSize();
   if (!S.W || !S.H) return;
@@ -249,7 +263,7 @@ function setupPanes() {
     pane.addEventListener("pointerup", end); pane.addEventListener("pointercancel", end);
     pane.addEventListener("dblclick", (e) => { const r = pane.getBoundingClientRect(); zoomAt(e.clientX - r.left, e.clientY - r.top, 2); });
   }
-  window.addEventListener("resize", () => fit());
+  window.addEventListener("resize", relayout);
 }
 
 // ---------- url hash ----------
@@ -285,6 +299,9 @@ function wire() {
   $("#catNone").onclick = () => { (S.batch ? S.batch.categories : []).forEach((c) => S.hidden.add(c.name)); lsSet("hidden", [...S.hidden]); renderCats(); applyHidden(); };
   for (const id of ["#showLines", "#showVerts", "#lineW", "#lineO"]) $(id).addEventListener("input", () => { lsSet(id, $(id).type === "checkbox" ? $(id).checked : $(id).value); renderLabels(); });
   $("#keepZoom").onchange = () => lsSet("#keepZoom", $("#keepZoom").checked);
+  $("#layout").onchange = () => { lsSet("#layout", $("#layout").value); relayout(); };
+  $("#sideBtn").onclick = toggleSide;
+  $("#helpBtn").onclick = () => { $("#help").hidden = !$("#help").hidden; };
   $("#bright").oninput = () => { lsSet("#bright", $("#bright").value); document.querySelectorAll(".stage img").forEach((im) => { im.style.filter = `brightness(${$("#bright").value})`; }); };
   $("#zIn").onclick = () => zoomCenter(1.4); $("#zOut").onclick = () => zoomCenter(1 / 1.4);
   $("#zFit").onclick = fit;
@@ -309,6 +326,9 @@ function wire() {
     else if (k === "s" && S.frame && S.frame.geo) window.open(S.frame.geo.streetview, "_blank");
     else if (k === "l" && S.frame && S.frame.geo) copyText(`${S.frame.geo.lat}, ${S.frame.geo.lon}`, "lat, lon");
     else if (k === "h") { $("#showLines").checked = !$("#showLines").checked; renderLabels(); }
+    else if (k === "b") toggleSide();
+    else if (k === "v") { const o = ["auto", "row", "col"]; $("#layout").value = o[(o.indexOf($("#layout").value) + 1) % 3]; $("#layout").onchange(); toast("Layout: " + $("#layout").selectedOptions[0].text); }
+    else if (k === "?" || k === "escape") { $("#help").hidden = k === "escape" ? true : !$("#help").hidden; }
     else if (/^[1-9]$/.test(k) && S.batch) { const c = S.batch.categories[+k - 1]; if (c) toggleCat(c.name); }
   });
   window.addEventListener("hashchange", () => {
@@ -317,7 +337,14 @@ function wire() {
     else if (h.i !== undefined && h.i !== S.idx) go(h.i);
   });
 }
+function toggleSide() {
+  document.body.classList.toggle("noside");
+  lsSet("noside", document.body.classList.contains("noside"));
+  requestAnimationFrame(relayout);
+}
 function restorePrefs() {
+  if (lsGet("noside", false)) document.body.classList.add("noside");
+  { const v = lsGet("#layout", null); if (v) $("#layout").value = v; }
   S.hidden = new Set(lsGet("hidden", []));
   for (const id of ["#showLines", "#showVerts", "#keepZoom"]) { const v = lsGet(id, null); if (v !== null) $(id).checked = v; }
   for (const id of ["#lineW", "#lineO", "#bright"]) { const v = lsGet(id, null); if (v !== null) $(id).value = v; }

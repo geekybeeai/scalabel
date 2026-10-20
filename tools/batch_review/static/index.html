@@ -8,15 +8,17 @@
 </head>
 <body>
 <header id="top">
+  <button id="sideBtn" type="button" title="Show / hide the side panel (B)">&#9776;</button>
   <b class="brand">Batch Review</b>
-  <label>Batch <select id="batch"></select></label>
+  <select id="batch" title="Batch"></select>
   <span class="seg" title="Where the labels come from">
     <button id="srcFile" class="on" type="button">Export file</button><button id="srcLive" type="button">Live Scalabel</button>
   </span>
   <button id="refresh" type="button" title="Reload batches, CSV and CAD list from disk">Reload</button>
-  <input id="search" list="names" placeholder="Find image by name…" autocomplete="off">
+  <input id="search" list="names" placeholder="Find image…" autocomplete="off">
   <datalist id="names"></datalist>
   <span id="status" class="muted"></span>
+  <button id="helpBtn" type="button" title="Keyboard shortcuts (?)">?</button>
 </header>
 
 <div id="main">
@@ -28,42 +30,26 @@
     <label class="chk"><input type="checkbox" id="showLines" checked> Show lines</label>
     <label class="chk"><input type="checkbox" id="showVerts"> Show vertices</label>
     <label class="chk"><input type="checkbox" id="keepZoom"> Keep zoom between images</label>
+    <label class="sl">Layout
+      <select id="layout"><option value="auto">Auto (largest view)</option><option value="row">Side by side</option><option value="col">Top and bottom</option></select></label>
     <label class="sl">Line width <input type="range" id="lineW" min="1" max="8" step="0.5" value="2.5"></label>
     <label class="sl">Line opacity <input type="range" id="lineO" min="0.2" max="1" step="0.05" value="1"></label>
     <label class="sl">Brightness <input type="range" id="bright" min="0.5" max="2" step="0.05" value="1"></label>
-    <h3>Keys</h3>
-    <div class="keys">
-      <div><kbd>←</kbd><kbd>→</kbd> previous / next</div>
-      <div><kbd>G</kbd> jump to number</div>
-      <div><kbd>F</kbd> fit &nbsp;<kbd>+</kbd><kbd>-</kbd> zoom</div>
-      <div><kbd>O</kbd> open in Scalabel</div>
-      <div><kbd>M</kbd> Google Maps &nbsp;<kbd>S</kbd> Street View</div>
-      <div><kbd>L</kbd> copy lat, lon</div>
-      <div><kbd>H</kbd> hide / show lines</div>
-      <div><kbd>1</kbd>…<kbd>9</kbd> toggle a category</div>
-    </div>
   </aside>
 
   <section id="work">
     <div id="info">
-      <div class="line1">
-        <span id="pos" class="pos"></span>
-        <span id="fname" class="mono copyable" title="Click to copy"></span>
-        <a id="openSc" class="btn primary" target="_blank" rel="noopener">Open in Scalabel</a>
-        <span id="taskItem" class="muted"></span>
-      </div>
-      <div class="line2">
-        <span id="geo"></span>
-        <span id="cad"></span>
-      </div>
-    </div>
-    <div id="viewbar">
-      <button id="zIn" type="button" title="Zoom in (+)">+</button>
-      <button id="zOut" type="button" title="Zoom out (-)">&minus;</button>
-      <button id="zFit" type="button" title="Fit (F)">Fit</button>
-      <button id="z100" type="button" title="Actual pixels">1:1</button>
-      <span id="zoomPct" class="muted"></span>
-      <span class="muted">· scroll to zoom, drag to pan · both images move together</span>
+      <span id="pos" class="pos"></span>
+      <span id="fname" class="mono copyable" title="Click to copy"></span>
+      <a id="openSc" class="btn primary" target="_blank" rel="noopener">Open in Scalabel</a>
+      <span id="taskItem" class="muted"></span>
+      <span id="geo"></span>
+      <span id="cad"></span>
+      <span class="grow"></span>
+      <span class="zoom">
+        <button id="zOut" type="button" title="Zoom out (-)">&minus;</button><button id="zIn" type="button" title="Zoom in (+)">+</button><button id="zFit" type="button" title="Fit (F)">Fit</button><button id="z100" type="button" title="Actual pixels">1:1</button>
+        <span id="zoomPct" class="muted"></span>
+      </span>
     </div>
     <div id="panes">
       <div class="pane" id="paneL"><div class="cap">Original</div><div class="stage"><img alt="original image"></div></div>
@@ -78,6 +64,15 @@
       <input id="slider" type="range" min="1" value="1">
     </footer>
   </section>
+</div>
+
+<div id="help" hidden>
+  <b>Keyboard</b>
+  <div><kbd>←</kbd><kbd>→</kbd> previous / next &nbsp; <kbd>G</kbd> jump to number</div>
+  <div><kbd>F</kbd> fit &nbsp; <kbd>+</kbd><kbd>-</kbd> zoom &nbsp; scroll = zoom, drag = pan, double-click = zoom in</div>
+  <div><kbd>O</kbd> open in Scalabel &nbsp; <kbd>M</kbd> Google Maps &nbsp; <kbd>S</kbd> Street View &nbsp; <kbd>L</kbd> copy lat, lon</div>
+  <div><kbd>H</kbd> hide / show lines &nbsp; <kbd>1</kbd>…<kbd>9</kbd> toggle a category</div>
+  <div><kbd>B</kbd> side panel &nbsp; <kbd>V</kbd> next layout &nbsp; <kbd>?</kbd> this help</div>
 </div>
 <div id="toast"></div>
 <script src="/static/app.js"></script>

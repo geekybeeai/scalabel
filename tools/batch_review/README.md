@@ -79,8 +79,16 @@ image_name,latitude,longitude
   | L | copy "lat, lon" |
   | H | hide / show all lines |
   | 1 … 9 | toggle a class |
+  | B | hide / show the side panel |
+  | V | next layout |
+  | ? | help |
 
 - **Mouse:** scroll to zoom, drag to pan, double-click to zoom in. Either image can be used; both move together.
+- **More room for the images:**
+  - ☰ (or **B**) hides the side panel.
+  - **Layout** (or **V**) switches between side by side and top and bottom. "Auto", the default, picks whichever shows the image larger, so wide strips stack.
+  - **?** lists the keys.
+  - Click the lat or lon value to copy it; the Copy button copies both.
 
 "Open in Scalabel" opens `label?project_name=…&task_index=…&item=…`. The `item` value counts from 1 within the task. The image number is its position in the export, which matches its position in the Scalabel project for an export made from that project.
 
