@@ -293,6 +293,13 @@ function setupPanes() {
   for (const pane of document.querySelectorAll(".pane")) {
     pane.addEventListener("wheel", (e) => {
       e.preventDefault();
+      // As in Scalabel (viewer2d onWheel): a horizontal wheel (trackpad side-swipe, tilt
+      // wheel, side-scroll button) or Shift + wheel scrolls the image left / right, 1 px per
+      // unit of delta; the vertical wheel, Ctrl/Cmd + wheel and pinch zoom.
+      if (!e.ctrlKey && !e.metaKey) {
+        const h = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.shiftKey ? e.deltaY : 0;
+        if (h !== 0) { S.view.tx -= h * (e.deltaMode === 1 ? 16 : 1); applyView(); return; }
+      }
       const r = pane.getBoundingClientRect();
       const k = e.ctrlKey ? 0.01 : 0.0018; // trackpad pinch sends ctrl+wheel
       zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * k));

@@ -83,7 +83,11 @@ image_name,latitude,longitude
   | V | next layout |
   | ? | help |
 
-- **Mouse:** scroll to zoom, drag to pan, double-click to zoom in. Either image can be used; both move together.
+- **Mouse:**
+  - Scroll to zoom, as in Scalabel.
+  - A trackpad side-swipe, tilt wheel or **Shift + scroll** scrolls the image left / right.
+  - Drag to pan; double-click to zoom in.
+  - Either image can be used; both move together.
 - **More room for the images:**
   - ☰ (or **B**) hides the side panel.
   - **Layout** (or **V**) switches between side by side and top and bottom. "Auto", the default, picks whichever shows the image larger, so wide strips stack.
