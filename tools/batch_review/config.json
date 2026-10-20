@@ -5,7 +5,9 @@
   "batches": [],
   "image_root": "../../local-data",
   "cad_dir": "../../local-data/items/Full_Verfication/TMI_Annotations_basemap_annotated",
-  "geo_csv": [],
+  "geo_csv": [
+    "image_locations.csv"
+  ],
   "scalabel_url": "http://localhost:8686",
   "task_size": 50,
   "projects": {}
