@@ -1,6 +1,6 @@
 # Batch Review
 
-A web page for reviewing Scalabel exports one batch at a time, at http://localhost:8687:
+A web page for reviewing Scalabel projects one batch (project) at a time, at http://localhost:8687. The projects, their labels and their images all come **live from the Scalabel server**, so no export files are needed. It shows:
 
 - the original image and the annotated image side by side, in Scalabel's colours, with zoom and pan kept in step;
 - Scalabel-style navigation: previous / next, a number box to jump, and a slider;
@@ -14,8 +14,8 @@ A web page for reviewing Scalabel exports one batch at a time, at http://localho
 It needs only **Node.js 16 or newer**, which Scalabel already needs. There is nothing to install: no `npm install`, no Python.
 
 1. Copy the `batch_review` folder anywhere.
-2. Copy `config.example.json` to `config.json` and set the paths (see below).
-3. Run `node server.js` inside the folder.
+2. Copy `config.example.json` to `config.json` and set `scalabel_url`, the CAD folder and the lat/lon CSV (see below).
+3. Start Scalabel, then run `node server.js` inside the folder.
 4. Open http://localhost:8687.
 
 ```bash
@@ -25,7 +25,12 @@ node server.js --config other.json  # another config
 node server.js --port 8690          # another port
 ```
 
-The first line it prints tells you how many batches, lat/lon rows and CAD images it found, followed by any warnings (for example, a path that does not exist). To stop it, press Ctrl+C.
+It prints:
+- how many lat/lon rows and CAD images it found;
+- how many Scalabel projects it lists;
+- any warnings, for example a path that does not exist or Scalabel not running.
+
+To stop it, press Ctrl+C.
 
 ## config.json
 
@@ -33,14 +38,14 @@ A relative path is resolved from the folder that holds the config file. On Windo
 
 | Key | What it is |
 |---|---|
-| `batches_dir` | Folder of Scalabel export `.json` files. Each file is one batch in the Batch list. |
-| `batches` | Optional extra export files, given one by one. |
-| `image_root` | Folder that the frames' `url` / `name` paths start from. For Scalabel's local storage, this is the data folder that contains `items/`, e.g. `.../local-data`. A frame whose url is already `http(s)://…` is loaded from that url. |
-| `cad_dir` | Folder of CAD images, searched at any depth. |
-| `geo_csv` | A CSV file, or a list of them, holding image name, lat and lon (see below). |
-| `scalabel_url` | Scalabel server used by "Open in Scalabel" and "Live Scalabel", e.g. `http://localhost:8686`. |
+| `scalabel_url` | The Scalabel server, e.g. `http://localhost:8686`. The project list, labels and images are read from it, and "Open in Scalabel" links to it. |
+| `projects` | Optional list of project names to show, in that order. When empty, every Scalabel project is listed except those matching `hide_projects`. |
+| `hide_projects` | Regular expression for projects to leave out of the list. The default `_fix_\|^zz_` hides the QA review rounds and test projects. |
+| `live_cache_seconds` | How long a project's labels are reused before Scalabel is asked again (default 30). **Refresh** always fetches them fresh. |
 | `task_size` | Scalabel project task size (50 for these projects). Used to work out the image's task and item. |
-| `projects` | Optional `{"export file name": "Scalabel project name"}` map. Without it, the project name is the file name before `_export_`, which is Scalabel's export naming. |
+| `cad_dir` | Folder of CAD images, searched at any depth. |
+| `geo_csv` | A CSV file, or a list of them, holding image name, lat and lon (see below). The default is `image_locations.csv` in this folder. |
+| `image_root` | Optional. A local folder the frame urls start from, e.g. `.../local-data`. When it's set and the file is there, the image is read from disk; otherwise it loads from Scalabel. |
 | `port`, `host` | Default `8687` / `127.0.0.1`. Set `host` to `0.0.0.0` to open the page from other machines on the network. |
 
 ## Matching images to CAD images and CSV rows
@@ -61,8 +66,9 @@ image_name,latitude,longitude
 
 ## Using it
 
-- **Export file / Live Scalabel:** Export file shows the labels in the export file. Live Scalabel fetches the project's current labels from Scalabel (`/getExport`). If Scalabel can't be reached, the page goes back to the file and says so.
-- **Reload:** re-reads the batches folder, the CSV and the CAD folder without restarting the server.
+- **Labels are live:** they come from Scalabel (`/getExport`) and are reused for up to `live_cache_seconds`.
+- **Refresh:** fetches the latest labels and project list from Scalabel, and re-reads the lat/lon CSV and the CAD folder. There is no need to restart.
+- **Scalabel not running:** the top bar says so. Start Scalabel, then press Refresh.
 - **Find image by name:** jumps to an image in the batch.
 - The page remembers your place: the last batch, the image in each batch, the hidden classes and the display settings. The address bar has `#b=<batch>&i=<number>`, so a copied address opens the same image.
 - **Keys:**

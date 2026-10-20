@@ -16,9 +16,7 @@ test("norm matches frames, CAD images and CSV rows", () => {
   assert.equal(S.norm("C:\\x\\854.PNG"), "854");
 });
 
-test("project name and the Scalabel deep link (1-based item within the task)", () => {
-  assert.equal(S.projectName("/x/batch_3_x_v1_export_2026-10-15_18-31-21.json", {}), "batch_3_x_v1");
-  assert.equal(S.projectName("/x/b_export_1.json", { "b_export_1.json": "other" }), "other");
+test("Scalabel deep link (1-based item within the task)", () => {
   const link = new URL(S.scalabelLink("http://h:8686/", "p q", 117, 50));
   assert.equal(link.pathname, "/label");
   assert.equal(link.searchParams.get("project_name"), "p q");
@@ -60,19 +58,30 @@ test("colours follow Scalabel", () => {
 
 function fixture() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "br-"));
-  fs.mkdirSync(path.join(d, "exports"));
-  fs.mkdirSync(path.join(d, "data/items"), { recursive: true });
   fs.mkdirSync(path.join(d, "cad/Batch_1"), { recursive: true });
-  fs.writeFileSync(path.join(d, "data/items/854_verification.png"), "PNG1");
   fs.writeFileSync(path.join(d, "cad/Batch_1/854_input.png"), "CAD1");
   fs.writeFileSync(path.join(d, "geo.csv"), "image,lat,lon\n854.png,33.5,-117.25\n");
+  return d;
+}
+
+/** A stand-in Scalabel: /getProjectNames, /getExport and /items/... (counts export calls). */
+function fakeScalabel() {
   const lab = { id: "L1", category: "curb_road_edge", attributes: {},
     poly2d: [{ vertices: [[0, 0], [5, 5], [6, 6], [10, 0]], types: "LCCL", closed: false }] };
-  const frames = [{ name: "items/854_verification.png", url: "items/854_verification.png", labels: [lab] },
-    { name: "items/855_verification.png", url: "items/855_verification.png", labels: [] }];
-  fs.writeFileSync(path.join(d, "exports/proj_a_export_2026.json"),
-    JSON.stringify({ frames, config: { categories: [{ name: "curb_road_edge" }, { name: "dashed_white_line" }] } }));
-  return d;
+  const exp = { frames: [{ name: "items/a b/854_verification.png", url: "items/a b/854_verification.png", labels: [lab] },
+    { name: "items/a b/855_verification.png", url: "items/a b/855_verification.png", labels: [] }],
+  config: { categories: [{ name: "curb_road_edge" }, { name: "dashed_white_line" }] } };
+  const calls = { exports: 0 };
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, "http://x");
+    if (u.pathname === "/getProjectNames") {
+      res.end(JSON.stringify(["proj_a", "proj_a_export_x_fix_curb_soft_v2", "zz_test"]));
+    } else if (u.pathname === "/getExport" && u.searchParams.get("project_name") === "proj_a") {
+      calls.exports++; res.end(JSON.stringify(exp));
+    } else if (u.pathname === "/items/a%20b/854_verification.png") res.end("PNG1");
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  return { srv, calls };
 }
 
 function get(port, p) {
@@ -83,49 +92,61 @@ function get(port, p) {
     }).on("error", reject);
   });
 }
+const listen = (srv) => new Promise((r) => srv.listen(0, "127.0.0.1", () => r(srv.address().port)));
 
-test("server: batches, frame, image, CAD, geo, static, errors", async () => {
+test("server: projects, labels and images from Scalabel; CAD, geo, static, errors", async () => {
   const d = fixture();
-  const store = new S.Store({ batches_dir: "exports", image_root: "data", cad_dir: "cad", geo_csv: ["geo.csv"],
-    scalabel_url: "http://sc:8686", task_size: 50 }, d);
+  const sc = fakeScalabel();
+  const scPort = await listen(sc.srv);
+  const store = new S.Store({ scalabel_url: `http://127.0.0.1:${scPort}`, cad_dir: "cad", geo_csv: ["geo.csv"],
+    task_size: 50, live_cache_seconds: 30 }, d);
   const srv = http.createServer(S.makeHandler(store));
-  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
-  const port = srv.address().port;
+  const port = await listen(srv);
   try {
     const bl = JSON.parse((await get(port, "/api/batches")).body);
-    assert.equal(bl.batches.length, 1);
-    assert.equal(bl.batches[0].project, "proj_a");
+    assert.deepEqual(bl.batches.map((b) => b.name), ["proj_a"]); // _fix_ and zz_ projects hidden
+    assert.equal(bl.error, null);
     assert.equal(bl.geo_rows, 1);
     assert.equal(bl.cad_images, 1);
-    const b = JSON.parse((await get(port, "/api/batch?id=0")).body);
+    const b = JSON.parse((await get(port, "/api/batch?id=proj_a")).body);
     assert.deepEqual(b.frames.map((f) => f.short), ["854_verification.png", "855_verification.png"]);
     assert.deepEqual(b.categories.map((c) => c.display), ["curb_road_edge", "dashed_line"]);
-    const f = JSON.parse((await get(port, "/api/frame?id=0&i=0")).body);
+    const f = JSON.parse((await get(port, "/api/frame?id=proj_a&i=0")).body);
     assert.equal(f.labels[0].poly2d[0].types, "LCCL");
     assert.equal(f.geo.lat, 33.5);
     assert.equal(f.cad.file, "Batch_1/854_input.png");
     assert.match(f.scalabel, /project_name=proj_a&task_index=0&item=1$/);
-    const img = await get(port, f.image);
-    assert.equal(img.body, "PNG1");
-    assert.equal(img.type, "image/png");
+    assert.equal(f.image, `http://127.0.0.1:${scPort}/items/a%20b/854_verification.png`); // from Scalabel
+    assert.equal((await new Promise((r) => http.get(f.image, (x) => { let t = ""; x.on("data", (c) => { t += c; }); x.on("end", () => r(t)); }))), "PNG1");
+    assert.equal(sc.calls.exports, 1); // one /getExport for the batch and its frame (cached)
     assert.equal((await get(port, f.cad.url)).body, "CAD1");
-    const f2 = JSON.parse((await get(port, "/api/frame?id=0&i=1")).body);
+    const f2 = JSON.parse((await get(port, "/api/frame?id=proj_a&i=1")).body);
     assert.equal(f2.geo, null);
     assert.equal(f2.cad, null);
-    assert.equal((await get(port, "/api/frame?id=0&i=5")).code, 404);
-    assert.equal((await get(port, "/api/batch?id=9")).code, 404);
+    assert.equal((await get(port, "/api/frame?id=proj_a&i=5")).code, 404);
+    assert.equal((await get(port, "/api/batch?id=nope")).code, 500); // Scalabel has no such project
+    await get(port, "/api/reload");
+    await get(port, "/api/batch?id=proj_a");
+    assert.equal(sc.calls.exports, 2); // Refresh asks Scalabel again
     assert.equal((await get(port, "/img?p=../geo.csv")).code, 404);
     assert.equal((await get(port, "/static/../server.js")).code, 404);
-    const page = await get(port, "/");
-    assert.match(page.body, /Batch Review/);
+    assert.match((await get(port, "/")).body, /Batch Review/);
     assert.equal((await get(port, "/static/app.js")).code, 200);
-    // live mode with Scalabel down: an error answer, the server keeps running
+    // Scalabel down: the page gets an error message, the server keeps running
+    sc.srv.close();
     store.cfg.scalabel_url = "http://127.0.0.1:1";
-    assert.equal((await get(port, "/api/batch?id=0&live=1")).code, 500);
-    assert.equal((await get(port, "/api/batch?id=0")).code, 200);
+    store.reload();
+    const down = JSON.parse((await get(port, "/api/batches")).body);
+    assert.match(down.error, /Scalabel not reachable/);
+    assert.equal((await get(port, "/static/app.js")).code, 200);
   } finally {
-    srv.close();
+    srv.close(); sc.srv.close();
   }
+});
+
+test("projects from the config replace Scalabel's list", async () => {
+  const store = new S.Store({ projects: ["b", "a"], scalabel_url: "http://127.0.0.1:1" }, os.tmpdir());
+  assert.deepEqual(await store.batches(), ["b", "a"]);
 });
 
 test("page script has no syntax error", () => {

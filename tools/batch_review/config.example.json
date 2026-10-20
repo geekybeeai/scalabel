@@ -1,12 +1,13 @@
 {
   "port": 8687,
   "host": "127.0.0.1",
-  "batches_dir": "C:/scalabel/local-data/exports",
-  "batches": [],
-  "image_root": "C:/scalabel/local-data",
-  "cad_dir": "C:/scalabel/local-data/items/Full_Verfication/TMI_Annotations_basemap_annotated",
-  "geo_csv": ["C:/scalabel/local-data/image_locations.csv"],
   "scalabel_url": "http://localhost:8686",
   "task_size": 50,
-  "projects": {}
+  "projects": [],
+  "hide_projects": "_fix_|^zz_",
+  "live_cache_seconds": 30,
+  "cad_dir": "C:/scalabel/local-data/items/Full_Verfication/TMI_Annotations_basemap_annotated",
+  "geo_csv": [
+    "image_locations.csv"
+  ]
 }

@@ -10,11 +10,8 @@
 <header id="top">
   <button id="sideBtn" type="button" title="Show / hide the side panel (B)">&#9776;</button>
   <b class="brand">Batch Review</b>
-  <select id="batch" title="Batch"></select>
-  <span class="seg" title="Where the labels come from">
-    <button id="srcFile" class="on" type="button">Export file</button><button id="srcLive" type="button">Live Scalabel</button>
-  </span>
-  <button id="refresh" type="button" title="Reload batches, CSV and CAD list from disk">Reload</button>
+  <select id="batch" title="Batch (Scalabel project); labels are live from Scalabel"></select>
+  <button id="refresh" type="button" title="Get the latest labels and project list from Scalabel, and re-read the lat/lon CSV and CAD folder">Refresh</button>
   <input id="search" list="names" placeholder="Find image…" autocomplete="off">
   <datalist id="names"></datalist>
   <span id="status" class="muted"></span>

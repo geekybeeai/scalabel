@@ -2,7 +2,7 @@
 // Batch Review page: one batch at a time, original | annotated side by side, synced zoom.
 const $ = (s) => document.querySelector(s);
 const S = {
-  batches: [], batch: null, idx: 0, live: false, frame: null, token: 0,
+  batches: [], batch: null, idx: 0, frame: null, token: 0,
   hidden: new Set(), view: { s: 1, tx: 0, ty: 0 }, W: 0, H: 0,
 };
 const LS = "batchReview.";
@@ -35,9 +35,11 @@ async function loadBatches(keepId) {
   S.batches = d.batches;
   const sel = $("#batch");
   sel.innerHTML = d.batches.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("");
-  $("#status").textContent = `${d.batches.length} batches · ${d.geo_rows} lat/lon rows · ${d.cad_images} CAD images`
+  $("#status").textContent = `${d.batches.length} projects · ${d.geo_rows} lat/lon rows · ${d.cad_images} CAD images`
     + (d.warnings.length ? ` · ${d.warnings.length} warning(s), see server log` : "");
-  if (!d.batches.length) { $("#status").textContent = "No batches found: check batches_dir in config.json"; return; }
+  $("#status").title = d.warnings.join("\n");
+  if (d.error) { $("#status").textContent = d.error + " · start Scalabel, then Refresh"; return; }
+  if (!d.batches.length) { $("#status").textContent = "Scalabel lists no projects (check projects / hide_projects in config.json)"; return; }
   const h = hashState();
   const want = keepId ?? h.b ?? lsGet("batch", null);
   const b = d.batches.find((x) => x.id === want || x.name === want) || d.batches[0];
@@ -48,11 +50,8 @@ async function loadBatches(keepId) {
 
 async function openBatch(id, idx) {
   let d;
-  try { d = await api(`/api/batch?id=${encodeURIComponent(id)}&live=${S.live ? 1 : 0}`); }
-  catch (e) {
-    if (S.live) { S.live = false; setSrcButtons(); toast("Live Scalabel failed (" + e.message + "), showing the export file"); return openBatch(id, idx); }
-    toast("Cannot open batch: " + e.message); return;
-  }
+  try { d = await api(`/api/batch?id=${encodeURIComponent(id)}`); }
+  catch (e) { toast("Cannot get " + id + " from Scalabel: " + e.message); return; }
   S.batch = d;
   lsSet("batch", d.name);
   $("#names").innerHTML = d.frames.map((f) => `<option value="${esc(f.short)}">`).join("");
@@ -223,7 +222,7 @@ async function go(i, fresh) {
   i = Math.min(Math.max(0, i), n - 1);
   const tok = ++S.token;
   let f;
-  try { f = await api(`/api/frame?id=${encodeURIComponent(S.batch.id)}&i=${i}&live=${S.live ? 1 : 0}`); }
+  try { f = await api(`/api/frame?id=${encodeURIComponent(S.batch.id)}&i=${i}`); }
   catch (e) { toast("Cannot load image " + (i + 1) + ": " + e.message); return; }
   if (tok !== S.token) return; // a later request won
   S.frame = f; S.idx = i;
@@ -251,11 +250,11 @@ async function go(i, fresh) {
 const preloaded = new Map();
 async function preload(i) {
   if (!S.batch || i < 0 || i >= S.batch.frames.length) return;
-  const key = S.batch.id + ":" + i + ":" + S.live;
+  const key = S.batch.id + ":" + i;
   if (preloaded.has(key)) return;
   preloaded.set(key, 1);
   if (preloaded.size > 40) preloaded.delete(preloaded.keys().next().value);
-  try { const f = await api(`/api/frame?id=${encodeURIComponent(S.batch.id)}&i=${i}&live=${S.live ? 1 : 0}`); new Image().src = f.image; }
+  try { const f = await api(`/api/frame?id=${encodeURIComponent(S.batch.id)}&i=${i}`); new Image().src = f.image; }
   catch (e) { /* only a cache warm-up */ }
 }
 
@@ -349,12 +348,9 @@ function hashState() {
 }
 
 // ---------- wiring ----------
-function setSrcButtons() { $("#srcFile").classList.toggle("on", !S.live); $("#srcLive").classList.toggle("on", S.live); }
 function wire() {
   $("#batch").onchange = () => { const b = S.batches.find((x) => x.id === $("#batch").value); openBatch(b.id, lsGet("idx:" + b.name, 0)); };
-  $("#srcFile").onclick = () => { if (S.live) { S.live = false; setSrcButtons(); openBatch(S.batch.id, S.idx); } };
-  $("#srcLive").onclick = () => { S.live = true; setSrcButtons(); toast("Labels from Scalabel (live)"); openBatch(S.batch.id, S.idx); };
-  $("#refresh").onclick = async () => { await api("/api/reload"); preloaded.clear(); await loadBatches(S.batch ? S.batch.id : undefined); toast("Reloaded"); };
+  $("#refresh").onclick = async () => { await api("/api/reload"); preloaded.clear(); await loadBatches(S.batch ? S.batch.id : undefined); toast("Latest labels from Scalabel"); };
   $("#prev").onclick = () => go(S.idx - 1);
   $("#next").onclick = () => go(S.idx + 1);
   $("#slider").oninput = () => { $("#jump").value = $("#slider").value; };

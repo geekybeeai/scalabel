@@ -23,10 +23,6 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 3
 #batch { max-width: 420px; min-width: 120px; flex: 0 1 auto; }
 #search { width: 170px; flex: 0 1 auto; min-width: 80px; }
 #status { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; text-align: right; }
-.seg button { border-radius: 0; }
-.seg button:first-child { border-radius: 4px 0 0 4px; }
-.seg button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
-.seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 #main { display: flex; flex: 1; min-height: 0; }
 #side { width: 216px; flex: none; background: var(--panel); border-right: 1px solid var(--line);

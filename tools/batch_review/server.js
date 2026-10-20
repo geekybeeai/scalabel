@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 "use strict";
 /**
- * Batch Review: browse the frames of Scalabel exports one batch at a time.
+ * Batch Review: browse the frames of Scalabel projects one batch (project) at a time. Projects,
+ * labels and images come live from the Scalabel server.
  *
  * Node 16+ built-in modules only: nothing to install. Run
  *     node server.js                    (uses config.json next to this file)
@@ -16,8 +17,12 @@ const https = require("https");
 const HERE = __dirname;
 const STATIC = path.join(HERE, "static");
 const DEFAULTS = {
-  port: 8687, host: "127.0.0.1", batches_dir: null, batches: [], image_root: null,
-  cad_dir: null, geo_csv: [], scalabel_url: "http://localhost:8686", task_size: 50, projects: {},
+  port: 8687, host: "127.0.0.1", scalabel_url: "http://localhost:8686", task_size: 50,
+  projects: [], // when not empty: only these Scalabel projects, in this order
+  hide_projects: "_fix_|^zz_", // regular expression: projects to leave out of the list
+  live_cache_seconds: 30, // how long a project's labels are reused before asking Scalabel again
+  image_root: null, // optional local folder the frame urls start from (else images load from Scalabel)
+  cad_dir: null, geo_csv: [],
 };
 
 // Scalabel's fixed category colours (app/src/drawable/util.ts CATEGORY_NAME_COLOR_MAP), then
@@ -52,15 +57,6 @@ function norm(filename) {
   s = s.replace(/_z\d+$/i, "");
   s = s.replace(/[_\s-]*(input|verification)$/i, "");
   return s.trim().replace(/[\s_-]+/g, "_").toLowerCase();
-}
-
-/** Scalabel project of an export file: the config's ``projects`` entry for the file name
- *  (or its stem), else the stem before "_export_" (Scalabel's export naming). */
-function projectName(file, projects) {
-  const base = path.basename(file), stem = base.replace(/\.json$/i, "");
-  if (projects && projects[base]) return projects[base];
-  if (projects && projects[stem]) return projects[stem];
-  return stem.split("_export_")[0];
 }
 
 /** Deep link to item ``index`` (0-based, export order) of a Scalabel project. ``item`` is
@@ -186,28 +182,16 @@ class Store {
   constructor(cfg, base) {
     this.cfg = { ...DEFAULTS, ...cfg };
     this.base = base;
-    this.cache = new Map(); // batch id -> {mtime, data}
-    this.live = new Map(); // batch id -> {t, data}
+    this.live = new Map(); // project -> {t, data}
+    this.projects = null; // {t, names}
     this.reload();
   }
 
   resolve(v) { return v ? path.resolve(this.base, v) : null; }
+  scalabel(p) { return `${String(this.cfg.scalabel_url).replace(/\/+$/, "")}${p}`; }
 
+  /** Re-read the CSV(s) and the CAD folder, and forget cached Scalabel answers. */
   reload() {
-    const files = [];
-    const d = this.resolve(this.cfg.batches_dir);
-    if (d && isDir(d)) {
-      for (const f of fs.readdirSync(d).sort()) if (f.toLowerCase().endsWith(".json")) files.push(path.join(d, f));
-    }
-    for (const f of this.cfg.batches || []) files.push(this.resolve(f));
-    const seen = new Set();
-    this.batches = [];
-    for (const f of files) {
-      if (seen.has(f) || !isFile(f)) continue;
-      seen.add(f);
-      this.batches.push({ id: String(this.batches.length), file: f, name: path.basename(f, ".json"),
-        project: projectName(f, this.cfg.projects) });
-    }
     this.warnings = [];
     this.geo = {};
     const csvs = typeof this.cfg.geo_csv === "string" ? [this.cfg.geo_csv] : this.cfg.geo_csv || [];
@@ -221,30 +205,34 @@ class Store {
     this.cadDir = this.resolve(this.cfg.cad_dir);
     this.cad = cadIndex(this.cadDir);
     if (this.cfg.cad_dir && !isDir(this.cadDir)) this.warnings.push(`cad_dir not found: ${this.cadDir}`);
-    const ir = this.resolve(this.cfg.image_root);
-    if (!ir || !isDir(ir)) this.warnings.push(`image_root not found: ${ir}`);
-    this.cache.clear();
+    this.imageRoot = this.resolve(this.cfg.image_root);
+    if (this.cfg.image_root && !isDir(this.imageRoot)) this.warnings.push(`image_root not found: ${this.imageRoot}`);
     this.live.clear();
+    this.projects = null;
   }
 
-  batch(id) { return this.batches.find((b) => b.id === id) || null; }
-
-  /** The batch's export: from its file (cached by mtime), or (``live``) from Scalabel's
-   *  /getExport (cached 3 s, so one image view does not fetch it twice). */
-  async exportOf(b, live) {
-    if (live) {
-      const hit = this.live.get(b.id);
-      if (hit && Date.now() - hit.t < 3000) return hit.data;
-      const url = `${String(this.cfg.scalabel_url).replace(/\/+$/, "")}/getExport?${new URLSearchParams({ project_name: b.project })}`;
-      const data = await getJson(url, 60000);
-      this.live.set(b.id, { t: Date.now(), data });
-      return data;
+  /** The batches: Scalabel's projects (``projects`` from the config, else every project not
+   *  matching ``hide_projects``). Cached like the labels. */
+  async batches() {
+    const ttl = Number(this.cfg.live_cache_seconds) * 1000;
+    if (this.projects && Date.now() - this.projects.t < ttl) return this.projects.names;
+    let names;
+    if ((this.cfg.projects || []).length) names = [...this.cfg.projects];
+    else {
+      const all = await getJson(this.scalabel("/getProjectNames"), 30000);
+      const hide = this.cfg.hide_projects ? new RegExp(this.cfg.hide_projects) : null;
+      names = (Array.isArray(all) ? all : []).filter((n) => typeof n === "string" && !(hide && hide.test(n)));
     }
-    const mt = fs.statSync(b.file).mtimeMs;
-    const hit = this.cache.get(b.id);
-    if (hit && hit.mtime === mt) return hit.data;
-    const data = JSON.parse(fs.readFileSync(b.file, "utf8"));
-    this.cache.set(b.id, { mtime: mt, data });
+    this.projects = { t: Date.now(), names };
+    return names;
+  }
+
+  /** A project's labels from Scalabel's /getExport (cached ``live_cache_seconds``). */
+  async exportOf(project, fresh) {
+    const hit = this.live.get(project), ttl = Number(this.cfg.live_cache_seconds) * 1000;
+    if (hit && !fresh && Date.now() - hit.t < ttl) return hit.data;
+    const data = await getJson(this.scalabel("/getExport?" + new URLSearchParams({ project_name: project })), 120000);
+    this.live.set(project, { t: Date.now(), data });
     return data;
   }
 
@@ -256,10 +244,10 @@ class Store {
     return names.map((n, i) => ({ name: n, display: DISPLAY_NAMES[n] || n, color: categoryColor(n, i) }));
   }
 
-  async batchView(b, live) {
-    const data = await this.exportOf(b, live);
+  async batchView(project, fresh) {
+    const data = await this.exportOf(project, fresh);
     return {
-      id: b.id, name: b.name, project: b.project, live: !!live, categories: this.categories(data),
+      id: project, name: project, project, categories: this.categories(data),
       frames: framesOf(data).map((f, i) => {
         const name = String(f.name || f.url || "");
         return { index: i, name, short: path.posix.basename(name.replace(/\\/g, "/")) };
@@ -267,19 +255,23 @@ class Store {
     };
   }
 
+  /** The frame's image: its url when absolute, else from ``image_root`` when set and the
+   *  file is there, else from Scalabel (which serves its items folder at /items/...). */
   imageUrl(f) {
     const u = String(f.url || f.name || "");
-    return /^https?:\/\//i.test(u) ? u : "/img?" + new URLSearchParams({ p: u });
+    if (/^https?:\/\//i.test(u)) return u;
+    if (this.imageRoot && isFile(inside(this.imageRoot, u) || "")) return "/img?" + new URLSearchParams({ p: u });
+    return this.scalabel("/" + u.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/"));
   }
 
-  async frameView(b, index, live) {
-    const frames = framesOf(await this.exportOf(b, live));
+  async frameView(project, index) {
+    const frames = framesOf(await this.exportOf(project));
     if (!(index >= 0 && index < frames.length)) return null;
     const f = frames[index], name = String(f.name || f.url || ""), key = norm(name);
     const out = {
       index, count: frames.length, name, image: this.imageUrl(f),
       labels: (f.labels || []).filter((l) => l.poly2d && l.poly2d.length).map(slim),
-      scalabel: scalabelLink(this.cfg.scalabel_url, b.project, index, Number(this.cfg.task_size) || 50),
+      scalabel: scalabelLink(this.cfg.scalabel_url, project, index, Number(this.cfg.task_size) || 50),
       geo: null, cad: null,
     };
     const g = this.geo[key];
@@ -310,27 +302,29 @@ function makeHandler(store) {
   return async (req, res) => {
     let u;
     try { u = new URL(req.url, "http://localhost"); } catch (e) { return json(res, { error: "bad url" }, 400); }
-    const q = u.searchParams, live = q.get("live") === "1";
+    const q = u.searchParams;
     try {
       if (req.method !== "GET") return json(res, { error: "method not allowed" }, 405);
       if (u.pathname === "/" || u.pathname === "/index.html") return file(res, path.join(STATIC, "index.html"));
       if (u.pathname.startsWith("/static/")) return file(res, inside(STATIC, decodeURIComponent(u.pathname.slice(8))));
       if (u.pathname === "/api/batches") {
-        return json(res, { batches: store.batches.map((b) => ({ id: b.id, name: b.name, project: b.project })),
+        let names = [], error = null;
+        try { names = await store.batches(); } catch (e) { error = `Scalabel not reachable at ${store.cfg.scalabel_url} (${e.message})`; }
+        return json(res, { batches: names.map((n) => ({ id: n, name: n, project: n })), error,
           scalabel_url: store.cfg.scalabel_url, geo_rows: Object.keys(store.geo).length,
           cad_images: Object.keys(store.cad).length, warnings: store.warnings });
       }
       if (u.pathname === "/api/batch") {
-        const b = store.batch(q.get("id"));
-        return b ? json(res, await store.batchView(b, live)) : json(res, { error: "unknown batch" }, 404);
+        const p = q.get("id");
+        return p ? json(res, await store.batchView(p, q.get("fresh") === "1")) : json(res, { error: "no batch given" }, 400);
       }
       if (u.pathname === "/api/frame") {
-        const b = store.batch(q.get("id"));
-        const fv = b ? await store.frameView(b, parseInt(q.get("i"), 10), live) : null;
+        const p = q.get("id");
+        const fv = p ? await store.frameView(p, parseInt(q.get("i"), 10)) : null;
         return fv ? json(res, fv) : json(res, { error: "no such frame" }, 404);
       }
-      if (u.pathname === "/api/reload") { store.reload(); return json(res, { ok: true, batches: store.batches.length }); }
-      if (u.pathname === "/img") return file(res, inside(store.resolve(store.cfg.image_root), q.get("p")));
+      if (u.pathname === "/api/reload") { store.reload(); return json(res, { ok: true }); }
+      if (u.pathname === "/img") return file(res, inside(store.imageRoot, q.get("p")));
       if (u.pathname === "/cad") return file(res, inside(store.cadDir, q.get("p")));
       return json(res, { error: "not found" }, 404);
     } catch (e) { // one bad request must not stop the server
@@ -356,13 +350,15 @@ function main(argv) {
   const srv = http.createServer(makeHandler(store));
   srv.on("error", (e) => { console.error(e.code === "EADDRINUSE" ? `port ${port} is in use: is Batch Review already running?` : e.message); process.exit(1); });
   srv.listen(port, host, () => {
-    console.log(`Batch Review: http://localhost:${port}  (${store.batches.length} batches, `
+    console.log(`Batch Review: http://localhost:${port}  (Scalabel ${store.cfg.scalabel_url}, `
       + `${Object.keys(store.geo).length} lat/lon rows, ${Object.keys(store.cad).length} CAD images)`);
+    store.batches().then((n) => console.log(`${n.length} Scalabel projects listed`),
+      (e) => console.log(`warning: Scalabel not reachable at ${store.cfg.scalabel_url}: ${e.message}`));
     for (const w of store.warnings.slice(0, 10)) console.log(`warning: ${w}`);
   });
   return srv;
 }
 
-module.exports = { norm, projectName, scalabelLink, mapsLinks, parseCsv, readGeoCsv, cadIndex, inside,
+module.exports = { norm, scalabelLink, mapsLinks, parseCsv, readGeoCsv, cadIndex, inside,
   categoryColor, Store, makeHandler };
 if (require.main === module) main(process.argv.slice(2));

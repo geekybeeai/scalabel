@@ -1,14 +1,13 @@
 {
   "port": 8687,
   "host": "127.0.0.1",
-  "batches_dir": "../../local-data/items/Full_Verfication/Annotation_Reviewed_by_Roshan/2026_10_15_export",
-  "batches": [],
-  "image_root": "../../local-data",
+  "scalabel_url": "http://localhost:8686",
+  "task_size": 50,
+  "projects": [],
+  "hide_projects": "_fix_|^zz_",
+  "live_cache_seconds": 30,
   "cad_dir": "../../local-data/items/Full_Verfication/TMI_Annotations_basemap_annotated",
   "geo_csv": [
     "image_locations.csv"
-  ],
-  "scalabel_url": "http://localhost:8686",
-  "task_size": 50,
-  "projects": {}
+  ]
 }
