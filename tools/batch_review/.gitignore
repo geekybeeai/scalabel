@@ -1,0 +1,4 @@
+# lat/lon data: uploaded, typed in, and their backups
+*.csv
+*.csv.bak-*
+*.tmp-*

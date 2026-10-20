@@ -32,6 +32,11 @@
     <label class="sl">Line width <input type="range" id="lineW" min="1" max="8" step="0.5" value="2.5"></label>
     <label class="sl">Line opacity <input type="range" id="lineO" min="0.2" max="1" step="0.05" value="1"></label>
     <label class="sl">Brightness <input type="range" id="bright" min="0.5" max="2" step="0.05" value="1"></label>
+    <h3>Lat / Lon</h3>
+    <div id="geoInfo" class="muted small-text"></div>
+    <div class="row"><button id="uploadBtn" type="button" title="Load a CSV with image name, lat and lon columns">Upload CSV…</button></div>
+    <input id="csvFile" type="file" accept=".csv,.txt,.tsv,text/csv" hidden>
+    <div class="muted small-text">Or press <kbd>E</kbd> (or ✎) to type the lat, lon of the current image.</div>
   </aside>
 
   <section id="work">
@@ -67,7 +72,7 @@
   <b>Keyboard</b>
   <div><kbd>←</kbd><kbd>→</kbd> previous / next &nbsp; <kbd>G</kbd> jump to number</div>
   <div><kbd>F</kbd> fit &nbsp; <kbd>+</kbd><kbd>-</kbd> zoom &nbsp; scroll = zoom, drag = pan, double-click = zoom in</div>
-  <div><kbd>O</kbd> open in Scalabel &nbsp; <kbd>M</kbd> Google Maps &nbsp; <kbd>S</kbd> Street View &nbsp; <kbd>L</kbd> copy lat, lon</div>
+  <div><kbd>O</kbd> open in Scalabel &nbsp; <kbd>M</kbd> Google Maps &nbsp; <kbd>S</kbd> Street View &nbsp; <kbd>L</kbd> copy lat, lon &nbsp; <kbd>E</kbd> enter / edit lat, lon</div>
   <div><kbd>H</kbd> hide / show lines &nbsp; <kbd>1</kbd>…<kbd>9</kbd> toggle a category</div>
   <div><kbd>B</kbd> side panel &nbsp; <kbd>V</kbd> next layout &nbsp; <kbd>?</kbd> this help</div>
 </div>

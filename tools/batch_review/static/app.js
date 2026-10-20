@@ -20,6 +20,11 @@ async function api(path) {
   return d;
 }
 
+async function post(path, body, type) {
+  const r = await fetch(path, { method: "POST", body, headers: { "Content-Type": type, "X-Batch-Review": "1" } });
+  return { code: r.status, d: await r.json().catch(() => ({ error: "bad response" })) };
+}
+
 async function copyText(text, what) {
   try { await navigator.clipboard.writeText(text); }
   catch (e) { // not a secure context (opened by LAN address): old-style copy
@@ -29,15 +34,65 @@ async function copyText(text, what) {
   toast("Copied " + (what || text));
 }
 
+// ---------- lat / lon: upload a CSV, or type one in ----------
+function showGeoInfo(d) { // side panel lat/lon section and the counts in the top bar
+  $("#status").textContent = `${d.batches.length} projects · ${d.geo_rows + d.manual_rows} lat/lon · ${d.cad_images} CAD images`
+    + (d.warnings.length ? ` · ${d.warnings.length} warning(s), see server log` : "");
+  $("#status").title = d.warnings.join("\n");
+  $("#geoInfo").textContent = d.geo_file_exists
+    ? `${d.geo_rows} from ${d.geo_file}` + (d.manual_rows ? ` · ${d.manual_rows} typed in` : "")
+    : `No CSV yet (${d.geo_file})` + (d.manual_rows ? ` · ${d.manual_rows} typed in` : "");
+  $("#uploadBtn").textContent = d.geo_file_exists ? "Replace CSV…" : "Upload CSV…";
+}
+async function refreshGeo() { // counts + the current image's lat/lon, without reloading the batch
+  try { showGeoInfo(await api("/api/batches")); } catch (e) { /* counts only */ }
+  if (S.batch) {
+    try { const f = await api(`/api/frame?id=${encodeURIComponent(S.batch.id)}&i=${S.idx}`); S.frame = f; renderInfo(); }
+    catch (e) { /* keep what is shown */ }
+  }
+}
+async function uploadCsv(file) {
+  const text = await file.text();
+  let r = await post("/api/geo/upload", text, "text/csv");
+  if (r.code === 409) {
+    if (!confirm(`Replace ${r.d.file} (${r.d.old_rows} rows) with ${file.name} (${r.d.rows} rows)?\nThe current file is kept as a backup.`)) return;
+    r = await post("/api/geo/upload?replace=1", text, "text/csv");
+  }
+  if (r.code !== 200) { toast(r.d.error + (r.d.warnings && r.d.warnings.length ? ": " + r.d.warnings[0] : "")); return; }
+  toast(`Loaded ${r.d.rows} lat/lon rows from ${file.name}` + (r.d.backup ? ` (old file kept as ${r.d.backup})` : ""));
+  await refreshGeo();
+}
+function editGeo() {
+  if (!S.frame) return;
+  const g = S.frame.geo, cur = g ? `${g.lat}, ${g.lon}` : "";
+  $("#geo").innerHTML = `<span class="geoEdit"><input id="geoIn" class="mono" value="${esc(cur)}" placeholder="lat, lon  or paste a Google Maps link">`
+    + `<button id="geoSave" class="small" type="button">Save</button><button id="geoCancel" class="small" type="button">Cancel</button>`
+    + (g && g.source === "manual" ? `<button id="geoDel" class="small" type="button" title="Remove the typed-in lat/lon (the CSV value, if any, is used again)">Remove</button>` : "")
+    + `</span>`;
+  const inp = $("#geoIn");
+  inp.focus(); inp.select();
+  const save = async () => {
+    const r = await post("/api/geo/manual", JSON.stringify({ name: S.frame.name, text: inp.value }), "application/json");
+    if (r.code !== 200) { toast(r.d.error); inp.focus(); return; }
+    toast("Saved lat/lon for " + S.frame.name.split("/").pop()); refreshGeo();
+  };
+  $("#geoSave").onclick = save;
+  $("#geoCancel").onclick = () => renderInfo();
+  if ($("#geoDel")) $("#geoDel").onclick = async () => {
+    const r = await post("/api/geo/manual", JSON.stringify({ name: S.frame.name, clear: true }), "application/json");
+    if (r.code !== 200) { toast(r.d.error); return; }
+    toast("Removed the typed-in lat/lon"); refreshGeo();
+  };
+  inp.onkeydown = (e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") renderInfo(); e.stopPropagation(); };
+}
+
 // ---------- batches ----------
 async function loadBatches(keepId) {
   const d = await api("/api/batches");
   S.batches = d.batches;
   const sel = $("#batch");
   sel.innerHTML = d.batches.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("");
-  $("#status").textContent = `${d.batches.length} projects · ${d.geo_rows} lat/lon rows · ${d.cad_images} CAD images`
-    + (d.warnings.length ? ` · ${d.warnings.length} warning(s), see server log` : "");
-  $("#status").title = d.warnings.join("\n");
+  showGeoInfo(d);
   if (d.error) { $("#status").textContent = d.error + " · start Scalabel, then Refresh"; return; }
   if (!d.batches.length) { $("#status").textContent = "Scalabel lists no projects (check projects / hide_projects in config.json)"; return; }
   const h = hashState();
@@ -205,9 +260,12 @@ function renderInfo() {
       + `<span class="val mono copyable" data-copy="${lon}" data-what="longitude" title="Longitude, click to copy">${lon}</span>`
       + `<button class="small" data-copy="${lat}, ${lon}" data-what="lat, lon" title="Copy lat, lon (L)">Copy</button>`
       + `<a class="btn" href="${esc(f.geo.maps)}" target="_blank" rel="noopener" title="Google Maps (M)">Maps</a>`
-      + `<a class="btn" href="${esc(f.geo.streetview)}" target="_blank" rel="noopener" title="Street View (S)">Street View</a></span>`;
+      + `<a class="btn" href="${esc(f.geo.streetview)}" target="_blank" rel="noopener" title="Street View (S)">Street View</a>`
+      + (f.geo.source === "manual" ? `<span class="tag" title="Typed in on this page (manual_locations.csv)">typed</span>` : "")
+      + `<button class="small" data-edit="1" title="Edit lat/lon (E)">&#9998;</button></span>`;
   } else {
-    $("#geo").innerHTML = `<span class="muted" title="No row for this image in the lat/lon CSV">no lat/lon</span>`;
+    $("#geo").innerHTML = `<span class="muted" title="No row for this image in the lat/lon CSV">no lat/lon</span>`
+      + ` <button class="small" data-edit="1" title="Type the lat, lon of this image (E)">Add lat/lon</button>`;
   }
   $("#cad").innerHTML = f.cad
     ? `<a class="btn" href="${esc(f.cad.url)}" target="_blank" rel="noopener" title="CAD image ${esc(f.cad.file)}">CAD</a>`
@@ -376,7 +434,12 @@ function wire() {
   $("#zFit").onclick = fit;
   $("#z100").onclick = () => { const [pw, ph] = paneSize(); zoomAt(pw / 2, ph / 2, 1 / S.view.s); };
   $("#fname").onclick = () => S.frame && copyText(S.frame.name.split("/").pop(), "image name");
-  $("#geo").onclick = (e) => { const b = e.target.closest("[data-copy]"); if (b) copyText(b.dataset.copy, b.dataset.what); };
+  $("#geo").onclick = (e) => {
+    if (e.target.closest("[data-edit]")) { editGeo(); return; }
+    const b = e.target.closest("[data-copy]"); if (b) copyText(b.dataset.copy, b.dataset.what);
+  };
+  $("#uploadBtn").onclick = () => $("#csvFile").click();
+  $("#csvFile").onchange = () => { const f = $("#csvFile").files[0]; $("#csvFile").value = ""; if (f) uploadCsv(f); };
   document.addEventListener("keydown", (e) => {
     const t = e.target;
     if (t.tagName === "INPUT" && t.type !== "checkbox" && t.type !== "range" || t.tagName === "SELECT" || t.isContentEditable) return;
@@ -395,6 +458,7 @@ function wire() {
     else if (k === "s" && S.frame && S.frame.geo) window.open(S.frame.geo.streetview, "_blank");
     else if (k === "l" && S.frame && S.frame.geo) copyText(`${S.frame.geo.lat}, ${S.frame.geo.lon}`, "lat, lon");
     else if (k === "h") { $("#showLines").checked = !$("#showLines").checked; renderLabels(); }
+    else if (k === "e") { e.preventDefault(); editGeo(); }
     else if (k === "b") toggleSide();
     else if (k === "v") { const o = ["auto", "row", "col"]; $("#layout").value = o[(o.indexOf($("#layout").value) + 1) % 3]; $("#layout").onchange(); toast("Layout: " + $("#layout").selectedOptions[0].text); }
     else if (k === "?" || k === "escape") { $("#help").hidden = k === "escape" ? true : !$("#help").hidden; }

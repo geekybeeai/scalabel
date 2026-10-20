@@ -81,6 +81,10 @@ body.noside #side { display: none; }
 #jump { width: 70px; }
 #slider { flex: 1; padding: 0; accent-color: var(--accent); }
 
+.small-text { font-size: 12px; margin: 4px 0; }
+.geoEdit { display: inline-flex; gap: 4px; align-items: center; }
+.geoEdit input { width: 300px; padding: 1px 6px; }
+.tag { font-size: 11px; padding: 0 5px; border-radius: 3px; background: #6a1b9a; color: #fff; }
 #help { position: fixed; right: 10px; top: 36px; z-index: 11; background: var(--panel);
   border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; font-size: 13px;
   box-shadow: 0 6px 24px rgba(0,0,0,.5); }

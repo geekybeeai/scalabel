@@ -44,6 +44,7 @@ A relative path is resolved from the folder that holds the config file. On Windo
 | `live_cache_seconds` | How long a project's labels are reused before Scalabel is asked again (default 30). **Refresh** always fetches them fresh. |
 | `task_size` | Scalabel project task size (50 for these projects). Used to work out the image's task and item. |
 | `cad_dir` | Folder of CAD images, searched at any depth. |
+| `manual_csv` | Where lat/lon typed in on the page is saved (default `manual_locations.csv` in this folder). |
 | `geo_csv` | A CSV file, or a list of them, holding image name, lat and lon (see below). The default is `image_locations.csv` in this folder. |
 | `image_root` | Optional. A local folder the frame urls start from, e.g. `.../local-data`. When it's set and the file is there, the image is read from disk; otherwise it loads from Scalabel. |
 | `port`, `host` | Default `8687` / `127.0.0.1`. Set `host` to `0.0.0.0` to open the page from other machines on the network. |
@@ -64,6 +65,18 @@ image_name,latitude,longitude
 854_verification.png,33.7701234,-118.1937456
 ```
 
+## Adding lat / lon on the page
+
+- **Upload CSV…** (side panel, Lat / Lon):
+  - The CSV is checked first. A file with no usable row is refused, and nothing is written.
+  - It is saved as the first `geo_csv` file, or as `image_locations.csv` in this folder when none is set.
+  - When that file already exists, the page asks before replacing it. The old file is kept as `<name>.bak-<date-time>`.
+- **Typed in, one image:** press **E**, or click **Add lat/lon** / ✎ in the info row.
+  - Type `lat, lon` (e.g. `33.7701, -118.1937`), or paste a Google Maps link, then press Enter.
+  - The value is saved to `manual_locations.csv` (the `manual_csv` key) and wins over the CSV. It is marked **typed** on the page.
+  - **Remove** goes back to the CSV value.
+- Writing is allowed only from this page. Other web sites cannot post to it, because the page sends a header they cannot set.
+
 ## Using it
 
 - **Labels are live:** they come from Scalabel (`/getExport`) and are reused for up to `live_cache_seconds`.
@@ -83,6 +96,7 @@ image_name,latitude,longitude
   | M | Google Maps |
   | S | Street View |
   | L | copy "lat, lon" |
+  | E | type / edit the lat, lon of this image |
   | H | hide / show all lines |
   | 1 … 9 | toggle a class |
   | B | hide / show the side panel |

@@ -23,7 +23,9 @@ const DEFAULTS = {
   live_cache_seconds: 30, // how long a project's labels are reused before asking Scalabel again
   image_root: null, // optional local folder the frame urls start from (else images load from Scalabel)
   cad_dir: null, geo_csv: [],
+  manual_csv: "manual_locations.csv", // lat/lon typed in on the page (wins over geo_csv)
 };
+const MAX_UPLOAD = 50 * 1024 * 1024; // bytes
 
 // Scalabel's fixed category colours (app/src/drawable/util.ts CATEGORY_NAME_COLOR_MAP), then
 // its index palette (CATEGORY_COLOR_PALETTE) for any other category.
@@ -115,24 +117,56 @@ function pick(headers, names, contains) {
  *  file); lat is lat / latitude (else containing "lat"), lon is lon / lng / long / longitude
  *  (else containing "lon" or "lng"). Bad rows are skipped with a warning, never fatal. */
 function readGeoCsv(text, label) {
-  const out = {}, warn = [];
+  const out = {}, warn = [], names = {};
   const rows = parseCsv(text);
-  if (!rows.length) return { geo: out, warn: [`${label}: empty`] };
+  if (!rows.length) return { geo: out, names, warn: [`${label}: empty`] };
   const h = rows[0];
   const ic = pick(h, ["image", "image_name", "name", "file", "filename"], ["image", "name", "file"]);
   const la = pick(h, ["lat", "latitude"], ["lat"]);
   const lo = pick(h, ["lon", "lng", "long", "longitude"], ["lon", "lng"]);
-  if (ic < 0 || la < 0 || lo < 0) return { geo: out, warn: [`${label}: need image, lat and lon columns; header is ${JSON.stringify(h)}`] };
+  if (ic < 0 || la < 0 || lo < 0) return { geo: out, names, warn: [`${label}: need image, lat and lon columns; header is ${JSON.stringify(h)}`] };
   rows.slice(1).forEach((r, k) => {
     const key = norm(r[ic] || ""), lat = parseFloat(r[la]), lon = parseFloat(r[lo]);
     if (!key || !Number.isFinite(lat) || !Number.isFinite(lon)) warn.push(`${label}:${k + 2}: skipped (bad row)`);
     else if (Math.abs(lat) > 90 || Math.abs(lon) > 180) warn.push(`${label}:${k + 2}: skipped (lat/lon out of range)`);
-    else out[key] = [lat, lon];
+    else { out[key] = [lat, lon]; names[key] = String(r[ic]).trim(); }
   });
-  return { geo: out, warn };
+  return { geo: out, names, warn };
 }
 
 /** {norm(name): absolute path} of every image under ``dir`` (any depth; first one wins). */
+/** "lat, lon" from what a person types or pastes: "33.77, -118.19", "33.77 -118.19", or a
+ *  Google Maps link (".../@33.77,-118.19,17z", "?q=33.77,-118.19", "query=", "viewpoint=").
+ *  null when it is not a valid pair. */
+function parseLatLon(text) {
+  const t = String(text || "").trim();
+  const m = t.match(/@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/)
+    || t.match(/[?&](?:q|query|ll|viewpoint|destination)=(-?\d+(?:\.\d+)?)(?:,|%2C)\s*(-?\d+(?:\.\d+)?)/i)
+    || t.match(/^\s*\(?\s*(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)\s*\)?\s*$/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+  return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? [lat, lon] : null;
+}
+
+const csvCell = (v) => (/[",\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+
+function writeAtomic(p, text) {
+  const tmp = `${p}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, text, "utf8");
+  fs.renameSync(tmp, p);
+}
+
+function stamp() { return new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-"); }
+
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = []; let n = 0;
+    req.on("data", (c) => { n += c.length; if (n > limit) { reject(new Error("upload too large")); req.destroy(); } else chunks.push(c); });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
 function cadIndex(dir) {
   const idx = {};
   if (!dir || !isDir(dir)) return idx;
@@ -193,15 +227,7 @@ class Store {
   /** Re-read the CSV(s) and the CAD folder, and forget cached Scalabel answers. */
   reload() {
     this.warnings = [];
-    this.geo = {};
-    const csvs = typeof this.cfg.geo_csv === "string" ? [this.cfg.geo_csv] : this.cfg.geo_csv || [];
-    for (const c of csvs) {
-      const p = this.resolve(c);
-      if (!isFile(p)) { this.warnings.push(`geo_csv not found: ${p}`); continue; }
-      const { geo, warn } = readGeoCsv(fs.readFileSync(p, "utf8"), path.basename(p));
-      Object.assign(this.geo, geo);
-      this.warnings.push(...warn.slice(0, 20));
-    }
+    this.loadGeo();
     this.cadDir = this.resolve(this.cfg.cad_dir);
     this.cad = cadIndex(this.cadDir);
     if (this.cfg.cad_dir && !isDir(this.cadDir)) this.warnings.push(`cad_dir not found: ${this.cadDir}`);
@@ -209,6 +235,78 @@ class Store {
     if (this.cfg.image_root && !isDir(this.imageRoot)) this.warnings.push(`image_root not found: ${this.imageRoot}`);
     this.live.clear();
     this.projects = null;
+  }
+
+  geoFiles() { return typeof this.cfg.geo_csv === "string" ? [this.cfg.geo_csv] : this.cfg.geo_csv || []; }
+  /** Where an uploaded CSV is saved: the first geo_csv file, else image_locations.csv. */
+  uploadTarget() { return this.resolve(this.geoFiles()[0] || "image_locations.csv"); }
+  manualPath() { return this.resolve(this.cfg.manual_csv || "manual_locations.csv"); }
+
+  loadGeo() {
+    this.geo = {};
+    this.geoWarnings = [];
+    for (const c of this.geoFiles()) {
+      const p = this.resolve(c);
+      if (!isFile(p)) { this.geoWarnings.push(`geo_csv not found: ${p} (upload one on the page)`); continue; }
+      const { geo, warn } = readGeoCsv(fs.readFileSync(p, "utf8"), path.basename(p));
+      Object.assign(this.geo, geo);
+      this.geoWarnings.push(...warn.slice(0, 20));
+    }
+    this.manual = {};
+    const mp = this.manualPath();
+    if (isFile(mp)) {
+      const { geo, names, warn } = readGeoCsv(fs.readFileSync(mp, "utf8"), path.basename(mp));
+      for (const k of Object.keys(geo)) this.manual[k] = { image: names[k], lat: geo[k][0], lon: geo[k][1] };
+      this.geoWarnings.push(...warn.slice(0, 20));
+    }
+    this.warnings = [...this.geoWarnings, ...(this.warnings || []).filter((w) => !/geo_csv|\.csv/.test(w))];
+  }
+
+  /** {lat, lon, source} for a frame name: typed in on the page first, then the CSV. */
+  geoFor(name) {
+    const k = norm(name), m = this.manual[k], g = this.geo[k];
+    if (m) return { lat: m.lat, lon: m.lon, source: "manual" };
+    if (g) return { lat: g[0], lon: g[1], source: "csv" };
+    return null;
+  }
+
+  /** Save an uploaded CSV as the lat/lon file. Refuses a CSV with no usable row; refuses to
+   *  replace an existing file unless ``replace`` (that file is kept as <name>.bak-<time>). */
+  saveUpload(text, replace) {
+    const { geo, warn } = readGeoCsv(text, "uploaded CSV");
+    const rows = Object.keys(geo).length;
+    if (!rows) return { code: 400, error: "No usable rows in this CSV", warnings: warn.slice(0, 10) };
+    const target = this.uploadTarget();
+    let backup = null;
+    if (isFile(target)) {
+      if (!replace) {
+        const old = Object.keys(readGeoCsv(fs.readFileSync(target, "utf8"), "").geo).length;
+        return { code: 409, exists: true, file: path.basename(target), old_rows: old, rows };
+      }
+      backup = `${target}.bak-${stamp()}`;
+      fs.copyFileSync(target, backup);
+    }
+    writeAtomic(target, text);
+    if (!this.geoFiles().length) this.cfg.geo_csv = [path.relative(this.base, target)];
+    this.loadGeo();
+    return { code: 200, ok: true, file: path.basename(target), rows, warnings: warn.slice(0, 10),
+      backup: backup && path.basename(backup) };
+  }
+
+  /** Set (or with ``clear``, remove) the typed-in lat/lon of one image; saved to manual_csv. */
+  setManual(name, lat, lon, clear) {
+    const k = norm(name);
+    if (!k) return { code: 400, error: "no image name" };
+    if (clear) delete this.manual[k];
+    else {
+      if (!(Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) {
+        return { code: 400, error: "lat must be -90..90 and lon -180..180" };
+      }
+      this.manual[k] = { image: path.posix.basename(String(name).replace(/\\/g, "/")), lat, lon };
+    }
+    const rows = Object.values(this.manual).map((m) => [m.image, m.lat, m.lon].map(csvCell).join(","));
+    writeAtomic(this.manualPath(), ["image,lat,lon", ...rows].join("\n") + "\n");
+    return { code: 200, ok: true, geo: this.geoFor(name), manual_rows: rows.length };
   }
 
   /** The batches: Scalabel's projects (``projects`` from the config, else every project not
@@ -274,8 +372,8 @@ class Store {
       scalabel: scalabelLink(this.cfg.scalabel_url, project, index, Number(this.cfg.task_size) || 50),
       geo: null, cad: null,
     };
-    const g = this.geo[key];
-    if (g) out.geo = { lat: g[0], lon: g[1], ...mapsLinks(g[0], g[1]) };
+    const g = this.geoFor(name);
+    if (g) out.geo = { ...g, ...mapsLinks(g.lat, g.lon) };
     const c = this.cad[key];
     if (c) {
       const rel = path.relative(this.cadDir, c).split(path.sep).join("/");
@@ -304,6 +402,23 @@ function makeHandler(store) {
     try { u = new URL(req.url, "http://localhost"); } catch (e) { return json(res, { error: "bad url" }, 400); }
     const q = u.searchParams;
     try {
+      if (req.method === "POST" && u.pathname.startsWith("/api/geo/")) {
+        // the page sends this header; a page on another site cannot (CORS), so it cannot write here
+        if (req.headers["x-batch-review"] !== "1") return json(res, { error: "forbidden" }, 403);
+        const body = await readBody(req, MAX_UPLOAD);
+        let r;
+        if (u.pathname === "/api/geo/upload") r = store.saveUpload(body, q.get("replace") === "1");
+        else if (u.pathname === "/api/geo/manual") {
+          let b;
+          try { b = JSON.parse(body); } catch (e) { return json(res, { error: "bad JSON" }, 400); }
+          // {name, text: "lat, lon" or a Google Maps link} | {name, lat, lon} | {name, clear: true}
+          const ll = b.text !== undefined ? parseLatLon(b.text) : [Number(b.lat), Number(b.lon)];
+          if (!b.clear && !ll) return json(res, { error: "Could not read a lat, lon from that (try: 33.77, -118.19)" }, 400);
+          r = store.setManual(b.name, ll && ll[0], ll && ll[1], !!b.clear);
+        } else return json(res, { error: "not found" }, 404);
+        const { code, ...rest } = r;
+        return json(res, rest, code);
+      }
       if (req.method !== "GET") return json(res, { error: "method not allowed" }, 405);
       if (u.pathname === "/" || u.pathname === "/index.html") return file(res, path.join(STATIC, "index.html"));
       if (u.pathname.startsWith("/static/")) return file(res, inside(STATIC, decodeURIComponent(u.pathname.slice(8))));
@@ -312,6 +427,8 @@ function makeHandler(store) {
         try { names = await store.batches(); } catch (e) { error = `Scalabel not reachable at ${store.cfg.scalabel_url} (${e.message})`; }
         return json(res, { batches: names.map((n) => ({ id: n, name: n, project: n })), error,
           scalabel_url: store.cfg.scalabel_url, geo_rows: Object.keys(store.geo).length,
+          manual_rows: Object.keys(store.manual).length, geo_file: path.basename(store.uploadTarget()),
+          geo_file_exists: isFile(store.uploadTarget()),
           cad_images: Object.keys(store.cad).length, warnings: store.warnings });
       }
       if (u.pathname === "/api/batch") {
@@ -359,6 +476,6 @@ function main(argv) {
   return srv;
 }
 
-module.exports = { norm, scalabelLink, mapsLinks, parseCsv, readGeoCsv, cadIndex, inside,
+module.exports = { norm, scalabelLink, parseLatLon, mapsLinks, parseCsv, readGeoCsv, cadIndex, inside,
   categoryColor, Store, makeHandler };
 if (require.main === module) main(process.argv.slice(2));

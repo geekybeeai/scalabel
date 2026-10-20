@@ -149,6 +149,77 @@ test("projects from the config replace Scalabel's list", async () => {
   assert.deepEqual(await store.batches(), ["b", "a"]);
 });
 
+test("parseLatLon reads typed pairs and Google Maps links", () => {
+  assert.deepEqual(S.parseLatLon("33.77, -118.19"), [33.77, -118.19]);
+  assert.deepEqual(S.parseLatLon(" 33.77 -118.19 "), [33.77, -118.19]);
+  assert.deepEqual(S.parseLatLon("https://www.google.com/maps/@33.7701,-118.1937,17z"), [33.7701, -118.1937]);
+  assert.deepEqual(S.parseLatLon("https://www.google.com/maps/search/?api=1&query=33.1,-117.2"), [33.1, -117.2]);
+  assert.equal(S.parseLatLon("95, 1"), null);
+  assert.equal(S.parseLatLon("hello"), null);
+});
+
+function post(port, p, body, type, headers) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, path: p, method: "POST",
+      headers: { "Content-Type": type, "X-Batch-Review": "1", ...(headers || {}) } }, (res) => {
+      const c = []; res.on("data", (x) => c.push(x));
+      res.on("end", () => resolve({ code: res.statusCode, d: JSON.parse(Buffer.concat(c).toString() || "{}") }));
+    });
+    req.on("error", reject); req.end(body);
+  });
+}
+
+test("upload a CSV and type in lat/lon from the page", async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "br-geo-"));
+  const sc = fakeScalabel();
+  const scPort = await listen(sc.srv);
+  const store = new S.Store({ scalabel_url: `http://127.0.0.1:${scPort}`, geo_csv: [] }, d);
+  const srv = http.createServer(S.makeHandler(store));
+  const port = await listen(srv);
+  try {
+    let bl = JSON.parse((await get(port, "/api/batches")).body);
+    assert.equal(bl.geo_file, "image_locations.csv");
+    assert.equal(bl.geo_file_exists, false);
+    // no header from the page -> refused; a CSV with no usable row -> refused, nothing written
+    assert.equal((await post(port, "/api/geo/upload", "image,lat,lon\n854.png,1,2\n", "text/csv", { "X-Batch-Review": "0" })).code, 403);
+    const bad = await post(port, "/api/geo/upload", "a,b\n1,2\n", "text/csv");
+    assert.equal(bad.code, 400);
+    assert.equal(fs.existsSync(path.join(d, "image_locations.csv")), false);
+    // first upload is saved as image_locations.csv
+    const up = await post(port, "/api/geo/upload", "image,lat,lon\n854_verification.png,10,20\n", "text/csv");
+    assert.equal(up.code, 200);
+    assert.equal(up.d.rows, 1);
+    let f = JSON.parse((await get(port, "/api/frame?id=proj_a&i=0")).body);
+    assert.deepEqual([f.geo.lat, f.geo.lon, f.geo.source], [10, 20, "csv"]);
+    // a second upload asks first, then replaces and keeps the old file as a backup
+    const again = await post(port, "/api/geo/upload", "image,lat,lon\n854.png,11,21\n855.png,12,22\n", "text/csv");
+    assert.equal(again.code, 409);
+    assert.equal(again.d.old_rows, 1);
+    const rep = await post(port, "/api/geo/upload?replace=1", "image,lat,lon\n854.png,11,21\n855.png,12,22\n", "text/csv");
+    assert.equal(rep.code, 200);
+    assert.match(rep.d.backup, /^image_locations\.csv\.bak-/);
+    assert.match(fs.readFileSync(path.join(d, rep.d.backup), "utf8"), /854_verification\.png,10,20/);
+    // typed in: wins over the CSV, is saved to manual_locations.csv, and can be removed
+    const name = "items/a b/854_verification.png";
+    assert.equal((await post(port, "/api/geo/manual", JSON.stringify({ name, text: "nonsense" }), "application/json")).code, 400);
+    const m = await post(port, "/api/geo/manual", JSON.stringify({ name, text: "https://www.google.com/maps/@33.5,-117.25,18z" }), "application/json");
+    assert.equal(m.code, 200);
+    assert.deepEqual([m.d.geo.lat, m.d.geo.lon, m.d.geo.source], [33.5, -117.25, "manual"]);
+    assert.match(fs.readFileSync(path.join(d, "manual_locations.csv"), "utf8"), /^image,lat,lon\n854_verification\.png,33\.5,-117\.25\n$/);
+    f = JSON.parse((await get(port, "/api/frame?id=proj_a&i=0")).body);
+    assert.equal(f.geo.source, "manual");
+    bl = JSON.parse((await get(port, "/api/batches")).body);
+    assert.deepEqual([bl.geo_rows, bl.manual_rows, bl.geo_file_exists], [2, 1, true]);
+    store.reload(); // typed-in values survive a reload / restart
+    assert.equal(store.geoFor(name).source, "manual");
+    await post(port, "/api/geo/manual", JSON.stringify({ name, clear: true }), "application/json");
+    f = JSON.parse((await get(port, "/api/frame?id=proj_a&i=0")).body);
+    assert.deepEqual([f.geo.lat, f.geo.source], [11, "csv"]);
+  } finally {
+    srv.close(); sc.srv.close();
+  }
+});
+
 test("page script has no syntax error", () => {
   const src = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
   assert.doesNotThrow(() => new Function(src));
