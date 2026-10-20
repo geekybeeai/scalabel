@@ -190,34 +190,60 @@ test("upload a CSV and type in lat/lon from the page", async () => {
     assert.equal(up.code, 200);
     assert.equal(up.d.rows, 1);
     let f = JSON.parse((await get(port, "/api/frame?id=proj_a&i=0")).body);
-    assert.deepEqual([f.geo.lat, f.geo.lon, f.geo.source], [10, 20, "csv"]);
+    assert.deepEqual([f.geo.lat, f.geo.lon, f.geo.file], [10, 20, "image_locations.csv"]);
     // a second upload asks first, then replaces and keeps the old file as a backup
-    const again = await post(port, "/api/geo/upload", "image,lat,lon\n854.png,11,21\n855.png,12,22\n", "text/csv");
+    const again = await post(port, "/api/geo/upload", "image,note,lat,lon\n854.png,keep me,11,21\n", "text/csv");
     assert.equal(again.code, 409);
     assert.equal(again.d.old_rows, 1);
-    const rep = await post(port, "/api/geo/upload?replace=1", "image,lat,lon\n854.png,11,21\n855.png,12,22\n", "text/csv");
+    const rep = await post(port, "/api/geo/upload?replace=1", "image,note,lat,lon\n854.png,keep me,11,21\n", "text/csv");
     assert.equal(rep.code, 200);
     assert.match(rep.d.backup, /^image_locations\.csv\.bak-/);
     assert.match(fs.readFileSync(path.join(d, rep.d.backup), "utf8"), /854_verification\.png,10,20/);
-    // typed in: wins over the CSV, is saved to manual_locations.csv, and can be removed
-    const name = "items/a b/854_verification.png";
-    assert.equal((await post(port, "/api/geo/manual", JSON.stringify({ name, text: "nonsense" }), "application/json")).code, 400);
-    const m = await post(port, "/api/geo/manual", JSON.stringify({ name, text: "https://www.google.com/maps/@33.5,-117.25,18z" }), "application/json");
-    assert.equal(m.code, 200);
-    assert.deepEqual([m.d.geo.lat, m.d.geo.lon, m.d.geo.source], [33.5, -117.25, "manual"]);
-    assert.match(fs.readFileSync(path.join(d, "manual_locations.csv"), "utf8"), /^image,lat,lon\n854_verification\.png,33\.5,-117\.25\n$/);
-    f = JSON.parse((await get(port, "/api/frame?id=proj_a&i=0")).body);
-    assert.equal(f.geo.source, "manual");
+    // typed in: updates the image's row in place (other columns kept), or adds a row
+    const csv = () => fs.readFileSync(path.join(d, "image_locations.csv"), "utf8");
+    const set = (name, text) => post(port, "/api/geo/set", JSON.stringify({ name, text }), "application/json");
+    assert.equal((await set("items/a b/854_verification.png", "nonsense")).code, 400);
+    assert.equal(csv(), "image,note,lat,lon\n854.png,keep me,11,21\n"); // nothing written
+    const u = await set("items/a b/854_verification.png", "https://www.google.com/maps/@33.5,-117.25,18z");
+    assert.equal(u.code, 200);
+    assert.equal(u.d.result, "updated");
+    assert.deepEqual([u.d.geo.lat, u.d.geo.lon], [33.5, -117.25]);
+    assert.equal(csv(), "image,note,lat,lon\n854.png,keep me,33.5,-117.25\n");
+    const n = await set("items/a b/855_verification.png", "12, 22");
+    assert.equal(n.d.result, "added");
+    assert.equal(csv(), "image,note,lat,lon\n854.png,keep me,33.5,-117.25\n855_verification.png,,12,22\n");
+    assert.equal((await set("items/a b/855_verification.png", "12.5, 22.5")).d.result, "updated"); // no duplicate row
+    assert.equal(csv().split("\n").filter(Boolean).length, 3);
+    f = JSON.parse((await get(port, "/api/frame?id=proj_a&i=1")).body);
+    assert.deepEqual([f.geo.lat, f.geo.lon], [12.5, 22.5]);
     bl = JSON.parse((await get(port, "/api/batches")).body);
-    assert.deepEqual([bl.geo_rows, bl.manual_rows, bl.geo_file_exists], [2, 1, true]);
-    store.reload(); // typed-in values survive a reload / restart
-    assert.equal(store.geoFor(name).source, "manual");
-    await post(port, "/api/geo/manual", JSON.stringify({ name, clear: true }), "application/json");
-    f = JSON.parse((await get(port, "/api/frame?id=proj_a&i=0")).body);
-    assert.deepEqual([f.geo.lat, f.geo.source], [11, "csv"]);
+    assert.deepEqual([bl.geo_rows, bl.geo_file_exists], [2, true]);
+    store.reload(); // kept across a reload / restart
+    assert.deepEqual([store.geoFor("855.png").lat], [12.5]);
+    // one backup per day, taken before the first change
+    const baks = fs.readdirSync(d).filter((x) => /^image_locations\.csv\.bak-\d{8}$/.test(x));
+    assert.equal(baks.length, 1);
+    assert.equal(fs.readFileSync(path.join(d, baks[0]), "utf8"), "image,note,lat,lon\n854.png,keep me,11,21\n");
   } finally {
     srv.close(); sc.srv.close();
   }
+});
+
+test("typed lat/lon goes to the file that has the image; an old manual_locations.csv is merged once", () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "br-geo2-"));
+  fs.writeFileSync(path.join(d, "a.csv"), "image,lat,lon\n1.png,1,1\n");
+  fs.writeFileSync(path.join(d, "b.csv"), "file;lat;lng\n2.png;2;2\n");
+  fs.writeFileSync(path.join(d, "manual_locations.csv"), "image,lat,lon\n1_verification.png,5,5\n9.png,9,9\n");
+  const store = new S.Store({ geo_csv: ["a.csv", "b.csv"], scalabel_url: "http://127.0.0.1:1" }, d);
+  // migration: merged into the first file, old file renamed (not deleted)
+  assert.equal(fs.readFileSync(path.join(d, "a.csv"), "utf8"), "image,lat,lon\n1.png,5,5\n9.png,9,9\n");
+  assert.equal(fs.existsSync(path.join(d, "manual_locations.csv")), false);
+  assert.equal(fs.readdirSync(d).filter((x) => x.startsWith("manual_locations.csv.migrated-")).length, 1);
+  // an image of b.csv is updated in b.csv, keeping its ; separator
+  assert.equal(store.setGeo("x/2_verification.png", 3, 4).file, "b.csv");
+  assert.equal(fs.readFileSync(path.join(d, "b.csv"), "utf8"), "file;lat;lng\n2.png;3;4\n");
+  assert.equal(store.setGeo("x/7.png", 7, 7).file, "a.csv"); // new image -> first file
+  assert.equal(store.setGeo("x/7.png", 95, 7).code, 400);
 });
 
 test("page script has no syntax error", () => {

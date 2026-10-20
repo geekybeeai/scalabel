@@ -44,7 +44,7 @@ A relative path is resolved from the folder that holds the config file. On Windo
 | `live_cache_seconds` | How long a project's labels are reused before Scalabel is asked again (default 30). **Refresh** always fetches them fresh. |
 | `task_size` | Scalabel project task size (50 for these projects). Used to work out the image's task and item. |
 | `cad_dir` | Folder of CAD images, searched at any depth. |
-| `manual_csv` | Where lat/lon typed in on the page is saved (default `manual_locations.csv` in this folder). |
+| `manual_csv` | Only for older versions, which saved typed-in lat/lon to `manual_locations.csv`. If that file exists, its values are merged into the CSV once, and it is renamed `.migrated-<time>`. |
 | `geo_csv` | A CSV file, or a list of them, holding image name, lat and lon (see below). The default is `image_locations.csv` in this folder. |
 | `image_root` | Optional. A local folder the frame urls start from, e.g. `.../local-data`. When it's set and the file is there, the image is read from disk; otherwise it loads from Scalabel. |
 | `port`, `host` | Default `8687` / `127.0.0.1`. Set `host` to `0.0.0.0` to open the page from other machines on the network. |
@@ -73,8 +73,11 @@ image_name,latitude,longitude
   - When that file already exists, the page asks before replacing it. The old file is kept as `<name>.bak-<date-time>`.
 - **Typed in, one image:** press **E**, or click **Add lat/lon** / ✎ in the info row.
   - Type `lat, lon` (e.g. `33.7701, -118.1937`), or paste a Google Maps link, then press Enter.
-  - The value is saved to `manual_locations.csv` (the `manual_csv` key) and wins over the CSV. It is marked **typed** on the page.
-  - **Remove** goes back to the CSV value.
+  - The value is saved **into the lat/lon CSV**, so it is kept:
+    - an image already in the CSV has its row updated in place (its other columns and the row order are kept);
+    - a missing image gets a new row.
+  - With several `geo_csv` files, the file that already has the image is the one updated; a new image goes into the first file.
+  - Before the first change of each day, the CSV is copied to `<name>.bak-<date>`.
 - Writing is allowed only from this page. Other web sites cannot post to it, because the page sends a header they cannot set.
 
 ## Using it

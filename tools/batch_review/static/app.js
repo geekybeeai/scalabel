@@ -36,12 +36,12 @@ async function copyText(text, what) {
 
 // ---------- lat / lon: upload a CSV, or type one in ----------
 function showGeoInfo(d) { // side panel lat/lon section and the counts in the top bar
-  $("#status").textContent = `${d.batches.length} projects · ${d.geo_rows + d.manual_rows} lat/lon · ${d.cad_images} CAD images`
+  $("#status").textContent = `${d.batches.length} projects · ${d.geo_rows} lat/lon · ${d.cad_images} CAD images`
     + (d.warnings.length ? ` · ${d.warnings.length} warning(s), see server log` : "");
   $("#status").title = d.warnings.join("\n");
   $("#geoInfo").textContent = d.geo_file_exists
-    ? `${d.geo_rows} from ${d.geo_file}` + (d.manual_rows ? ` · ${d.manual_rows} typed in` : "")
-    : `No CSV yet (${d.geo_file})` + (d.manual_rows ? ` · ${d.manual_rows} typed in` : "");
+    ? `${d.geo_rows} images in ${d.geo_file}`
+    : `No CSV yet: upload one, or type a lat/lon (saved to ${d.geo_file})`;
   $("#uploadBtn").textContent = d.geo_file_exists ? "Replace CSV…" : "Upload CSV…";
 }
 async function refreshGeo() { // counts + the current image's lat/lon, without reloading the batch
@@ -66,23 +66,17 @@ function editGeo() {
   if (!S.frame) return;
   const g = S.frame.geo, cur = g ? `${g.lat}, ${g.lon}` : "";
   $("#geo").innerHTML = `<span class="geoEdit"><input id="geoIn" class="mono" value="${esc(cur)}" placeholder="lat, lon  or paste a Google Maps link">`
-    + `<button id="geoSave" class="small" type="button">Save</button><button id="geoCancel" class="small" type="button">Cancel</button>`
-    + (g && g.source === "manual" ? `<button id="geoDel" class="small" type="button" title="Remove the typed-in lat/lon (the CSV value, if any, is used again)">Remove</button>` : "")
+    + `<button id="geoSave" class="small" type="button" title="Save into the lat/lon CSV (Enter)">Save</button><button id="geoCancel" class="small" type="button" title="Esc">Cancel</button>`
     + `</span>`;
   const inp = $("#geoIn");
   inp.focus(); inp.select();
   const save = async () => {
-    const r = await post("/api/geo/manual", JSON.stringify({ name: S.frame.name, text: inp.value }), "application/json");
+    const r = await post("/api/geo/set", JSON.stringify({ name: S.frame.name, text: inp.value }), "application/json");
     if (r.code !== 200) { toast(r.d.error); inp.focus(); return; }
-    toast("Saved lat/lon for " + S.frame.name.split("/").pop()); refreshGeo();
+    toast(`${r.d.result === "added" ? "Added" : "Updated"} ${S.frame.name.split("/").pop()} in ${r.d.file}`); refreshGeo();
   };
   $("#geoSave").onclick = save;
   $("#geoCancel").onclick = () => renderInfo();
-  if ($("#geoDel")) $("#geoDel").onclick = async () => {
-    const r = await post("/api/geo/manual", JSON.stringify({ name: S.frame.name, clear: true }), "application/json");
-    if (r.code !== 200) { toast(r.d.error); return; }
-    toast("Removed the typed-in lat/lon"); refreshGeo();
-  };
   inp.onkeydown = (e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") renderInfo(); e.stopPropagation(); };
 }
 
@@ -261,7 +255,6 @@ function renderInfo() {
       + `<button class="small" data-copy="${lat}, ${lon}" data-what="lat, lon" title="Copy lat, lon (L)">Copy</button>`
       + `<a class="btn" href="${esc(f.geo.maps)}" target="_blank" rel="noopener" title="Google Maps (M)">Maps</a>`
       + `<a class="btn" href="${esc(f.geo.streetview)}" target="_blank" rel="noopener" title="Street View (S)">Street View</a>`
-      + (f.geo.source === "manual" ? `<span class="tag" title="Typed in on this page (manual_locations.csv)">typed</span>` : "")
       + `<button class="small" data-edit="1" title="Edit lat/lon (E)">&#9998;</button></span>`;
   } else {
     $("#geo").innerHTML = `<span class="muted" title="No row for this image in the lat/lon CSV">no lat/lon</span>`
