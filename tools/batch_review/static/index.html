@@ -59,9 +59,11 @@
     <footer id="player">
       <button id="prev" type="button" title="Previous (←)">&#9664;</button>
       <button id="next" type="button" title="Next (→)">&#9654;</button>
-      <input id="jump" type="number" min="1" value="1" title="Image number (G), Enter to go">
+      <input id="jump" type="number" min="1" value="1" title="Image number (G)">
       <span id="total" class="muted"></span>
-      <input id="slider" type="range" min="1" value="1">
+      <button id="play" type="button" title="Play / pause (Space)">&#9654;&#xFE0E; Play</button>
+      <select id="speed" title="Time per image while playing"><option value="500">0.5 s</option><option value="1000" selected>1 s</option><option value="2000">2 s</option><option value="4000">4 s</option></select>
+      <div id="scrub"><input id="slider" type="range" min="1" value="1" title="Drag, or scroll here, to move through the images"><div id="sliderTip" hidden></div></div>
     </footer>
   </section>
 </div>
@@ -72,6 +74,7 @@
   <div><kbd>F</kbd> fit &nbsp; <kbd>+</kbd><kbd>-</kbd> zoom &nbsp; scroll = zoom, drag = pan, double-click = zoom in</div>
   <div><kbd>O</kbd> open in Scalabel &nbsp; <kbd>M</kbd> Google Maps &nbsp; <kbd>S</kbd> Street View &nbsp; <kbd>L</kbd> copy lat, lon</div>
   <div><kbd>H</kbd> hide / show lines &nbsp; <kbd>1</kbd>…<kbd>9</kbd> toggle a category</div>
+  <div><kbd>Space</kbd> play / pause &nbsp; drag the slider or scroll over the bottom bar to move through images</div>
   <div><kbd>B</kbd> side panel &nbsp; <kbd>V</kbd> next layout &nbsp; <kbd>?</kbd> this help</div>
 </div>
 <div id="tip" hidden></div>
