@@ -46,3 +46,20 @@ Add url prefix to the name field in the frames and assign it to the url field
 python3 -m scalabel.tools.edit_labels --add-url http://localhost:8686/items -i \
     input.json -o output.json
 ```
+
+## draw_poly2d
+
+`draw_poly2d` renders the `poly2d` lines of an exported Scalabel JSON onto
+their images, using the same per-category colors as the annotator. Straight
+(`L`) and Bezier (`C`) segments and closed shapes are drawn as the app draws
+them. Frame `url`s are resolved relative to `--root`; one
+`<image>_annotated.jpg` is written per frame.
+
+```bash
+python3 scalabel/tools/draw_poly2d.py export.json --root local-data \
+    --out rendered/
+```
+
+`--width` sets the line width in pixels (default: scales with image size).
+The script only needs `numpy` and `opencv-python`, so it is run by path
+rather than with `-m` (which would import the whole `scalabel` package).
