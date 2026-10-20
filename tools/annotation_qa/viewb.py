@@ -768,7 +768,14 @@ document.addEventListener('keydown',e=>{
 (async()=>{const all=await (await fetch('/viewb/rows')).json();
  const tags=[...new Set(all.flatMap(r=>r.projects.map(p=>p.project)))].sort();
  $('#round').innerHTML='<option value="">all rounds</option>'+tags.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('');
- $('#round').onchange=show;$('#show').onchange=show;show();})();
+ // ?round=<tag>&show=<filter> opens one round directly; changing either keeps the URL in step
+ const q=new URLSearchParams(location.search);
+ if(q.get('round')&&tags.includes(q.get('round')))$('#round').value=q.get('round');
+ if(q.get('show')&&[...$('#show').options].some(o=>o.value===q.get('show')))$('#show').value=q.get('show');
+ const sync=()=>{const p=new URLSearchParams();if($('#round').value)p.set('round',$('#round').value);
+  if($('#show').value!=='needs')p.set('show',$('#show').value);
+  history.replaceState(null,'',location.pathname+(p.toString()?'?'+p:''));show();};
+ $('#round').onchange=sync;$('#show').onchange=sync;show();})();
 """
 
 

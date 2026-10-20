@@ -469,6 +469,7 @@ def test_round_order_available_and_page_script(out, repo):
     assert [r["frame_name"] for r in ordered] == ["f0.png", "f49.png", "f50.png", "f51.png"]
     html = viewb_html("")
     assert 'id="round"' in html and "/viewb/view" in html and "isContentEditable" in html
+    assert "URLSearchParams(location.search)" in html and "history.replaceState" in html
     if not shutil.which("node"):
         pytest.skip("node not installed")
     for js in re.findall(r"<script>(.*?)</script>", html, re.S):
