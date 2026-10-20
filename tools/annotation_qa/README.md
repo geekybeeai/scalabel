@@ -89,6 +89,16 @@ Scalabel, export, then `merge` as usual: your edits are copied into the work cop
 reverts), each suggested issue is excluded so it is not suggested again ("handled by user in
 suggestion round" if you changed its label, "user left as is (suggestion declined)" if not).
 
+Extras for suggestion rounds only:
+- `--all-detected` takes every detected issue not marked false, without triage.
+- `--frames FILE` limits the round to the listed frames (`<stem>|<frame name>` per line).
+- A type switched off for rounds (e.g. `edge_position`) may still be used, since nothing is edited.
+- A suggestion round of another `--name` does not block one on the same batch, and merge skips
+  the round-order check for it: the base snapshot check refuses any frame another merge changed.
+
+    python3 -m annotation_qa fix --type edge_position --name edgepos_curb --version 1 --suggest \
+        --all-detected --stems <stem> --frames curb_only.txt --force-uncalibrated
+
 ## 4. Merge each batch's reviewed export
 
 ```bash

@@ -82,6 +82,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="suggestion-only round: same issues and frames, labels left UNCHANGED; "
                          "View B shows the proposed line as a dashed overlay and you edit it "
                          "yourself in Scalabel")
+    fx.add_argument("--frames", type=Path, default=None,
+                    help="file listing the frames of the round, one per line: "
+                         "'<stem>|<frame name>' or a bare frame name")
+    fx.add_argument("--all-detected", action="store_true",
+                    help="with --suggest: every detected issue not marked false (not only the "
+                         "real-marked ones)")
     fx.add_argument("--force", action="store_true", help=argparse.SUPPRESS)  # removed: see C1
     pj = sub.add_parser("project", help="(re)create the Scalabel review project of one round")
     pj.add_argument("--round", required=True, help="round tag, e.g. <stem>_fix_<type>_v<N>")
@@ -218,9 +224,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             stems = a.stems.split(",") if a.stems is not None else None
+            frames = None
+            if a.frames is not None:
+                frames = {ln.strip() for ln in a.frames.read_text().splitlines() if ln.strip()}
             r = apply(a.type, a.out, a.version, force_stale=a.force_stale,
                       force_uncalibrated=a.force_uncalibrated, name=a.name,
-                      suggest=a.suggest, stems=stems)
+                      suggest=a.suggest, stems=stems, frames=frames,
+                      all_detected=a.all_detected)
         except FixRefused as e:
             print(f"REFUSED: fix --type {a.type} --version {a.version}")
             for why in e.reasons:

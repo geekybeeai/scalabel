@@ -265,7 +265,8 @@ class _Refusals:
 
 def _guards(types: list[str], name: str, out: Path, version: int,
             by_stem: dict[str, list[Issue]], issues_by_type: dict[str, list[Issue]],
-            marks: dict[str, str], cal_types: list[str] | None = None) -> _Refusals:
+            marks: dict[str, str], cal_types: list[str] | None = None,
+            suggest: bool = False) -> _Refusals:
     ref = _Refusals()
     # every listed type must have passed its calibration
     for t in (types if cal_types is None else cal_types):
@@ -279,7 +280,10 @@ def _guards(types: list[str], name: str, out: Path, version: int,
     for stem in sorted(by_stem):
         tag = rounds.round_tag(stem, name, version)
         open_ = [r["tag"] for r in all_rounds
-                 if r["stem"] == stem and r["tag"] != tag and (stem, r["tag"]) not in merged]
+                 if r["stem"] == stem and r["tag"] != tag and (stem, r["tag"]) not in merged
+                 # suggestion rounds edit nothing, so a suggestion round of another name may
+                 # sit beside one: merge's base snapshot check refuses a frame both changed
+                 and not (suggest and r["type"] != name and _round_is_suggest(r))]
         if open_:
             ref.hard.append(f"{stem}: round(s) not merged yet: {', '.join(open_)}; review and "
                             f"merge them first (merge --stem {stem} --reviewed <export> --round "
@@ -301,6 +305,17 @@ def _guards(types: list[str], name: str, out: Path, version: int,
             if stale:
                 ref.stale.append(stale)
     return ref
+
+
+def _round_is_suggest(r: dict) -> bool:
+    try:
+        return rounds.read_changes(r["changes"])[1]
+    except (OSError, ValueError):
+        return False
+
+
+def _frame_picked(stem: str, frame: str, frames: set[str]) -> bool:
+    return f"{stem}|{frame}" in frames or frame in frames
 
 
 def split_types(issue_type: str | list[str]) -> list[str]:
@@ -340,7 +355,8 @@ def resolve_stems(requested: list[str], known: set[str]) -> set[str]:
 
 def apply(issue_type: str | list[str], out: Path, version: int, force_stale: bool = False,
           force_uncalibrated: bool = False, name: str | None = None,
-          suggest: bool = False, stems: list[str] | None = None) -> FixResult:
+          suggest: bool = False, stems: list[str] | None = None,
+          frames: set[str] | None = None, all_detected: bool = False) -> FixResult:
     """Apply the real-marked fixes of one or more types to the working copies, one round per stem.
 
     ``issue_type`` may list several types ("curb_soft,edge_on_paint"): a combined round,
@@ -373,15 +389,26 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
     copy). changes.json gets ``"suggest": true`` and, per change, ``before``, ``proposed``
     (what the fix would have produced; ``proposed_join`` for a join) and ``anchor``; no
     ``after``. A hand-fix issue is a change with ``proposed`` null, ``hand`` true and its
-    ``reason``. The base snapshot records ``mode: "suggest"``.
+    ``reason``. The base snapshot records ``mode: "suggest"``. Because nothing is edited, a
+    suggestion round may use a type in DISABLED_FOR_ROUNDS, and an open suggestion round of
+    another name on the stem does not block it (merge's base snapshot check still refuses a
+    frame that changed in the work copy since the round was built).
+
+    ``frames`` restricts the round to these frames: ``"<stem>|<frame name>"`` or a bare frame
+    name (any stem). Refused when no issue is on a listed frame.
+
+    ``all_detected`` (suggestion rounds only) takes every detected issue that is not marked
+    false and not excluded, instead of only the real-marked ones.
 
     Each round also gets ``rounds/<tag>_base.json``: when it was built and the sha1 of each
     round frame's labels in the working copy, so ``merge`` can tell when they changed.
     """
     out = Path(out)
     types = split_types(issue_type)
+    if all_detected and not suggest:
+        raise FixRefused(["--all-detected needs --suggest (it would edit untriaged issues)"])
     off = [t for t in types if t in DISABLED_FOR_ROUNDS]
-    if off:
+    if off and not suggest:
         raise FixRefused([f"{t}: dropped by calibration this revision; no fix rounds are built "
                           f"from it (scan and calibrate still work)" for t in off])
     name = name or "+".join(types)
@@ -390,7 +417,8 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
     combined = len(types) > 1
     issues_by_type = {t: load_issues_tolerant(out / f"issues_{t}.jsonl") for t in types}
     marks = read_marks(out / "marks.json")
-    real = [i for t in types for i in issues_by_type[t] if marks.get(i.key) == "real"]
+    real = [i for t in types for i in issues_by_type[t]
+            if (marks.get(i.key) != "false" if all_detected else marks.get(i.key) == "real")]
     by_stem: dict[str, list[Issue]] = {}
     for i in real:
         if i.fix is not None or i.hand_fix:
@@ -402,6 +430,11 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
             known |= {p.stem for p in ORIGINALS_DIR.glob("*.json")}
         picked = resolve_stems(stems, known)
         by_stem = {s: lst for s, lst in by_stem.items() if s in picked}
+    if frames is not None:
+        by_stem = {s: kept for s, lst in by_stem.items()
+                   if (kept := [i for i in lst if _frame_picked(s, i.frame_name, frames)])}
+        if not by_stem:
+            raise FixRefused(["--frames: no frame of the list has an issue to suggest or fix"])
 
     res = FixResult(suggest=suggest)
     excluded = read_excluded(out)
@@ -418,7 +451,8 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
     by_stem = kept
     cal_types = None if stems is None else [
         t for t in types if any(i.issue_type == t for lst in by_stem.values() for i in lst)]
-    ref = _guards(types, name, out, version, by_stem, issues_by_type, marks, cal_types)
+    ref = _guards(types, name, out, version, by_stem, issues_by_type, marks, cal_types,
+                  suggest=suggest)
     blocking = ref.hard + ([] if force_stale else ref.stale) \
         + ([] if force_uncalibrated else ref.calibration)
     if blocking:

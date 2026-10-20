@@ -315,7 +315,8 @@ def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag
 
     - the round is merged already (``remerge`` allows it);
     - another round of the same stem was merged after this round was built (merging would
-      overwrite that merge with older labels);
+      overwrite that merge with older labels); a suggestion round with a base snapshot
+      relies on the per-frame check instead;
     - a round frame's labels in the work copy differ from the round's base snapshot (a
       live-edit import, say), unless the frame is in ``allow_changed_frames``. A re-merge
       also accepts the labels its last merge wrote. A legacy round without a base snapshot
@@ -363,7 +364,9 @@ def merge_reviewed(export_stem: str, reviewed_export: Path, out: Path, round_tag
                            "pass --remerge to merge it again")
     base = rounds.read_base(out, round_tag)
     built = rounds.built_at(out, round_tag, base)
-    if built is not None:
+    # a suggestion round with a base snapshot skips the order check: it edited nothing, and
+    # the per-frame base check below refuses any of its frames another merge changed
+    if built is not None and not (base is not None and _is_suggest(out, round_tag)):
         later = [m for m in markers if m.get("stem") == export_stem
                  and m.get("tag") != round_tag
                  and (rounds.marker_time(m) or built) > built]

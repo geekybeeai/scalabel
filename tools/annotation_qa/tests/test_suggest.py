@@ -166,3 +166,63 @@ def test_merge_keeps_base_check(env):
     from annotation_qa.merge import MergeRefused
     with pytest.raises(MergeRefused, match="work copy changed"):
         merge_reviewed(STEM, _review(tmp, out, False), out, TAG)
+
+
+def test_all_detected_takes_unmarked_issues_but_not_false_ones(env):
+    tmp, out, _, (i1, i2, i3) = env
+    write_marks(out / "marks.json", {i3.key: "false"})  # i1, i2 not triaged at all
+    with pytest.raises(FixRefused, match="needs --suggest"):
+        apply("position", out, 1, name="x", all_detected=True)
+    r = apply("position", out, 1, name="position_suggest", suggest=True, all_detected=True)
+    assert [f["name"] for f in _read(out, "items")["frames"]] == ["f1.png", "f2.png"]
+    assert sorted(r.changed[STEM]) == ["f1.png", "f2.png"]  # a hand fix is a suggestion too
+
+
+def test_frames_restricts_the_round(env):
+    tmp, out, _, _ = env
+    apply("position", out, 1, name="position_suggest", suggest=True, frames={f"{STEM}|f2.png"})
+    assert [f["name"] for f in _read(out, "items")["frames"]] == ["f2.png"]
+    with pytest.raises(FixRefused, match="no frame"):
+        apply("position", out, 2, name="other", suggest=True, frames={"nope.png"})
+
+
+def test_disabled_type_only_as_suggestions(env, monkeypatch):
+    tmp, out, _, _ = env
+    monkeypatch.setattr(fixmod, "DISABLED_FOR_ROUNDS", frozenset({"position"}))
+    with pytest.raises(FixRefused, match="dropped by calibration"):
+        apply("position", out, 1, name="position_suggest")
+    r = apply("position", out, 1, name="position_suggest", suggest=True)
+    assert r.tags == [TAG]
+
+
+def test_suggest_rounds_of_other_names_do_not_block_each_other(env):
+    tmp, out, _, _ = env
+    apply("position", out, 1, name="position_suggest", suggest=True, frames={"f1.png"})
+    r = apply("position", out, 1, name="group_b", suggest=True, frames={"f2.png"})
+    assert r.tags == [f"{STEM}_fix_group_b_v1"]
+    with pytest.raises(FixRefused, match="not merged yet"):  # a real (editing) round still waits
+        apply("position", out, 1, name="edits")
+    # merging one suggestion round does not block merging the other (disjoint frames)
+    def reviewed(tag):
+        p = tmp / f"{tag}.reviewed.json"
+        p.write_text((out / "rounds" / f"{tag}_items.json").read_text())
+        return p
+    merge_reviewed(STEM, reviewed(f"{STEM}_fix_group_b_v1"), out, f"{STEM}_fix_group_b_v1")
+    r = merge_reviewed(STEM, reviewed(TAG), out, TAG)
+    assert r.suggest and r.frames == 1
+
+
+def test_suggest_merge_after_overlapping_merge_is_refused(env):
+    tmp, out, _, _ = env
+    apply("position", out, 1, name="position_suggest", suggest=True, frames={"f1.png"})
+    apply("position", out, 1, name="group_b", suggest=True, frames={"f1.png"})
+    items = json.loads((out / "rounds" / f"{STEM}_fix_group_b_v1_items.json").read_text())
+    items["frames"][0]["labels"][0]["poly2d"][0]["vertices"][0][1] += 7  # the user edits f1
+    p = tmp / "b.json"
+    p.write_text(json.dumps(items))
+    merge_reviewed(STEM, p, out, f"{STEM}_fix_group_b_v1")
+    q = tmp / "a.json"
+    q.write_text((out / "rounds" / f"{TAG}_items.json").read_text())
+    from annotation_qa.merge import MergeRefused
+    with pytest.raises(MergeRefused, match="work copy changed"):
+        merge_reviewed(STEM, q, out, TAG)
