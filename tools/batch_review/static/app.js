@@ -213,7 +213,7 @@ function renderInfo() {
   $("#cad").innerHTML = f.cad
     ? `<a class="btn" href="${esc(f.cad.url)}" target="_blank" rel="noopener" title="CAD image ${esc(f.cad.file)}">CAD</a>`
     : `<span class="muted">no CAD</span>`;
-  if (!S.scrubbing) { $("#jump").value = f.index + 1; $("#slider").value = f.index + 1; }
+  $("#jump").value = f.index + 1; $("#slider").value = f.index + 1;
   renderCats();
 }
 
@@ -231,7 +231,7 @@ async function go(i, fresh) {
   history.replaceState(null, "", `#b=${encodeURIComponent(S.batch.name)}&i=${i + 1}`);
   renderInfo();
   const keep = $("#keepZoom").checked && !fresh;
-  if (S.imgUrl === f.image) { renderLabels(); schedulePlay(); return; }
+  if (S.imgUrl === f.image) { renderLabels(); return; }
   $("#loading").classList.add("on");
   const pending = new Image();
   pending.onload = () => {
@@ -244,7 +244,6 @@ async function go(i, fresh) {
     renderLabels(); applyView();
     $("#loading").classList.remove("on");
     preload(i + 1); preload(i - 1);
-    schedulePlay();
   };
   pending.onerror = () => { if (tok === S.token) { $("#loading").classList.remove("on"); toast("Image not found: " + f.name); } };
   pending.src = f.image;
@@ -351,45 +350,9 @@ function wire() {
   $("#refresh").onclick = async () => { await api("/api/reload"); preloaded.clear(); await loadBatches(S.batch ? S.batch.id : undefined); toast("Reloaded"); };
   $("#prev").onclick = () => go(S.idx - 1);
   $("#next").onclick = () => go(S.idx + 1);
-  // Scalabel-style scrubbing: the image follows the slider while you drag it
-  let scrubT = 0;
-  const scrubTo = (n, now) => {
-    $("#jump").value = n;
-    clearTimeout(scrubT);
-    if (now) go(n - 1); else scrubT = setTimeout(() => go(n - 1), 90);
-  };
-  const tip = () => {
-    const sl = $("#slider"), t = $("#sliderTip"), n = +sl.value;
-    if (!S.batch) return;
-    const f = S.batch.frames[n - 1];
-    t.textContent = `${n} · ${f ? f.short : ""}`;
-    const k = (n - 1) / Math.max(1, sl.max - 1);
-    t.style.left = `calc(${k * 100}% + ${(0.5 - k) * 16}px)`;
-    t.hidden = false;
-  };
-  $("#slider").oninput = () => { tip(); scrubTo(+$("#slider").value); };
-  $("#slider").onchange = () => scrubTo(+$("#slider").value, true);
-  $("#slider").addEventListener("pointerenter", tip);
-  $("#slider").addEventListener("pointerdown", () => { S.scrubbing = true; });
-  window.addEventListener("pointerup", () => { if (S.scrubbing) { S.scrubbing = false; $("#sliderTip").hidden = true; scrubTo(+$("#slider").value, true); } });
-  $("#slider").addEventListener("pointerleave", () => { if (!S.scrubbing) $("#sliderTip").hidden = true; });
-  // scroll (or trackpad side-swipe) over the bottom bar steps through the images
-  let wheelAcc = 0, tipT = 0;
-  $("#player").addEventListener("wheel", (e) => {
-    if (!S.batch) return;
-    e.preventDefault();
-    wheelAcc += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-    const steps = Math.trunc(wheelAcc / 40);
-    if (!steps) return;
-    wheelAcc -= steps * 40;
-    const n = Math.min(Math.max(1, +$("#slider").value + steps), S.batch.frames.length);
-    $("#slider").value = n; tip(); scrubTo(n);
-    clearTimeout(tipT); tipT = setTimeout(() => { if (!S.scrubbing) $("#sliderTip").hidden = true; }, 1200);
-  }, { passive: false });
-  $("#jump").oninput = () => { const n = +$("#jump").value; if (n >= 1 && S.batch && n <= S.batch.frames.length) { clearTimeout(scrubT); scrubT = setTimeout(() => go(n - 1), 400); } };
-  $("#jump").onkeydown = (e) => { if (e.key === "Enter") { clearTimeout(scrubT); go(+$("#jump").value - 1); $("#jump").blur(); } };
-  $("#play").onclick = togglePlay;
-  $("#speed").onchange = () => lsSet("#speed", $("#speed").value);
+  $("#slider").oninput = () => { $("#jump").value = $("#slider").value; };
+  $("#slider").onchange = () => go(+$("#slider").value - 1);
+  $("#jump").onkeydown = (e) => { if (e.key === "Enter") { go(+$("#jump").value - 1); $("#jump").blur(); } };
   $("#search").onchange = () => {
     const q = $("#search").value.trim().toLowerCase();
     if (!q || !S.batch) return;
@@ -429,7 +392,6 @@ function wire() {
     else if (k === "s" && S.frame && S.frame.geo) window.open(S.frame.geo.streetview, "_blank");
     else if (k === "l" && S.frame && S.frame.geo) copyText(`${S.frame.geo.lat}, ${S.frame.geo.lon}`, "lat, lon");
     else if (k === "h") { $("#showLines").checked = !$("#showLines").checked; renderLabels(); }
-    else if (k === " ") { e.preventDefault(); togglePlay(); }
     else if (k === "b") toggleSide();
     else if (k === "v") { const o = ["auto", "row", "col"]; $("#layout").value = o[(o.indexOf($("#layout").value) + 1) % 3]; $("#layout").onchange(); toast("Layout: " + $("#layout").selectedOptions[0].text); }
     else if (k === "?" || k === "escape") { $("#help").hidden = k === "escape" ? true : !$("#help").hidden; }
@@ -441,23 +403,6 @@ function wire() {
     else if (h.i !== undefined && h.i !== S.idx) go(h.i);
   });
 }
-// play: next image once the current one is shown, after the chosen time; stops at the end
-let playT = 0;
-function togglePlay(stop) {
-  const on = stop === true ? false : !$("#play").classList.contains("on");
-  $("#play").classList.toggle("on", on);
-  $("#play").innerHTML = on ? "&#10074;&#10074; Pause" : "&#9654;&#xFE0E; Play";
-  clearTimeout(playT);
-  if (on) schedulePlay();
-}
-function schedulePlay() {
-  clearTimeout(playT);
-  if (!$("#play").classList.contains("on")) return;
-  playT = setTimeout(() => {
-    if (!S.batch || S.idx >= S.batch.frames.length - 1) { togglePlay(true); return; }
-    go(S.idx + 1);
-  }, +$("#speed").value);
-}
 function toggleSide() {
   document.body.classList.toggle("noside");
   lsSet("noside", document.body.classList.contains("noside"));
@@ -466,7 +411,6 @@ function toggleSide() {
 function restorePrefs() {
   if (lsGet("noside", false)) document.body.classList.add("noside");
   { const v = lsGet("#layout", null); if (v) $("#layout").value = v; }
-  { const v = lsGet("#speed", null); if (v) $("#speed").value = v; }
   S.hidden = new Set(lsGet("hidden", []));
   for (const id of ["#showLines", "#showVerts", "#keepZoom"]) { const v = lsGet(id, null); if (v !== null) $(id).checked = v; }
   for (const id of ["#lineW", "#lineO", "#bright"]) { const v = lsGet(id, null); if (v !== null) $(id).value = v; }

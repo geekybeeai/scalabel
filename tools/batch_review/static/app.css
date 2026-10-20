@@ -83,14 +83,7 @@ body.noside #side { display: none; }
   border-top: 1px solid var(--line); flex: none; }
 #player button, #player input[type=number] { padding: 1px 8px; }
 #jump { width: 70px; }
-#scrub { flex: 1; position: relative; display: flex; align-items: center; }
-#slider { flex: 1; padding: 0; accent-color: #43a047; height: 22px; cursor: pointer; }
-#sliderTip { position: absolute; bottom: 26px; transform: translateX(-50%); background: #111;
-  border: 1px solid var(--line); border-radius: 3px; padding: 1px 7px; font-size: 12px; white-space: nowrap;
-  pointer-events: none; }
-#jump { color: #4caf50; font-weight: 600; background: #000; }
-#play.on { background: #43a047; border-color: #43a047; color: #fff; }
-#speed { padding: 1px 4px; }
+#slider { flex: 1; padding: 0; accent-color: var(--accent); }
 
 #help { position: fixed; right: 10px; top: 36px; z-index: 11; background: var(--panel);
   border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; font-size: 13px;

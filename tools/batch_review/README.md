@@ -79,16 +79,10 @@ image_name,latitude,longitude
   | L | copy "lat, lon" |
   | H | hide / show all lines |
   | 1 … 9 | toggle a class |
-  | Space | play / pause |
   | B | hide / show the side panel |
   | V | next layout |
   | ? | help |
 
-- **Image bar (bottom), as in Scalabel:**
-  - The images change while you drag the slider, and a label above it shows the number and name.
-  - Scrolling over the bar, or a trackpad side-swipe, steps through the images.
-  - Type a number to jump to that image.
-  - **Play** (or **Space**) moves to the next image at the chosen speed and stops at the end.
 - **Mouse:** scroll to zoom, drag to pan, double-click to zoom in. Either image can be used; both move together.
 - **More room for the images:**
   - ☰ (or **B**) hides the side panel.
