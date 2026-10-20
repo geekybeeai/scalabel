@@ -300,9 +300,10 @@ def _crop_name(*parts: str) -> str:
 def _project_link(repo_root: Path, tag: str, index: int, n_items: int = 0) -> dict:
     """Deep link to frame ``index`` (0-based, items-file order) of a review project."""
     size = 0
-    try:
-        size = int(json.loads((Path(repo_root) / "local-data/scalabel/projects" / tag
-                               / "project.json").read_text())["config"]["taskSize"])
+    try:  # project.json holds every item's labels: parse it once per (path, mtime)
+        size = int(_cached("task_size", Path(repo_root) / "local-data/scalabel/projects" / tag
+                           / "project.json",
+                           lambda p: json.loads(p.read_text())["config"]["taskSize"]))
     except Exception:  # noqa: BLE001
         pass
     if size <= 0:
