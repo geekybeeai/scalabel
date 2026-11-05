@@ -14,6 +14,19 @@ if ! up 6379; then
   echo "         Start it with:  docker start scalabel-redis"
 fi
 
+# The QA review pages need a Python whose numpy, scipy and opencv load together (an Anaconda
+# python3 first on PATH may not). Use $QA_PYTHON if set, else the first that works.
+QA_PY=""
+for p in ${QA_PYTHON:-} /Library/Frameworks/Python.framework/Versions/3.12/bin/python3 \
+         $(which -a python3 2>/dev/null); do
+  if [ -x "$p" ] && "$p" -c "import numpy, scipy.ndimage, cv2" >/dev/null 2>&1; then QA_PY=$p; break; fi
+done
+if [ -z "$QA_PY" ]; then
+  echo "WARNING: no python3 with numpy + scipy + opencv found; the QA review pages will not start."
+  echo "         Set QA_PYTHON=/path/to/python3 and run again."
+  QA_PY=python3
+fi
+
 PIDS=()
 start() { # name port log dir command...
   local name=$1 port=$2 log=$3 dir=$4; shift 4
@@ -43,7 +56,7 @@ start "Scalabel" 8686 scalabel.log "$ROOT" \
 for _ in $(seq 1 30); do up 8686 && break; sleep 1; done
 start "Batch Review" 8687 batch_review.log "$ROOT/tools/batch_review" node server.js
 start "QA review pages" 8790 qa_review.log "$ROOT/tools" \
-  python3 -m annotation_qa review --out ../local-data/items/Full_Verfication/qa_2026_10_17 --port 8790
+  "$QA_PY" -m annotation_qa review --out ../local-data/items/Full_Verfication/qa_2026_10_17 --port 8790
 
 for _ in $(seq 1 20); do up 8687 && up 8790 && break; sleep 1; done
 echo
