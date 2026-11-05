@@ -30,6 +30,7 @@ from annotation_qa.imaging import FrameImage
 from annotation_qa.progress import is_reviewed
 from annotation_qa.reverts import read_reverts
 from annotation_qa.render import RENDER_VERSION, issue_crop
+from annotation_qa.geo import default_index as geo_index
 from annotation_qa.rounds import (merged_tags, read_verdicts, round_files,  # noqa: F401
                                   split_changes, suggest_view)
 
@@ -335,7 +336,7 @@ def build_rows(out: Path, repo_root: Path) -> list[dict]:
     def row(stem: str, name: str) -> dict:
         return rows.setdefault((stem, name), {
             "export_stem": stem, "frame_name": name, "changes": [], "hand": [], "projects": [],
-            "review_edits": []})
+            "review_edits": [], "geo": geo_index().lookup(name)})
 
     merged = merged_tags(out)
     reverts = read_reverts(out)
@@ -704,7 +705,8 @@ const vbadge=c=>{const v=VB[c.verdict]||VB.check,rs=(c.reasons||[]).map(esc).joi
  return `<span class="vb" style="color:${v[1]};background:${v[2]};border:1px solid ${v[1]};border-radius:3px;padding:0 5px;font-weight:600" title="${rs}">${v[0]}</span><div class="why" style="font-size:11px;color:#666;max-width:260px">${(c.reasons||[]).map(esc).join('<br>')}</div>`;};
 let TOTAL=0,NREV=0;
 const sfr=r=>{const p=r.scalabel;return p?(p.n_tasks>1?'task '+p.task_index+', frame '+p.item:'frame '+p.item):'';};
-const where=r=>{const a=r.projects.length?'<a class="open" href="'+esc((r.scalabel||r.projects[0]).link)+'" target="_blank">Open in Scalabel</a>':'';
+const geoH=g=>g?` <span class="geo">&#128205; <span class="ll" title="select to copy">${g.lat}, ${g.lon}</span> &middot; <a href="${esc(g.maps)}" target="_blank">Maps</a> &middot; <a href="${esc(g.streetview)}" target="_blank">Street View</a></span>`:'';
+const where=r=>{const a=(r.projects.length?'<a class="open" href="'+esc((r.scalabel||r.projects[0]).link)+'" target="_blank">Open in Scalabel</a>':'')+geoH(r.geo);
  return `<div class="where"><span class="pos">Image ${r.n} of ${TOTAL}</span>${r.scalabel?' <span class="sfr">Scalabel '+esc(sfr(r))+'</span>':''} ${a}
  ${r.reviewed?'<span class="rbadge">✓ reviewed</span>':''} <label class="rvw"><input type="checkbox" class="rchk" data-i="${r._i}"${r.reviewed?' checked':''}${r.locked?' disabled':''}> reviewed${r.locked?' (merged)':''}</label></div>`;};
 const card=r=>r.all_ok&&!r._open?`<div class="card collapsed" data-i="${r._i}"><div class="meta">${where(r)}<span class="vb" style="color:#2a7">✓ all changes verified</span> &mdash; ${esc(r.frame_name)} (${r.changes.length}) &mdash; <a href="#" class="expand" data-i="${r._i}">open anyway</a>${r.projects.length?' &middot; <a class="open" href="'+esc(r.projects[0].link)+'" target="_blank">Scalabel</a>':''}</div></div>`:`<div class="card" data-i="${r._i}"><div class="meta">${where(r)}<div><b>${esc(r.export_stem)}</b></div>
@@ -783,6 +785,7 @@ document.addEventListener('keydown',e=>{
 def viewb_html(css: str) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Annotation QA View B</title>
 <style>{css}
+.geo{{white-space:nowrap}}.geo .ll{{user-select:all;font-family:ui-monospace,Menlo,monospace;background:#f3f3f3;padding:0 3px;border-radius:3px}}
 .chgs{{display:block}}
 .chg{{display:flex;gap:10px;align-items:flex-start;padding:4px 8px;border-top:1px solid #eee}}
 .txt{{flex:0 0 220px;width:220px;min-width:0;overflow-wrap:anywhere;font-size:13px}}

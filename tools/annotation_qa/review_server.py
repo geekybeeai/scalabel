@@ -24,6 +24,7 @@ from annotation_qa import progress as pg
 from annotation_qa import reverts as rv
 from annotation_qa.rounds import merged_tags, round_files, split_changes as rounds_split
 from annotation_qa.exclude import read_excluded
+from annotation_qa.geo import default_index as geo_index
 from annotation_qa.viewb import build_rows, render_crop, select_rows, viewb_html
 
 log = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ class ReviewState:
                 f"&item={frame_no}" if frame_no else ""),
             locator="/locator?key=" + quote(issue.key, safe=""),
             comment=(comments or {}).get(issue.key, {}).get("text", ""),
+            geo=geo_index().lookup(issue.frame_name),
             n=0, group_size=1, other_types=0, overview="",
             crop=f"/crops/{issue.issue_type}/"
                  f"{hashlib.sha1(issue.key.encode()).hexdigest()[:12]}.jpg",
@@ -491,6 +493,7 @@ def serve(out: Path, port: int = 8790, page: str = "/") -> None:
 
 
 CSS = """
+.geo{white-space:nowrap}.geo .ll{user-select:all;font-family:ui-monospace,Menlo,monospace;background:#f3f3f3;padding:0 3px;border-radius:3px}
 body{font:14px system-ui,sans-serif;margin:0;background:#f4f4f6;color:#222}
 header{background:#fff;padding:8px 16px;border-bottom:1px solid #ddd;position:sticky;top:0;z-index:2}
 .tab{display:inline-block;padding:6px 12px;margin-right:4px;border-radius:6px;cursor:pointer;background:#e8e8ee}
@@ -553,7 +556,7 @@ function card(it,i){const m=marks[it.key]||'';
  <div>${esc(it.reason)}</div><div>this frame has ${it.others} other issues</div>
  ${it.hand_fix?'<div><span class="badge">draw by hand</span></div>':''}
  ${it.auto_fix_rejected?'<div><span class="badge" style="background:#888">auto-fix rejected</span></div>':''}
- <div><a href="${esc(it.link)}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}</div>
+ <div><a href="${esc(it.link)}" target="_blank">Open in Scalabel</a>${it.project_found?'':' (project not found)'}${geoHtml(it.geo)}</div>
  <div style="margin-top:8px"><button class="r" onclick="mark(${i},'real')">Real</button>
  <button class="f" onclick="mark(${i},'false')">False alarm</button></div>${cmtBox(it,i)}</div></div></div>`;}
 async function mark(i,v){const it=items[i];try{await post('/marks',{[it.key]:v});}catch(e){return;}
@@ -594,6 +597,9 @@ function lbRawToggle(){if(lbI>=0){lbRaw=!lbRaw;lbShow(lbI);}}
 function lbOpenSc(){if(lbI>=0)window.open(items[lbI].link,'_blank');}
 $('#lbimg').onclick=e=>e.target.classList.toggle('full');
 async function lbAnswer(i,v){try{await LB_ANSWER(i,v);}catch(e){return false;}return true;}
+// lat/lon of the image (Batch Review's CSV) with Google Maps and Street View links
+function geoHtml(g){if(!g)return '';return ` <span class="geo">&#128205; <span class="ll" title="select to copy">${g.lat}, ${g.lon}</span>
+ &middot; <a href="${esc(g.maps)}" target="_blank">Maps</a> &middot; <a href="${esc(g.streetview)}" target="_blank">Street View</a></span>`;}
 const cmtT={};
 function cmtBox(it,i){return `<div><textarea class="cmt" id="cm${i}" rows="2" placeholder="Comment for Claude (optional)\u2026"
  oninput="cmtInput(${i},this.value)" onblur="cmtSave(${i})">${esc(it.comment)}</textarea><span class="sv" id="sv${i}"></span></div>`;}
@@ -659,7 +665,7 @@ window.LB_ANSWER=answer;
  <img class="crop" loading="lazy" src="${esc(it.crop)}" onclick="lbOpen(${i})"><div class="row">
  <img class="loc" loading="lazy" src="${esc(it.locator)}"><div><div><span class="num">${i+1}</span>${esc(it.reason)}</div>
  <div>${esc(it.category)} &middot; ${esc(it.frame_name)} &middot; label ${esc(it.label_id)}
- &middot; <a href="${esc(it.link)}" target="_blank">Open in Scalabel</a></div>
+ &middot; <a href="${esc(it.link)}" target="_blank">Open in Scalabel</a>${geoHtml(it.geo)}</div>
  <div class="big"><button class="r" onclick="answer(${i},'real')">YES &mdash; real mistake (Y)</button>
  <button class="f" onclick="answer(${i},'false')">NO &mdash; false alarm (N)</button></div>${cmtBox(it,i)}</div></div></div>`).join('');count();})();
 """

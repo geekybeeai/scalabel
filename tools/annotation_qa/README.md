@@ -141,6 +141,8 @@ python3 -m annotation_qa final --out $OUT               # $OUT/final/<stem>_qa_2
 
 ## Review UI: lightbox, keys, prerender, deep link
 
+- **Lat/lon and Street View:** View A cards, calibrate cards and View B images show `📍 lat, lon · Maps · Street View` beside "Open in Scalabel" when the image has a row in Batch Review's CSV (`tools/batch_review/image_locations.csv`; `annotation_qa/geo.py`). Use it the way the drafters do, to check on Street View whether an edge has a curb. Images match by file name (as Batch Review matches them), and the file is read again when it changes, so lat/lon uploaded or typed in Batch Review shows up after a page reload.
+
 - View A groups cards by frame (most issues first) under a header with a numbered overview of the whole frame; every card has a locator thumbnail. `/calibrate` keeps its fixed order.
 - Click a crop to open the lightbox (high-detail render from `/zoom`, cached in `OUT/zoom/` under a hash of the renderer version, the issue and its fix, and the frame's labels, so a merge or live edit renders a fresh crop). `Esc` closes, left/right arrows move, `R` toggles raw only, `O` opens the issue in Scalabel. On `/calibrate`, `Y` = YES and `N` = NO, with or without the lightbox, then it advances.
 - Ahead of time: `python3 -m annotation_qa prerender-zoom --out $OUT [--calibration-only]` (one image decode per frame; also makes the locator thumbnails).
