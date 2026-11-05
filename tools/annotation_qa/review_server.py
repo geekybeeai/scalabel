@@ -19,7 +19,7 @@ from annotation_qa.issues import (CALIBRATION_N, Issue, calibration_keys,  # noq
                                   calibration_sample, calibration_status,
                                   frozen_calibration_keys, load_issues_tolerant, read_marks,
                                   write_marks)
-from annotation_qa import comments as cm, locator, zoom
+from annotation_qa import comments as cm, discard_page, locator, occlusion, zoom
 from annotation_qa import progress as pg
 from annotation_qa import reverts as rv
 from annotation_qa.rounds import merged_tags, round_files, split_changes as rounds_split
@@ -357,6 +357,20 @@ def _handler(state: ReviewState):
                 self._send(calibrate_html(t, len(cm.read_comments(state.out))).encode(), "text/html; charset=utf-8")
             elif u.path == "/viewb":
                 self._send(viewb_html(CSS).encode(), "text/html; charset=utf-8")
+            elif u.path == "/discard":
+                self._send(discard_page.HTML.encode(), "text/html; charset=utf-8")
+            elif u.path == "/discard/items":
+                self._json(discard_page.items(state.out))
+            elif u.path == "/discard/img":
+                try:
+                    p = discard_page.render(state.out, int((q.get("i") or ["-1"])[0]))
+                except (ValueError, OSError) as e:
+                    log.warning("discard image failed: %s", e)
+                    p = None
+                if p is not None and p.is_file():
+                    self._send(p.read_bytes(), "image/jpeg")
+                else:
+                    self._send(b"not found", "text/plain", 404)
             elif u.path == "/viewb/rows":
                 self._json(build_rows(state.out, state.repo_root))
             elif u.path == "/viewb/view":
@@ -443,6 +457,16 @@ def _handler(state: ReviewState):
                             or not isinstance(body.get("text"), str):
                         raise ValueError("expected {key: str, text: str}")
                     self._json({"saved": True, "count": state.set_comment(body["key"], body["text"])})
+                elif self.path == "/discard/answer":
+                    if not isinstance(body, dict) or not isinstance(body.get("key"), str) \
+                            or body.get("value") not in (None, "", "discard", "keep") \
+                            or not isinstance(body.get("comment", ""), str):
+                        raise ValueError("expected {key: str, value?: 'discard'|'keep'|'', comment?: str}")
+                    keys = {c["key"] for c in discard_page.items(state.out)["cards"]}
+                    if body["key"] not in keys:
+                        raise ValueError("not a discard candidate")
+                    a = occlusion.set_answer(state.out, body["key"], body.get("value"), body.get("comment"))
+                    self._json({"saved": True, "answered": sum(1 for v in a.values() if v.get("value"))})
                 elif self.path == "/viewb/revert":
                     if not isinstance(body, dict) or not all(
                             isinstance(body.get(k), str) for k in ("round", "frame", "label")) \

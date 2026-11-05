@@ -89,6 +89,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="with --suggest: every detected issue not marked false (not only the "
                          "real-marked ones)")
     fx.add_argument("--force", action="store_true", help=argparse.SUPPRESS)  # removed: see C1
+    oc = sub.add_parser("occlusion", help="images whose lines lie under trees / deep shadow: "
+                                          "discard candidates, a project and the /discard page")
+    oc.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    oc.add_argument("--min", type=float, default=0.10,
+                    help="covered share of the labelled lines to be a candidate (default 0.10)")
+    oc.add_argument("--project", default=None,
+                    help="also create this Scalabel project of the candidates (worst first)")
+    oc.add_argument("--server", default="http://localhost:8686")
+    oc.add_argument("--workers", type=int, default=8)
     pj = sub.add_parser("project", help="(re)create the Scalabel review project of one round")
     pj.add_argument("--round", required=True, help="round tag, e.g. <stem>_fix_<type>_v<N>")
     pj.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -249,6 +258,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no frames changed or flagged for {a.type}; no round written")
         if a.create_projects and _create_projects(a.out, r.tags, a.server):
             return 1
+        return 0
+    if a.cmd == "occlusion":
+        from annotation_qa import occlusion as oc_
+        rows = oc_.measure_all(a.out, a.workers)
+        cands = oc_.write_candidates(a.out, rows, a.min)
+        print(f"measured {len(rows)} images; {len(cands)} with >= {a.min:.0%} of their labelled "
+              f"lines under canopy / deep shadow -> {a.out / 'discard' / 'candidates.json'}")
+        if a.project and cands:
+            from annotation_qa.scalabel_project import ProjectExists, create
+            items = oc_.write_items(a.out, cands, a.out / "discard" / f"{a.project}_items.json")
+            meta = a.out / "discard" / "project.json"
+            import json as _json
+            meta.write_text(_json.dumps({"project": a.project, "items": items.name}))
+            try:
+                print(f"project: {create(items, a.project, a.server)}")
+            except ProjectExists as e:
+                print(f"project: skipped, {e}")
+        print("review them at http://127.0.0.1:8790/discard")
         return 0
     if a.cmd == "project":
         items = a.out / "rounds" / f"{a.round}_items.json"
