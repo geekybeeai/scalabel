@@ -451,3 +451,16 @@ def test_in_flight_submissions_are_bounded():
         seen.append(res["job"])
         assert pool.submitted - len(seen) <= 2 * pool.workers
     assert seen == list(range(100))
+
+
+def test_scan_ignores_discarded_images(tmp_path, fake_detector):
+    from annotation_qa.occlusion import set_answer
+    root = tmp_path / "root"
+    _img(root, "items/a.png")
+    exp = _write_export(tmp_path / "ex.json", [_frame("keep.png"), _frame("gone.png")])
+    out = tmp_path / "out"
+    set_answer(out, "ex|gone.png", "discard")
+    set_answer(out, "ex|other.png", "keep")
+    s = run_scan([exp], root, out, ["fake"])
+    assert [i.frame_name for i in read_issues(out / "issues_fake.jsonl")] == ["keep.png"]
+    assert s.frames == 1

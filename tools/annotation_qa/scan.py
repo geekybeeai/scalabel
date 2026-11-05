@@ -30,6 +30,7 @@ from annotation_qa.context import FrameContext
 from annotation_qa.data import (REVIEWER_FRAMES, Export, image_path, load_export,
                                 reviewer_match)
 from annotation_qa.detectors import REGISTRY
+from annotation_qa.occlusion import discarded
 from annotation_qa.imaging import FrameImage
 from annotation_qa.issues import (append_issues, file_sha1, load_issues_tolerant, read_meta,
                                   write_issues, write_meta)
@@ -319,6 +320,12 @@ def _scan_exports(exports, root, out, types, subset, since_merge, wanted, meta, 
         except Exception as e:
             fail(f"{stem}: cannot load export: {type(e).__name__}: {e}")
             continue
+        disc = discarded(out)  # images answered Discard at /discard (trees / shadow): ignored
+        if disc:
+            n0 = len(frames)
+            frames = [f for f in frames if f"{exp.stem}|{_fname(f)}" not in disc]
+            if len(frames) < n0:
+                print(f"{exp.stem}: {n0 - len(frames)} discarded image(s) ignored", flush=True)
         seen: set[str] = set()
         jobs = [(exp.stem, frame, Path(root), out,
                  [t for t in types if todo is None or _fname(frame) in todo[t]])

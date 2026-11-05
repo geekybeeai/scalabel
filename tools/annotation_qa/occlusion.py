@@ -147,6 +147,13 @@ def read_answers(out: Path) -> dict:
         return {}
 
 
+def discarded(out: Path) -> set[str]:
+    """"<stem>|<frame name>" of the images answered Discard. They are only left out of the
+    final deliverable at the end; until then scan and fix ignore them, so they do not sway
+    calibration, rules or rounds."""
+    return {k for k, v in read_answers(out).items() if (v or {}).get("value") == "discard"}
+
+
 def set_answer(out: Path, key: str, value: str | None, comment: str | None = None) -> dict:
     """value: "discard" | "keep" | "" (clear); comment kept as given (None = unchanged)."""
     if value not in ("discard", "keep", "", None):

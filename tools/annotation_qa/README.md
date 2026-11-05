@@ -147,6 +147,8 @@ python3 -m annotation_qa occlusion --out $OUT --min 0.10 --project qa_discard_tr
 
 This measures, for every image of the working copies, the share of its labelled lines that is covered: tree canopy or deep shadow on the line and on both sides of it (grass along one side of a curb does not count). Images at or above `--min` are written worst-first to `$OUT/discard/candidates.json`, and with `--project` a Scalabel project of them is created. At http://127.0.0.1:8790/discard each image is answered **Discard (Y)** or **Keep (N)**, with an optional comment. The card shows the road strip with its labels, the covered stretches as magenta dots, lat/lon with Street View, and Open in Scalabel. Answers go to `$OUT/discard/answers.json`.
 
+Images answered **Discard** are ignored until the final cut: `scan` skips them (no new issues) and `fix` leaves their issues out of every round (listed as skipped, "image discarded"), so they do not sway calibration, rules or rounds. They are not removed from any export yet; that happens at the end.
+
 ## Review UI: lightbox, keys, prerender, deep link
 
 - **Lat/lon and Street View:** View A cards, calibrate cards and View B images show `📍 lat, lon · Maps · Street View` beside "Open in Scalabel" when the image has a row in Batch Review's CSV (`tools/batch_review/image_locations.csv`; `annotation_qa/geo.py`). Use it the way the drafters do, to check on Street View whether an edge has a curb. Images match by file name (as Batch Review matches them), and the file is read again when it changes, so lat/lon uploaded or typed in Batch Review shows up after a page reload.

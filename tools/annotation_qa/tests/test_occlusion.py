@@ -110,3 +110,11 @@ def test_page_script_has_no_syntax_error():
         p = Path(tempfile.mkdtemp()) / "p.js"
         p.write_text(js)
         assert subprocess.run(["node", "--check", str(p)]).returncode == 0
+
+
+def test_discarded_lists_only_discard_answers(tmp_path):
+    oc.set_answer(tmp_path, "s|a.png", "discard")
+    oc.set_answer(tmp_path, "s|b.png", "keep")
+    oc.set_answer(tmp_path, "t|c.png", None, "just a comment")
+    assert oc.discarded(tmp_path) == {"s|a.png"}
+    assert oc.discarded(tmp_path / "nowhere") == set()

@@ -720,3 +720,15 @@ def test_stems_cli_unknown_exit_2(env, capsys):
     assert main(["fix", "--type", "curb_soft", "--version", "1", "--out", str(out),
                  "--stems", "nope"]) == 2
     assert "unknown stem" in capsys.readouterr().out
+
+
+def test_apply_skips_issues_on_discarded_images(env):
+    from annotation_qa.occlusion import set_answer
+    orig, out, _ = env
+    i1 = _issue("exportA", "f1.png", "a", "curb_soft", {"op": "set_category", "to": "curb_road_edge"})
+    i2 = _issue("exportA", "f3.png", "z", "curb_soft", {"op": "delete"})
+    _setup(out, [i1, i2], ["real", "real"])
+    set_answer(out, "exportA|f3.png", "discard")  # trees / shadow: ignored until the final cut
+    r = apply("curb_soft", out, 1)
+    assert r.changed == {"exportA": ["f1.png"]}
+    assert any(s.startswith(i2.key) and "image discarded" in s for s in r.skipped)

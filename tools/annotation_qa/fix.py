@@ -18,6 +18,7 @@ from annotation_qa.data import ORIGINALS_DIR, load_export, save_export
 from annotation_qa.exclude import read_excluded
 from annotation_qa.geometry import (LINE_WIDTH, ShiftNotRepresentable, _segments, change_anchor,
                                       max_move, partial_shift, point_at_arc, split_poly)
+from annotation_qa.occlusion import discarded
 from annotation_qa.issues import (Issue, calibration_status, file_sha1, format_calibration,
                                   load_issues_tolerant, read_marks, read_meta)
 
@@ -438,10 +439,15 @@ def apply(issue_type: str | list[str], out: Path, version: int, force_stale: boo
 
     res = FixResult(suggest=suggest)
     excluded = read_excluded(out)
+    disc = discarded(out)
     kept: dict[str, list[Issue]] = {}
     for stem, lst in by_stem.items():
         for i in lst:
-            if i.key in excluded:
+            if f"{i.export_stem}|{i.frame_name}" in disc:
+                msg = f"{i.key}: image discarded (trees / shadow) -- ignored"
+                res.skipped.append(msg)
+                log.warning("skipped %s", msg)
+            elif i.key in excluded:
                 why = (excluded[i.key] or {}).get("reason") or "auto-fix rejected by verifier"
                 msg = f"{i.key}: excluded: {why}"
                 res.skipped.append(msg)
