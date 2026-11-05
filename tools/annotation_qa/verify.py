@@ -429,10 +429,14 @@ def _join(issue, rec) -> dict:
         return {"verdict": "check", "reasons": ["line too short to verify"]}
     splices = np.asarray(j.get("splices") or [], float).reshape(-1, 2)
 
+    bridge = splices[:2] if j.get("mode") == "gap" and len(splices) >= 2 else None
+
     def outside(P):
         if not len(splices) or not len(P):
             return P
         d = np.linalg.norm(P[:, None, :] - splices[None], axis=2).min(axis=1)
+        if bridge is not None:  # a gap join: the new straight edge across the gap is not compared
+            d = np.minimum(d, _dist_to_polyline(P, bridge))
         return P[d > JOIN_SPLICE_R]
 
     Dn = np.asarray(dense(new), float)
@@ -450,7 +454,8 @@ def _join(issue, rec) -> dict:
     if nx > bx:
         return {"verdict": "bad", "reasons": ["the joined line crosses itself"], **m}
     mode = {"extend": "extended with the piece beyond the overlap",
-            "ring": "closed into a ring", "contained": "kept as it is (the piece lies on it)"}
+            "ring": "closed into a ring", "contained": "kept as it is (the piece lies on it)",
+            "gap": f"joined to the piece across a {max([float(g) for g in j.get('gaps') or []] or [0.0]):.0f} px gap"}
     facts = [f"{j.get('target')} {mode.get(j.get('mode'), 'joined')}; piece deleted",
              f"joined line within {f_new:.1f} px of the pieces; pieces within "
              f"{max(f_a, f_b):.1f} px of it (outside the splice)",
@@ -459,7 +464,7 @@ def _join(issue, rec) -> dict:
     if max(f_new, f_a, f_b) > JOIN_OK_FOLLOW:
         reasons.append(f"joined line and pieces differ by {max(f_new, f_a, f_b):.1f} px > "
                        f"{JOIN_OK_FOLLOW:.0f}: confirm which line is right")
-    if gap > JOIN_OK_GAP:
+    if gap > JOIN_OK_GAP and j.get("mode") != "gap":  # for a gap join the gap is the point
         reasons.append(f"splice gap {gap:.1f} px > {JOIN_OK_GAP:.0f}: confirm the splice")
     if dbl > JOIN_OK_DOUBLED:
         reasons.append(f"joined line doubles back over {dbl:.0f} px: confirm the shape")
