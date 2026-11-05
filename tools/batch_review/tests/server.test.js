@@ -246,6 +246,19 @@ test("typed lat/lon goes to the file that has the image; an old manual_locations
   assert.equal(store.setGeo("x/7.png", 95, 7).code, 400);
 });
 
+test("exact file name wins over the loose match (dash vs underscore)", () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "br-geo3-"));
+  fs.writeFileSync(path.join(d, "g.csv"), "image_name,latitude,longitude\n98736-201751_verification.png,35.3556,-119.0311\n98736_201751_verification.png,35.3563,-119.0308\n");
+  const store = new S.Store({ geo_csv: ["g.csv"], scalabel_url: "http://127.0.0.1:1" }, d);
+  assert.equal(store.geoFor("items/b1/98736-201751_verification.png").lat, 35.3556);
+  assert.equal(store.geoFor("items/b2/98736_201751_verification.png").lat, 35.3563);
+  // typing a value updates the exactly matching row, not the other image's
+  assert.equal(store.setGeo("items/b2/98736_201751_verification.png", 35.4, -119.1).result, "updated");
+  assert.equal(fs.readFileSync(path.join(d, "g.csv"), "utf8"),
+    "image_name,latitude,longitude\n98736-201751_verification.png,35.3556,-119.0311\n98736_201751_verification.png,35.4,-119.1\n");
+  assert.equal(store.geoFor("items/b1/98736-201751_verification.png").lat, 35.3556);
+});
+
 test("page script has no syntax error", () => {
   const src = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
   assert.doesNotThrow(() => new Function(src));

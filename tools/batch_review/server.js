@@ -63,6 +63,10 @@ function norm(filename) {
   return s.trim().replace(/[\s_-]+/g, "_").toLowerCase();
 }
 
+/** The file name only, lower case: an image matches its exact name first ("98736-201751" and
+ *  "98736_201751" are two different images), the loose ``norm`` only when there is none. */
+function baseName(name) { return path.posix.basename(String(name).replace(/\\/g, "/")).trim().toLowerCase(); }
+
 /** Deep link to item ``index`` (0-based, export order) of a Scalabel project. ``item`` is
  *  1-based within the task, as this Scalabel fork's deep link expects. */
 function scalabelLink(base, project, index, taskSize) {
@@ -129,9 +133,10 @@ function upsertGeoCsv(text, entries) {
   if (ic < 0 || la < 0 || lo < 0) throw new Error(`the CSV needs image, lat and lon columns; header is ${JSON.stringify(h)}`);
   const result = [];
   for (const e of entries) {
-    const k = norm(e.image);
+    const k = norm(e.image), b = baseName(e.image);
     let at = -1;
-    for (let r = rows.length - 1; r >= 1; r--) if (norm(rows[r][ic] || "") === k) { at = r; break; }
+    for (let r = rows.length - 1; r >= 1; r--) if (baseName(rows[r][ic] || "") === b) { at = r; break; }
+    if (at < 0) for (let r = rows.length - 1; r >= 1; r--) if (norm(rows[r][ic] || "") === k) { at = r; break; }
     if (at < 0) { rows.push(new Array(h.length).fill("")); at = rows.length - 1; rows[at][ic] = e.image; result.push("added"); }
     else result.push("updated");
     while (rows[at].length < h.length) rows[at].push("");
@@ -153,19 +158,19 @@ function pick(headers, names, contains) {
  *  file); lat is lat / latitude (else containing "lat"), lon is lon / lng / long / longitude
  *  (else containing "lon" or "lng"). Bad rows are skipped with a warning, never fatal. */
 function readGeoCsv(text, label) {
-  const out = {}, warn = [], names = {};
+  const out = {}, warn = [], names = {}, exact = {};
   const rows = parseCsv(text);
-  if (!rows.length) return { geo: out, names, warn: [`${label}: empty`] };
+  if (!rows.length) return { geo: out, names, exact, warn: [`${label}: empty`] };
   const h = rows[0];
   const ic = pick(h, ...IMAGE_COLS), la = pick(h, ...LAT_COLS), lo = pick(h, ...LON_COLS);
-  if (ic < 0 || la < 0 || lo < 0) return { geo: out, names, warn: [`${label}: need image, lat and lon columns; header is ${JSON.stringify(h)}`] };
+  if (ic < 0 || la < 0 || lo < 0) return { geo: out, names, exact, warn: [`${label}: need image, lat and lon columns; header is ${JSON.stringify(h)}`] };
   rows.slice(1).forEach((r, k) => {
     const key = norm(r[ic] || ""), lat = parseFloat(r[la]), lon = parseFloat(r[lo]);
     if (!key || !Number.isFinite(lat) || !Number.isFinite(lon)) warn.push(`${label}:${k + 2}: skipped (bad row)`);
     else if (Math.abs(lat) > 90 || Math.abs(lon) > 180) warn.push(`${label}:${k + 2}: skipped (lat/lon out of range)`);
-    else { out[key] = [lat, lon]; names[key] = String(r[ic]).trim(); }
+    else { out[key] = [lat, lon]; names[key] = String(r[ic]).trim(); exact[baseName(r[ic])] = [lat, lon]; }
   });
-  return { geo: out, names, warn };
+  return { geo: out, names, exact, warn };
 }
 
 /** "lat, lon" from what a person types or pastes: "33.77, -118.19", "33.77 -118.19", or a
@@ -278,13 +283,16 @@ class Store {
     this.migrateManual();
     this.geo = {};
     this.geoFile = {}; // norm(image) -> the file whose row is used (the last file that has it)
+    this.geoExact = {}; this.geoExactFile = {}; // the same, by exact file name
     this.geoWarnings = [];
     for (const c of this.geoFiles()) {
       const p = this.resolve(c);
       if (!isFile(p)) { this.geoWarnings.push(`geo_csv not found: ${p} (upload one on the page)`); continue; }
-      const { geo, warn } = readGeoCsv(fs.readFileSync(p, "utf8"), path.basename(p));
+      const { geo, exact, warn } = readGeoCsv(fs.readFileSync(p, "utf8"), path.basename(p));
       Object.assign(this.geo, geo);
       for (const k of Object.keys(geo)) this.geoFile[k] = p;
+      Object.assign(this.geoExact, exact);
+      for (const k of Object.keys(exact)) this.geoExactFile[k] = p;
       this.geoWarnings.push(...warn.slice(0, 20));
     }
     this.warnings = [...this.geoWarnings, ...(this.warnings || []).filter((w) => !/geo_csv|\.csv/.test(w))];
@@ -318,7 +326,9 @@ class Store {
 
   /** {lat, lon, file} for a frame name, from the lat/lon CSV. */
   geoFor(name) {
-    const k = norm(name), g = this.geo[k];
+    const b = baseName(name), k = norm(name);
+    if (this.geoExact[b]) { const g = this.geoExact[b]; return { lat: g[0], lon: g[1], file: path.basename(this.geoExactFile[b]) }; }
+    const g = this.geo[k];
     return g ? { lat: g[0], lon: g[1], file: path.basename(this.geoFile[k]) } : null;
   }
 
@@ -353,7 +363,7 @@ class Store {
     if (!(Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) {
       return { code: 400, error: "lat must be -90..90 and lon -180..180" };
     }
-    const file = this.geoFile[k] || this.uploadTarget();
+    const file = this.geoExactFile[baseName(name)] || this.geoFile[k] || this.uploadTarget();
     let result;
     try { [result] = this.writeGeo(file, [{ image: path.posix.basename(String(name).replace(/\\/g, "/")), lat, lon }]); }
     catch (e) { return { code: 400, error: `${path.basename(file)}: ${e.message}` }; }
@@ -478,7 +488,7 @@ function makeHandler(store) {
         let names = [], error = null;
         try { names = await store.batches(); } catch (e) { error = `Scalabel not reachable at ${store.cfg.scalabel_url} (${e.message})`; }
         return json(res, { batches: names.map((n) => ({ id: n, name: n, project: n })), error,
-          scalabel_url: store.cfg.scalabel_url, geo_rows: Object.keys(store.geo).length,
+          scalabel_url: store.cfg.scalabel_url, geo_rows: Object.keys(store.geoExact).length,
           geo_file: path.basename(store.uploadTarget()),
           geo_file_exists: isFile(store.uploadTarget()),
           cad_images: Object.keys(store.cad).length, warnings: store.warnings });

@@ -81,3 +81,15 @@ def test_view_b_row_has_geo(tmp_path, monkeypatch):
         '{"frames": [{"name": "items/f1.png", "url": "items/f1.png", "labels": []}]}')
     rows = viewb.build_rows(out, tmp_path)
     assert rows and rows[0]["geo"]["lat"] == 1.5
+
+
+def test_exact_file_name_wins_over_the_loose_match(tmp_path):
+    # two different images whose names differ only by "-" vs "_" keep their own rows
+    p = tmp_path / "image_locations.csv"
+    p.write_text("image_name,latitude,longitude\n"
+                 "98736-201751_verification.png,35.3556,-119.0311\n"
+                 "98736_201751_verification.png,35.3563,-119.0308\n")
+    g = GeoIndex([p])
+    assert g.lookup("items/b1/98736-201751_verification.png")["lat"] == 35.3556
+    assert g.lookup("items/b2/98736_201751_verification.png")["lat"] == 35.3563
+    assert g.lookup("items/b3/98736 201751.png")["lat"] in (35.3556, 35.3563)  # loose match still works

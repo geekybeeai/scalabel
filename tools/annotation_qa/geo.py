@@ -3,8 +3,10 @@
 The CSV has a header row; the image column is the first header named image / image_name / name
 / file / filename (else containing image, name or file), lat is lat / latitude (else containing
 "lat"), lon is lon / lng / long / longitude (else containing "lon" or "lng"); "," ";" or tab
-separated. Images match by ``cad_ref.norm`` (basename without extension, _z<N> and a trailing
-input / verification; separators unified, lower case), as Batch Review matches them. Files are
+separated. An image matches its exact file name (lower case) first, else by ``cad_ref.norm``
+(basename without extension, _z<N> and a trailing input / verification; separators unified), as
+Batch Review matches them -- so "98736-201751" and "98736_201751", two different images, keep
+their own rows. Files are
 read again when they change, so lat/lon typed or uploaded in Batch Review shows up here too.
 """
 
@@ -48,18 +50,27 @@ def _pick(head: list[str], names: tuple[str, ...], contains: tuple[str, ...]) ->
     return -1
 
 
+def basename(name: str) -> str:
+    return str(name).replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
+
+
 def read_csv(text: str) -> dict[str, tuple[float, float]]:
     """{norm(image): (lat, lon)}; rows that cannot be read are skipped."""
+    return _parse(text)[0]
+
+
+def _parse(text: str) -> tuple[dict, dict]:
+    """({norm(image): (lat, lon)}, {exact lower-case file name: (lat, lon)})."""
     text = text.lstrip("﻿")
     head = text.splitlines()[0] if text else ""
     delim = max([",", ";", "\t"], key=lambda d: len(head.split(d)))
     rows = list(csv.reader(io.StringIO(text), delimiter=delim))
     if not rows:
-        return {}
+        return {}, {}
     ic, la, lo = (_pick(rows[0], *c) for c in (_IMAGE, _LAT, _LON))
     if min(ic, la, lo) < 0:
-        return {}
-    out = {}
+        return {}, {}
+    out, exact = {}, {}
     for r in rows[1:]:
         try:
             key, lat, lon = norm(r[ic]), float(r[la]), float(r[lo])
@@ -67,7 +78,8 @@ def read_csv(text: str) -> dict[str, tuple[float, float]]:
             continue
         if key and abs(lat) <= 90 and abs(lon) <= 180:
             out[key] = (lat, lon)
-    return out
+            exact[basename(r[ic])] = (lat, lon)
+    return out, exact
 
 
 class GeoIndex:
@@ -78,28 +90,32 @@ class GeoIndex:
         self._lock = threading.Lock()
         self._stamp = None
         self._geo: dict[str, tuple[float, float]] = {}
+        self._exact: dict[str, tuple[float, float]] = {}
 
-    def _load(self) -> dict[str, tuple[float, float]]:
+    def _load(self) -> tuple[dict, dict]:
         stamp = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.is_file() else None
                       for p in self.paths)
         with self._lock:
             if stamp != self._stamp:
-                geo = {}
+                geo, exact = {}, {}
                 for p in self.paths:
                     if p.is_file():
                         try:
-                            geo.update(read_csv(p.read_text(encoding="utf-8")))
+                            g, e = _parse(p.read_text(encoding="utf-8"))
                         except (OSError, UnicodeDecodeError):
                             continue
-                self._geo, self._stamp = geo, stamp
-            return self._geo
+                        geo.update(g)
+                        exact.update(e)
+                self._geo, self._exact, self._stamp = geo, exact, stamp
+            return self._geo, self._exact
 
     def lookup(self, frame_name: str) -> dict | None:
-        g = self._load().get(norm(str(frame_name)))
+        loose, exact = self._load()
+        g = exact.get(basename(frame_name)) or loose.get(norm(str(frame_name)))
         return {"lat": g[0], "lon": g[1], **links(*g)} if g else None
 
     def count(self) -> int:
-        return len(self._load())
+        return len(self._load()[1])
 
 
 _default: GeoIndex | None = None
