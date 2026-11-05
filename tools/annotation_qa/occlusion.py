@@ -148,16 +148,21 @@ def read_answers(out: Path) -> dict:
 
 
 def discarded(out: Path) -> set[str]:
-    """"<stem>|<frame name>" of the images answered Discard. They are only left out of the
-    final deliverable at the end; until then scan and fix ignore them, so they do not sway
-    calibration, rules or rounds."""
+    """"<stem>|<frame name>" of the images to leave out of every decision: answered Discard
+    (trees / shadow; left out of the final deliverable at the end) or Ignore (only skipped in
+    decisions). scan and fix ignore them, so they do not sway calibration, rules or rounds."""
+    return {k for k, v in read_answers(out).items() if (v or {}).get("value") in ("discard", "ignore")}
+
+
+def to_remove(out: Path) -> set[str]:
+    """The images answered Discard only: the ones the final cut leaves out."""
     return {k for k, v in read_answers(out).items() if (v or {}).get("value") == "discard"}
 
 
 def set_answer(out: Path, key: str, value: str | None, comment: str | None = None) -> dict:
-    """value: "discard" | "keep" | "" (clear); comment kept as given (None = unchanged)."""
-    if value not in ("discard", "keep", "", None):
-        raise ValueError("value must be discard, keep or empty")
+    """value: "discard" | "ignore" | "keep" | "" (clear); comment as given (None = unchanged)."""
+    if value not in ("discard", "ignore", "keep", "", None):
+        raise ValueError("value must be discard, ignore, keep or empty")
     a = read_answers(out)
     cur = a.get(key, {})
     if value is not None:

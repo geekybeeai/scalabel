@@ -117,4 +117,6 @@ def test_discarded_lists_only_discard_answers(tmp_path):
     oc.set_answer(tmp_path, "s|b.png", "keep")
     oc.set_answer(tmp_path, "t|c.png", None, "just a comment")
     assert oc.discarded(tmp_path) == {"s|a.png"}
+    oc.set_answer(tmp_path, "s|d.png", "ignore")  # skipped in decisions, not cut at the end
+    assert oc.discarded(tmp_path) == {"s|a.png", "s|d.png"} and oc.to_remove(tmp_path) == {"s|a.png"}
     assert oc.discarded(tmp_path / "nowhere") == set()
