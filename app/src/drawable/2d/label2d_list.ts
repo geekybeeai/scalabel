@@ -1,5 +1,6 @@
 import _ from "lodash"
 
+import { REFERENCE_CANVAS_PIXEL_RATIO } from "../../common/canvas_style_scale"
 import { policyFromString } from "../../common/track"
 import { LabelTypeName, TrackPolicyType } from "../../const/common"
 import { makeState } from "../../functional/states"
@@ -81,8 +82,8 @@ export class Label2DList {
   private readonly _updatedLabels: Set<Label2D>
   /** last display-to-image ratio from draw */
   private _lastRatio: number
-  /** last view scale from draw */
-  private _lastViewScale: number
+  /** actual backing pixels per CSS pixel from the most recent draw */
+  private _lastEffectiveUpResRatio: number
 
   /**
    * Constructor
@@ -96,7 +97,7 @@ export class Label2DList {
     this._labelTemplates = {}
     this._updatedLabels = new Set()
     this._lastRatio = 1
-    this._lastViewScale = 1
+    this._lastEffectiveUpResRatio = REFERENCE_CANVAS_PIXEL_RATIO
   }
 
   /**
@@ -231,13 +232,14 @@ export class Label2DList {
    * @param hideLabels
    * @param hideLabelTags
    * @param sessionMode
-   * @param viewScale: current zoom level (1 = no zoom)
-   * @param viewportBounds: optional viewport bounds for culling [x, y, width, height] in image coords
-   * @param hiddenLabelTypes: label type names to hide (e.g. ['box2d'])
-   * @param hiddenCategories: category indices to hide (e.g. [0, 2])
+   * @param viewScale current zoom level (1 = no zoom)
+   * @param viewportBounds optional viewport bounds for culling [x, y, width, height] in image coords
+   * @param hiddenLabelTypes label type names to hide (e.g. ['box2d'])
+   * @param hiddenCategories category indices to hide (e.g. [0, 2])
    * @param drawControl
    * @param lineWidthMultiplier
    * @param showCurvesOnly display only curved parts of lines
+   * @param effectiveUpResRatio actual backing pixels per CSS pixel
    */
   public redraw(
     labelContext: Context2D,
@@ -252,10 +254,11 @@ export class Label2DList {
     hiddenCategories?: number[],
     drawControl: boolean = true,
     lineWidthMultiplier: number = 1,
-    showCurvesOnly: boolean = false
+    showCurvesOnly: boolean = false,
+    effectiveUpResRatio: number = REFERENCE_CANVAS_PIXEL_RATIO
   ): void {
     this._lastRatio = ratio
-    this._lastViewScale = viewScale ?? 1
+    this._lastEffectiveUpResRatio = effectiveUpResRatio
     const isTrackLinking = this._state.session.trackLinking
     let labelsToDraw =
       hideLabels !== null && hideLabels !== undefined && hideLabels
@@ -334,7 +337,8 @@ export class Label2DList {
           sessionMode,
           viewScale,
           lineWidthMultiplier,
-          showCurvesOnly
+          showCurvesOnly,
+          effectiveUpResRatio
         )
       })
     })
@@ -442,8 +446,8 @@ export class Label2DList {
     coord: Vector2D,
     radiusLimit: number
   ): EndpointSnapCandidate | null {
-    const upResRatio = this._lastViewScale > 3 ? 1 : 2
-    const displayToImageRatio = this._lastRatio / upResRatio
+    const displayToImageRatio =
+      this._lastRatio / this._lastEffectiveUpResRatio
     const snapRadiusImage = radiusLimit / displayToImageRatio
 
     let bestCandidate: EndpointSnapCandidate | null = null

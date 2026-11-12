@@ -1,4 +1,5 @@
 import { isInteracting } from "../common/interaction_state"
+import { REFERENCE_CANVAS_PIXEL_RATIO } from "../common/canvas_style_scale"
 import Session from "../common/session"
 import { decodeControlIndex, rgbToIndex } from "../drawable/util"
 import { getCurrentItem } from "../functional/state_util"
@@ -65,7 +66,7 @@ export const MOTION_RESOLUTION_SCALE = 0.7
  * @param viewScale current zoom level
  */
 export function getUpResRatio(viewScale: number): number {
-  return viewScale > 3 ? 1 : 2
+  return viewScale > 3 ? 1 : REFERENCE_CANVAS_PIXEL_RATIO
 }
 /** The zoom ratio */
 export const ZOOM_RATIO = 1.3
@@ -497,19 +498,19 @@ export function updateCanvasScale(
   canvas.style.right = "auto"
   canvas.style.bottom = "auto"
 
-  // Effective upRes ratio = actual backing pixels per CSS pixel.
-  // >= 1 except for the image canvas during an active gesture, where it is
-  // intentionally < 1 (see MOTION_RESOLUTION_SCALE / applyMotionScale),
-  // restored on the idle repaint. Label/control canvases are always >= 1.
+  // Effective upRes ratio = actual backing pixels per CSS pixel. It may be
+  // below 1 while the image canvas is moving or whenever the backing store is
+  // capped at MAX_CANVAS_DIMENSION. Visible vector styles receive this actual
+  // ratio and compensate for the browser stretching backing pixels to CSS.
   //
   // The label drawing invariant:
   //   drawingRatio = displayToImageRatio × effectiveUpResRatio
   //               = (canvas.width / image.width)   [backing px per image px]
   //
   // This ratio is passed as `ratio` to polygon2d/box2d .draw() which scales
-  // image-space coordinates to backing canvas pixels. With effectiveUpResRatio
-  // always >= 1, annotations always land exactly on the correct pixel and
-  // the styleFactor-based line thinning at high zoom works as intended.
+  // image-space coordinates to backing canvas pixels, so annotations land on
+  // the correct image coordinate. Style sizes are converted separately from
+  // desired CSS pixels to current backing pixels.
   const effectiveUpResRatio = upRes ? canvas.width / canvasWidth : 1
 
   return [

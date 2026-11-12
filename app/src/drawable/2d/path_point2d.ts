@@ -12,6 +12,8 @@ export interface PathPoint2DStyle {
   color: number[]
   /** optional stroke color for the point */
   strokeColor?: number[]
+  /** optional stroke width in backing-canvas pixels */
+  strokeWidth?: number
 }
 
 export interface Edge2DStyle {
@@ -197,10 +199,11 @@ export class PathPoint2D {
     context.fill()
 
     if (style.strokeColor !== undefined) {
-      // Scale the outline with the handle. Point radius shrinks with zoom
-      // (down to 2), where a fixed 1px ring would swallow the fill and hide
-      // the colour that identifies the point type.
-      context.lineWidth = Math.max(0.75, Math.min(1.5, style.radius / 8))
+      // Scale the outline with the handle. A fixed backing-pixel ring can
+      // swallow the fill or become visually thick when the canvas is capped.
+      context.lineWidth =
+        style.strokeWidth ??
+        Math.max(0.75, Math.min(1.5, style.radius / 8))
       context.strokeStyle = toCssColor(style.strokeColor)
       context.stroke()
     }

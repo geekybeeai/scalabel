@@ -5,6 +5,10 @@ import {
   isKeyArmed,
   isKeyHeld
 } from "../../common/keyboard_state"
+import {
+  REFERENCE_CANVAS_PIXEL_RATIO,
+  zoomAwareBackingSize
+} from "../../common/canvas_style_scale"
 import { isMarked } from "../../common/multi_delete_state"
 import { isSnapEnabled } from "../../common/snap_state"
 import { Cursor, Key, LabelTypeName } from "../../const/common"
@@ -39,7 +43,7 @@ import {
   PathPoint2D
 } from "./path_point2d"
 
-const DEFAULT_VIEW_EDGE_STYLE = makeEdge2DStyle({ lineWidth: 6 })
+const DEFAULT_VIEW_EDGE_STYLE = makeEdge2DStyle({ lineWidth: 8 })
 const DEFAULT_VIEW_POINT_STYLE = makePathPoint2DStyle({ radius: 8 })
 const DEFAULT_VIEW_HIGH_POINT_STYLE = makePathPoint2DStyle({ radius: 12 })
 const DEFAULT_CONTROL_EDGE_STYLE = makeEdge2DStyle({ lineWidth: 10 })
@@ -197,12 +201,14 @@ export class Polygon2D extends Label2D {
    *
    * @param context
    * @param ratio
-   * @param styleFactor
+   * @param viewScale
+   * @param effectiveUpResRatio
    */
   private drawSnapIndicator(
     context: Context2D,
     ratio: number,
-    styleFactor: number
+    viewScale: number,
+    effectiveUpResRatio: number
   ): void {
     if (
       this._snapTargetPolyline === null ||
@@ -214,14 +220,32 @@ export class Polygon2D extends Label2D {
       this._snapTargetPolyline._points[this._snapTargetPointIndex]
     const realCoord = targetPoint.vector().scale(ratio)
 
-    // Scale the join indicator with zoom the same way vertices/edges do (via
-    // styleFactor = 1/sqrt(zoom)), so the green dot tracks the line and point
-    // sizes instead of staying a fixed pixel size at every zoom level. The
-    // floors mirror the point-style floors in draw() so it never vanishes.
-    const haloRadius = Math.max(4, 16 * styleFactor)
-    const endpointRadius = Math.max(2, 8 * styleFactor)
-    const centerRadius = Math.max(1, 3 * styleFactor)
-    const strokeWidth = Math.max(1, 2 * styleFactor)
+    // Convert desired CSS sizes to the current backing resolution so the
+    // indicator stays zoom-aware even when the canvas is capped and stretched.
+    const haloRadius = zoomAwareBackingSize(
+      16,
+      4,
+      viewScale,
+      effectiveUpResRatio
+    )
+    const endpointRadius = zoomAwareBackingSize(
+      8,
+      2,
+      viewScale,
+      effectiveUpResRatio
+    )
+    const centerRadius = zoomAwareBackingSize(
+      3,
+      1,
+      viewScale,
+      effectiveUpResRatio
+    )
+    const strokeWidth = zoomAwareBackingSize(
+      2,
+      1,
+      viewScale,
+      effectiveUpResRatio
+    )
     const merge = this._snapMergeable
     const rgb = merge ? "0, 255, 0" : "255, 255, 255"
 
@@ -233,7 +257,12 @@ export class Polygon2D extends Label2D {
     context.fillStyle = `rgba(${rgb}, 0.2)`
     context.lineWidth = strokeWidth
     if (!merge) {
-      const dash = Math.max(2, 4 * styleFactor)
+      const dash = zoomAwareBackingSize(
+        4,
+        2,
+        viewScale,
+        effectiveUpResRatio
+      )
       context.setLineDash([dash, dash])
     }
     context.arc(realCoord.x, realCoord.y, haloRadius, 0, 2 * Math.PI)
@@ -393,9 +422,10 @@ export class Polygon2D extends Label2D {
    * @param isTrackLinking
    * @param hideLabelTags
    * @param sessionMode
-   * @param viewScale: current zoom level (1 = no zoom)
+   * @param viewScale current zoom level (1 = no zoom)
    * @param lineWidthMultiplier
    * @param curvesOnly draw only bezier groups (curves-only display)
+   * @param effectiveUpResRatio actual backing pixels per CSS pixel
    */
   public draw(
     context: Context2D,
@@ -406,7 +436,8 @@ export class Polygon2D extends Label2D {
     sessionMode: ModeStatus | undefined,
     viewScale: number = 1,
     lineWidthMultiplier: number = 1,
-    curvesOnly: boolean = false
+    curvesOnly: boolean = false,
+    effectiveUpResRatio: number = REFERENCE_CANVAS_PIXEL_RATIO
   ): void {
     const numPoints = this._points.length
 
@@ -423,10 +454,6 @@ export class Polygon2D extends Label2D {
       return
     }
 
-    // Compute zoom-aware scale factor: styles thin out as you zoom in
-    const zoomScale = Math.max(1, viewScale)
-    const styleFactor = 1 / Math.sqrt(zoomScale)
-
     if (numPoints === 0) return
     let pointStyle = makePathPoint2DStyle()
     let highPointStyle = makePathPoint2DStyle()
@@ -438,12 +465,37 @@ export class Polygon2D extends Label2D {
         pointStyle = _.assign(pointStyle, DEFAULT_VIEW_POINT_STYLE)
         highPointStyle = _.assign(highPointStyle, DEFAULT_VIEW_HIGH_POINT_STYLE)
         edgeStyle = _.assign(edgeStyle, DEFAULT_VIEW_EDGE_STYLE)
-        // Scale styles inversely with zoom for better precision at high zoom
-        pointStyle.radius = Math.max(2, pointStyle.radius * styleFactor)
-        highPointStyle.radius = Math.max(3, highPointStyle.radius * styleFactor)
-        edgeStyle.lineWidth = Math.max(
+        // Define visible sizes in CSS pixels, then convert to the current
+        // backing resolution. This remains correct when the canvas is capped.
+        pointStyle.radius = zoomAwareBackingSize(
+          pointStyle.radius,
+          2,
+          viewScale,
+          effectiveUpResRatio
+        )
+        highPointStyle.radius = zoomAwareBackingSize(
+          highPointStyle.radius,
+          3,
+          viewScale,
+          effectiveUpResRatio
+        )
+        pointStyle.strokeWidth = zoomAwareBackingSize(
           1,
-          edgeStyle.lineWidth * styleFactor * lineWidthMultiplier
+          0.75,
+          viewScale,
+          effectiveUpResRatio
+        )
+        highPointStyle.strokeWidth = zoomAwareBackingSize(
+          1.5,
+          0.75,
+          viewScale,
+          effectiveUpResRatio
+        )
+        edgeStyle.lineWidth = zoomAwareBackingSize(
+          edgeStyle.lineWidth * lineWidthMultiplier,
+          2,
+          viewScale,
+          effectiveUpResRatio
         )
         assignColor = (i: number): number[] => {
           if (
@@ -653,7 +705,12 @@ export class Polygon2D extends Label2D {
       )
     }
     if (mode === DrawMode.VIEW) {
-      this.drawSnapIndicator(context, ratio, styleFactor)
+      this.drawSnapIndicator(
+        context,
+        ratio,
+        viewScale,
+        effectiveUpResRatio
+      )
     }
   }
 

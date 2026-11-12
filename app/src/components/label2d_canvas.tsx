@@ -642,7 +642,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         hiddenCategories,
         !isInteracting(),
         lineWidthMultiplier,
-        showCurvesOnly
+        showCurvesOnly,
+        this._upResRatio
       )
       this.drawSegmentDeleteOverlay(
         this.labelContext,

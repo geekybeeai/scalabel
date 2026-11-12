@@ -304,6 +304,7 @@ export abstract class Label2D {
    * @param {number} viewScale: current zoom level (1 = no zoom)
    * @param lineWidthMultiplier
    * @param curvesOnly draw only bezier groups (curves-only display)
+   * @param effectiveUpResRatio actual backing pixels per CSS pixel; may be below 1 when capped
    */
   public abstract draw(
     canvas: Context2D,
@@ -314,7 +315,8 @@ export abstract class Label2D {
     sessionMode: ModeStatus | undefined,
     viewScale?: number,
     lineWidthMultiplier?: number,
-    curvesOnly?: boolean
+    curvesOnly?: boolean,
+    effectiveUpResRatio?: number
   ): void
 
   /**

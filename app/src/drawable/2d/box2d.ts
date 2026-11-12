@@ -1,5 +1,9 @@
 import _ from "lodash"
 
+import {
+  REFERENCE_CANVAS_PIXEL_RATIO,
+  zoomAwareBackingSize
+} from "../../common/canvas_style_scale"
 import { Cursor, LabelTypeName } from "../../const/common"
 import { makeLabel, makeRect } from "../../functional/states"
 import { Size2D } from "../../math/size2d"
@@ -115,7 +119,10 @@ export class Box2D extends Label2D {
    * @param isTrackLinking
    * @param hideLabelTags
    * @param sessionMode
-   * @param viewScale: current zoom level (1 = no zoom)
+   * @param viewScale current zoom level (1 = no zoom)
+   * @param _lineWidthMultiplier unused for boxes
+   * @param _curvesOnly unused for boxes
+   * @param effectiveUpResRatio actual backing pixels per CSS pixel
    */
   public draw(
     context: Context2D,
@@ -124,12 +131,11 @@ export class Box2D extends Label2D {
     isTrackLinking: boolean,
     hideLabelTags: boolean,
     sessionMode: ModeStatus | undefined,
-    viewScale: number = 1
+    viewScale: number = 1,
+    _lineWidthMultiplier: number = 1,
+    _curvesOnly: boolean = false,
+    effectiveUpResRatio: number = REFERENCE_CANVAS_PIXEL_RATIO
   ): void {
-    // Compute zoom-aware scale factor: styles thin out as you zoom in
-    const zoomScale = Math.max(1, viewScale)
-    const styleFactor = 1 / Math.sqrt(zoomScale)
-
     // Set proper drawing styles
     let pointStyle = makePoint2DStyle()
     let highPointStyle = makePoint2DStyle()
@@ -140,10 +146,24 @@ export class Box2D extends Label2D {
         pointStyle = _.assign(pointStyle, DEFAULT_VIEW_POINT_STYLE)
         highPointStyle = _.assign(highPointStyle, DEFAULT_VIEW_HIGH_POINT_STYLE)
         rectStyle = _.assign(rectStyle, DEFAULT_VIEW_RECT_STYLE)
-        // Scale styles inversely with zoom for better precision at high zoom
-        pointStyle.radius = Math.max(2, pointStyle.radius * styleFactor)
-        highPointStyle.radius = Math.max(3, highPointStyle.radius * styleFactor)
-        rectStyle.lineWidth = Math.max(1, rectStyle.lineWidth * styleFactor)
+        pointStyle.radius = zoomAwareBackingSize(
+          pointStyle.radius,
+          2,
+          viewScale,
+          effectiveUpResRatio
+        )
+        highPointStyle.radius = zoomAwareBackingSize(
+          highPointStyle.radius,
+          3,
+          viewScale,
+          effectiveUpResRatio
+        )
+        rectStyle.lineWidth = zoomAwareBackingSize(
+          rectStyle.lineWidth,
+          1,
+          viewScale,
+          effectiveUpResRatio
+        )
         assignColor = (i: number): number[] => {
           if (i % 2 === 0 && i > 0) {
             // Midpoint
