@@ -361,7 +361,8 @@ export class Polygon2D extends Label2D {
 
   /**
    * Get the bounding box of this polygon in image coordinates
-   * Returns [x, y, width, height] or null if no points
+   * Returns [x, y, width, height] or null if no points. While drawing, include
+   * the live cursor endpoint so viewport culling retains the preview segment.
    */
   public bounds(): [number, number, number, number] | null {
     if (this._points.length === 0) {
@@ -377,6 +378,12 @@ export class Polygon2D extends Label2D {
       minY = Math.min(minY, v.y)
       maxX = Math.max(maxX, v.x)
       maxY = Math.max(maxY, v.y)
+    }
+    if (this._state === Polygon2DState.DRAW) {
+      minX = Math.min(minX, this._mouseCoord.x)
+      minY = Math.min(minY, this._mouseCoord.y)
+      maxX = Math.max(maxX, this._mouseCoord.x)
+      maxY = Math.max(maxY, this._mouseCoord.y)
     }
     return [minX, minY, maxX - minX, maxY - minY]
   }
