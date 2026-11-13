@@ -7,7 +7,8 @@
  * response; everything else goes to stderr.
  *
  * `--preflight` instead checks that sharp loads, decodes a PNG and that the
- * pipeline merges two touching road-edge lines, then exits 0 or 1.
+ * pipeline merges same-category lines and snaps different-category endpoints,
+ * then exits 0 or 1.
  */
 
 import * as fs from "fs"
@@ -196,7 +197,7 @@ export async function preflight(): Promise<boolean> {
           },
           {
             id: "b",
-            category: "without_curb_road_edge",
+            category: "curb_road_edge",
             poly2d: [
               {
                 vertices: [
@@ -217,6 +218,64 @@ export async function preflight(): Promise<boolean> {
     response.ok &&
     (response.document as Array<{ labels: unknown[] }>)[0].labels.length === 1
   line(merged, "end-to-end: two touching road-edge lines merged into one")
+
+  const snapResponse = await run({
+    document: [
+      {
+        name: "preflight.png",
+        labels: [
+          {
+            id: "earlier",
+            category: "curb_road_edge",
+            poly2d: [
+              {
+                vertices: [
+                  [0, 0],
+                  [100, 0]
+                ],
+                types: "LL",
+                closed: false
+              }
+            ]
+          },
+          {
+            id: "later",
+            category: "without_curb_road_edge",
+            poly2d: [
+              {
+                vertices: [
+                  [101, 0],
+                  [200, 0]
+                ],
+                types: "LL",
+                closed: false
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    clamp: false
+  })
+  const snapLabels = snapResponse.ok
+    ? (
+        snapResponse.document as Array<{
+          labels: Array<{
+            poly2d: Array<{ vertices: Array<[number, number]> }>
+          }>
+        }>
+      )[0].labels
+    : []
+  const snapped =
+    snapResponse.ok &&
+    snapLabels.length === 2 &&
+    snapLabels[1].poly2d[0].vertices[0][0] === 100 &&
+    snapLabels[1].poly2d[0].vertices[0][1] === 0 &&
+    snapResponse.report.summary.totalSnapped === 1
+  line(
+    snapped,
+    "end-to-end: different-category endpoints snapped without label absorption"
+  )
 
   process.stdout.write(
     ok

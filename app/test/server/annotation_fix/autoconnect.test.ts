@@ -1,6 +1,7 @@
 /** @jest-environment node */
 import {
   connectLabels,
+  snapToDict,
   splice
 } from "../../../src/server/annotation_fix/autoconnect"
 import { LabelExport } from "../../../src/types/export"
@@ -171,32 +172,212 @@ describe("connectLabels", () => {
     expect(result.connections).toHaveLength(0)
   })
 
-  test("allows the listed cross-category pair only", () => {
-    const allowed = [
+  test("merges the verified aligned same-category offset pair", () => {
+    const labels = [
+      line("earlier", "curb_road_edge", [
+        [8744.650104411847, 3552.8204448835263],
+        [8744.598756697971, 3554.2061595876808]
+      ]),
+      line("later", "curb_road_edge", [
+        [8753.047139466438, 3547.5943817688794],
+        [8746.250418555106, 3731.016688155336]
+      ])
+    ]
+
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(out).toHaveLength(1)
+    expect(out[0].id).toBe("earlier")
+    expect(out[0].poly2d?.[0].vertices).toEqual([
+      [8744.650104411847, 3552.8204448835263],
+      [8744.598756697971, 3554.2061595876808],
+      [8746.250418555106, 3731.016688155336]
+    ])
+    expect(result.connections[0]).toMatchObject({
+      keptId: "earlier",
+      absorbedId: "later"
+    })
+    expect(result.connections[0].gap).toBeCloseTo(10.728, 3)
+    expect(result.connections[0].angle).toBeCloseTo(180, 5)
+    expect(result.snaps).toEqual([])
+  })
+})
+
+describe("connectLabels category-aware snapping", () => {
+  test("snaps different categories to the earlier endpoint without merging", () => {
+    const labels = [
+      line("anchor", "curb_road_edge", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("moved", "without_curb_road_edge", [
+        [105, 0],
+        [200, 0]
+      ])
+    ]
+
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(out).toHaveLength(2)
+    expect(out.map(({ id, category }) => ({ id, category }))).toEqual([
+      { id: "anchor", category: "curb_road_edge" },
+      { id: "moved", category: "without_curb_road_edge" }
+    ])
+    expect(out[0].poly2d?.[0]).toEqual({
+      vertices: [
+        [0, 0],
+        [100, 0]
+      ],
+      types: "LL",
+      closed: false
+    })
+    expect(out[1].poly2d?.[0]).toEqual({
+      vertices: [
+        [100, 0],
+        [200, 0]
+      ],
+      types: "LL",
+      closed: false
+    })
+    expect(result.connections).toEqual([])
+    expect(result.snaps).toEqual([
+      {
+        anchorId: "anchor",
+        movedId: "moved",
+        anchorCategory: "curb_road_edge",
+        movedCategory: "without_curb_road_edge",
+        junction: [100, 0],
+        gap: 5,
+        angle: 180
+      }
+    ])
+    expect(snapToDict(result.snaps[0])).toEqual({
+      anchorId: "anchor",
+      movedId: "moved",
+      anchorCategory: "curb_road_edge",
+      movedCategory: "without_curb_road_edge",
+      junction: [100, 0],
+      gap: 5,
+      angle: 180
+    })
+    expect(result).toMatchObject({ labelsBefore: 2, labelsAfter: 2 })
+  })
+
+  test("does not report an already-coincident cross-category endpoint", () => {
+    const matching = [
+      line("same-a", "curb_road_edge", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("same-b", "curb_road_edge", [
+        [101, 0],
+        [200, 0]
+      ])
+    ]
+    expect(connectLabels(matching)[0]).toHaveLength(1)
+
+    const coincident = [
       line("a", "curb_road_edge", [
         [0, 0],
         [100, 0]
       ]),
       line("b", "without_curb_road_edge", [
-        [101, 0],
+        [100, 0],
         [200, 0]
       ])
     ]
-    expect(connectLabels(allowed)[0]).toHaveLength(1)
+    const before = JSON.stringify(coincident)
+    const [out, result] = connectLabels(coincident)
 
-    const refused = [
-      line("a", "white_line", [
+    expect(JSON.stringify(out)).toBe(before)
+    expect(result.connections).toEqual([])
+    expect(result.snaps).toEqual([])
+    expect(result).toMatchObject({ labelsBefore: 2, labelsAfter: 2 })
+  })
+
+  test("snaps the shortest cross-category gap and consumes both endpoints", () => {
+    const labels = [
+      line("anchor", "category-a", [
         [0, 0],
         [100, 0]
       ]),
-      line("b", "yellow_line", [
-        [101, 0],
-        [200, 0]
+      line("far", "category-b", [
+        [104, 0],
+        [204, 0]
+      ]),
+      line("near", "category-c", [
+        [102, 0],
+        [302, 0]
       ])
     ]
-    expect(connectLabels(refused)[0]).toHaveLength(2)
+
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(out[0].poly2d?.[0].vertices[1]).toEqual([100, 0])
+    expect(out[1].poly2d?.[0].vertices[0]).toEqual([104, 0])
+    expect(out[2].poly2d?.[0].vertices[0]).toEqual([100, 0])
+    expect(result.snaps).toHaveLength(1)
+    expect(result.snaps[0]).toMatchObject({
+      anchorId: "anchor",
+      movedId: "near",
+      gap: 2
+    })
   })
 
+  test("revalidates an opposite endpoint after an earlier snap changes its tangent", () => {
+    const labels = [
+      line("anchor", "category-a", [
+        [50, 30],
+        [100, 30]
+      ]),
+      line("middle", "category-b", [
+        [100, 0],
+        [150, 0]
+      ]),
+      line("later", "category-c", [
+        [185, 0],
+        [235, 0]
+      ])
+    ]
+
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(out[1].poly2d?.[0].vertices).toEqual([
+      [100, 30],
+      [150, 0]
+    ])
+    expect(out[2].poly2d?.[0].vertices[0]).toEqual([185, 0])
+    expect(result.snaps).toHaveLength(1)
+    expect(result.snaps[0]).toMatchObject({
+      anchorId: "anchor",
+      movedId: "middle",
+      gap: 30
+    })
+  })
+
+  test.each(["Lane", "lane "])(
+    "requires exact category equality at a zero-pixel gap (%s)",
+    (otherCategory) => {
+      const labels = [
+        line("a", "lane", [
+          [0, 0],
+          [100, 0]
+        ]),
+        line("b", otherCategory, [
+          [100, 0],
+          [200, 0]
+        ])
+      ]
+
+      const [out, result] = connectLabels(labels)
+
+      expect(out).toHaveLength(2)
+      expect(result.connections).toEqual([])
+    }
+  )
+})
+
+describe("connectLabels ordering", () => {
   test("resolves chains across passes and consumes each endpoint once", () => {
     const labels = [
       line("a", "lane", [
@@ -635,11 +816,20 @@ describe("atomic curve bridge topology and output", () => {
     expect(connectLabels(labels, 40, 150)[0]).toHaveLength(4)
   })
 
-  test("requires both sides of a bridge to be category-compatible", () => {
+  test("does not connect a bridge across the former category exception", () => {
     const labels = bridge(10)
-    labels[2].category = "other"
+    labels[0].category = "curb_road_edge"
+    labels[1].category = "without_curb_road_edge"
+    labels[2].category = "curb_road_edge"
 
-    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(3)
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(out.map(({ id, category }) => ({ id, category }))).toEqual([
+      { id: "left", category: "curb_road_edge" },
+      { id: "curve", category: "without_curb_road_edge" },
+      { id: "right", category: "curb_road_edge" }
+    ])
+    expect(result.connections).toEqual([])
   })
 
   test("rejects offset and forked external approaches", () => {
@@ -815,7 +1005,7 @@ describe("curve seam guard", () => {
 })
 
 describe("connectLabels eligibility and guards", () => {
-  test("minAngle rejects side-by-side parallel lines regardless of drawing direction", () => {
+  test("minAngle allows aligned offset lines regardless of drawing direction", () => {
     const forward = [
       line("a", "lane", [
         [0, 0],
@@ -837,8 +1027,8 @@ describe("connectLabels eligibility and guards", () => {
       ])
     ]
 
-    expect(connectLabels(forward, 40, 150)[0]).toHaveLength(2)
-    expect(connectLabels(reverse, 40, 150)[0]).toHaveLength(2)
+    expect(connectLabels(forward, 40, 150)[0]).toHaveLength(1)
+    expect(connectLabels(reverse, 40, 150)[0]).toHaveLength(1)
   })
 
   test("minAngle follows a distinct neighbour past duplicate endpoint vertices", () => {
@@ -857,7 +1047,7 @@ describe("connectLabels eligibility and guards", () => {
     expect(connectLabels(labels, 40, 150)[0]).toHaveLength(1)
   })
 
-  test("duplicate endpoint vertices do not bypass parallel-line rejection", () => {
+  test("duplicate endpoint vertices allow an aligned offset continuation", () => {
     const labels = [
       line("a", "lane", [
         [0, 0],
@@ -870,7 +1060,7 @@ describe("connectLabels eligibility and guards", () => {
       ])
     ]
 
-    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(2)
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(1)
   })
 
   test("minAngle rejects a directionless endpoint but zero disables the guard", () => {

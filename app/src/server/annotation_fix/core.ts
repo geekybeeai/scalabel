@@ -20,7 +20,8 @@ import {
   connectionToDict,
   connectLabels,
   DEFAULT_MIN_ANGLE,
-  DEFAULT_TOLERANCE
+  DEFAULT_TOLERANCE,
+  snapToDict
 } from "./autoconnect"
 import {
   clampLabels,
@@ -184,12 +185,16 @@ export interface FrameReport {
   flagged: Array<{ [key: string]: unknown }>
   /** merges applied */
   merged: number
+  /** cross-category endpoint snaps applied */
+  snapped: number
   /** label count before */
   labelsBefore: number
   /** label count after */
   labelsAfter: number
   /** serialised connections */
   connections: Array<{ [key: string]: unknown }>
+  /** serialised cross-category endpoint snaps */
+  snaps: Array<{ [key: string]: unknown }>
   /** clamp-stage error, if any */
   error: string | null
 }
@@ -210,6 +215,8 @@ export interface ReportDict {
     totalClamped: number
     /** merges applied */
     totalMerged: number
+    /** cross-category endpoint snaps applied */
+    totalSnapped: number
     /** corrections beyond the review threshold */
     totalFlagged: number
     /** frames whose image could not be located */
@@ -230,6 +237,7 @@ export function reportToDict(report: Report): ReportDict {
       frames: report.frames.length,
       totalClamped: report.frames.reduce((n, f) => n + f.clamped, 0),
       totalMerged: report.frames.reduce((n, f) => n + f.merged, 0),
+      totalSnapped: report.frames.reduce((n, f) => n + f.snapped, 0),
       totalFlagged: report.frames.reduce((n, f) => n + f.flagged.length, 0),
       missingImages: report.frames
         .filter((f) => !f.imageFound)
@@ -295,9 +303,11 @@ export async function processFrame(
     clamped: 0,
     flagged: [],
     merged: 0,
+    snapped: 0,
     labelsBefore: labels.length,
     labelsAfter: labels.length,
     connections: [],
+    snaps: [],
     error: null
   }
 
@@ -351,8 +361,10 @@ export async function processFrame(
     )
     frame.labels = survivors
     report.merged = connectResult.connections.length
+    report.snapped = connectResult.snaps.length
     report.labelsAfter = connectResult.labelsAfter
     report.connections = connectResult.connections.map(connectionToDict)
+    report.snaps = connectResult.snaps.map(snapToDict)
   }
 
   return report

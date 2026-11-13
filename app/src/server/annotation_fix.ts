@@ -68,6 +68,8 @@ export interface AnnotationFixSummary {
   totalClamped: number
   /** polyline pairs joined into one label */
   totalMerged: number
+  /** different-category endpoints snapped without joining their labels */
+  totalSnapped: number
   /** corrections large enough to warrant a human look */
   totalFlagged: number
   /** frames whose image could not be found */
@@ -318,7 +320,9 @@ export async function correctAnnotations(
     if (summary !== undefined) {
       Logger.info(
         `Annotation auto-correct: ${summary.totalClamped} vertices clamped, ` +
-          `${summary.totalMerged} lines merged across ${summary.frames} frames`
+          `${summary.totalMerged} lines merged, ` +
+          `${summary.totalSnapped} endpoints snapped across ` +
+          `${summary.frames} frames`
       )
       if (summary.totalFlagged > 0) {
         Logger.info(
