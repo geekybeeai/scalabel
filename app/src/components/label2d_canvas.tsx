@@ -123,10 +123,7 @@ import {
   setArcMode
 } from "../common/arc_state"
 import { isSimplifyMode, setSimplifyMode } from "../common/simplify_state"
-import {
-  commitGrab,
-  findGrabbableLabel
-} from "../drawable/2d/polyline_grab_move"
+import { commitGrab } from "../drawable/2d/polyline_grab_move"
 import {
   endGrab,
   getGrab,
@@ -139,11 +136,8 @@ import { performStraighten } from "../drawable/2d/polyline_straighten"
 import { Key, LabelTypeName } from "../const/common"
 import { Label2DHandler } from "../drawable/2d/label2d_handler"
 import { Label2DList } from "../drawable/2d/label2d_list"
-import {
-  getCurrentViewerConfig,
-  getShapes,
-  isFrameLoaded
-} from "../functional/state_util"
+import { Polygon2D } from "../drawable/2d/polygon2d"
+import { getShapes, isFrameLoaded } from "../functional/state_util"
 import { Vector2D } from "../math/vector2d"
 import { label2dViewStyle } from "../styles/label"
 import { ImageViewerConfigType, PathPoint2DType, State } from "../types/state"
@@ -151,13 +145,17 @@ import {
   clearCanvas,
   getCurrentImageSize,
   imageDataToHandleId,
-  isScaleRenderable,
-  normalizeMouseCoordinates,
-  rotatePoint,
-  toCanvasCoords,
-  unrotatePoint,
-  updateCanvasScale
+  MAX_CANVAS_DIMENSION
 } from "../view_config/image"
+import {
+  ANNOTATION_RESOLUTION,
+  applyViewportTransform,
+  imageToViewport,
+  makeViewportTransform,
+  viewportImageBounds,
+  viewportToImage,
+  ViewportTransform
+} from "../view_config/viewport"
 import { Crosshair, Crosshair2D } from "./crosshair"
 import {
   DrawableCanvas,
@@ -209,8 +207,6 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private display: HTMLDivElement | null
 
   // Display variables
-  /** The current scale */
-  private scale: number
   /** The canvas height */
   private canvasHeight: number
   /** The canvas width */
@@ -223,8 +219,14 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private readonly _keyUpListener: (e: KeyboardEvent) => void
   /** key down listener */
   private readonly _keyDownListener: (e: KeyboardEvent) => void
-  /** effective up-resolution ratio (adaptive based on zoom level) */
-  private _upResRatio: number
+  /** Logical drawable units per CSS pixel; independent of zoom/backing size. */
+  private readonly _upResRatio: number = ANNOTATION_RESOLUTION
+  /** Physical backing pixels per CSS pixel. */
+  private _pixelRatio: number = 1
+  /** Current display-only projection. */
+  private _viewport: ViewportTransform | null = null
+  /** Observe actual viewport resize rather than resizing on every pan. */
+  private _resizeObserver: ResizeObserver | null = null
 
   // Keyboard and mouse status
   /** The hashed list of keys currently down */
@@ -242,16 +244,16 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * the one the user means (linked labels, appended multi-select).
    */
   private _lastMousePos: Vector2D | null = null
-  /**
-   * Item index the cached canvas scale was computed for.
-   *
-   * updateScale runs from the canvas ref callback, which React invokes when
-   * the element is created — NOT when the frame changes. Image sizes vary
-   * enormously between frames (2500x3540 to 15000x3540 within one task), so a
-   * stale displayToImageRatio scales the new frame's labels by the previous
-   * frame's ratio and draws them far outside the image.
-   */
-  private _scaledForItem: number = -1
+  private _lastClientPos: { x: number; y: number } | null = null
+  private _pointerDown: boolean = false
+  private _pointerOutsideImage: boolean = true
+  private _pressInsideImage: boolean = false
+  /** Finish a drag even if the release happens outside the viewport. */
+  private readonly _windowMouseUp = (event: MouseEvent): void => {
+    if (this._pointerDown) {
+      this.onMouseUp(event as unknown as React.MouseEvent<HTMLCanvasElement>)
+    }
+  }
   /** context-menu anchor (viewport px), null while the menu is closed */
   private _menuAnchor: { left: number; top: number } | null = null
   /** unsubscribe from delete-segment state changes */
@@ -280,11 +282,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
 
     // Initialization
     this._keyDownMap = {}
-    this.scale = 1
     this.canvasHeight = 0
     this.canvasWidth = 0
     this.displayToImageRatio = 1
-    this._upResRatio = 2
     this.controlContext = null
     this.controlCanvas = null
     this.labelContext = null
@@ -320,13 +320,17 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     super.componentDidMount()
     document.addEventListener("keydown", this._keyDownListener)
     document.addEventListener("keyup", this._keyUpListener)
+    window.addEventListener("mouseup", this._windowMouseUp)
     this._labelList.subscribe(this._drawableUpdateCallback)
-    // Use forceUpdate (not redraw) so the gesture-settled repaint goes through
-    // render -> updateScale, which resizes the canvas back to full resolution
-    // and refreshes _upResRatio. Calling redraw() directly would repaint at the
-    // stale 0.7x motion resolution, leaving labels blurry until the next state
-    // change. Mirrors ImageCanvas's idle handler.
-    this._offIdle = onIdle(() => this.forceUpdate())
+    // Labels retain device resolution during gestures; only rebuild the
+    // optional non-polyline control pass when the gesture settles.
+    this._offIdle = onIdle(() => this._labelList.onDrawableUpdate())
+    if (typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver(() =>
+        this._labelList.onDrawableUpdate()
+      )
+      if (this.display !== null) this._resizeObserver.observe(this.display)
+    }
     // The settings panel renders in the viewer, so its own re-render does not
     // repaint this canvas. Subscribe to the shared state instead, so tuning a
     // slider redraws the preview immediately.
@@ -351,6 +355,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * Unmount callback
    */
   public componentWillUnmount(): void {
+    this._resizeObserver?.disconnect()
     setStampHandlers(null, null)
     if (this._offStampChange !== null) {
       this._offStampChange()
@@ -359,6 +364,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     super.componentWillUnmount()
     document.removeEventListener("keydown", this._keyDownListener)
     document.removeEventListener("keyup", this._keyUpListener)
+    window.removeEventListener("mouseup", this._windowMouseUp)
     this._labelList.unsubscribe(this._drawableUpdateCallback)
     if (this._offIdle !== null) {
       this._offIdle()
@@ -397,42 +403,17 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     this.setCursor("crosshair")
   }
 
-  /** Current display-only view rotation (0/90/180/270) for this viewer. */
-  private get viewRotation(): number {
-    // Guarded: a canvas can mount a frame before its viewer config lands (the
-    // zoom panel adds one at runtime), and an unguarded read here throws
-    // during render, which blanks the whole app.
-    const config = this.state.user.viewerConfigs[this.props.id] as
-      | ImageViewerConfigType
-      | undefined
-    return config?.rotation ?? 0
+  /** Stable refs avoid resizing/repainting canvases during React view updates. */
+  private readonly _controlCanvasRef = (
+    canvas: HTMLCanvasElement | null
+  ): void => {
+    if (canvas !== null) this.updateCanvas(canvas, true)
   }
 
-  /**
-   * Apply the view rotation to a drawing context so content paints turned.
-   * The canvas is sized to the rotated dimensions, so for 90°/270° we
-   * translate by the swapped axis before rotating. Caller must
-   * context.restore() afterwards.
-   *
-   * @param ctx the 2d context to transform
-   * @param canvas the canvas owning the context (for its backing dimensions)
-   * @param rotation 0 | 90 | 180 | 270
-   */
-  private applyRotation(
-    ctx: CanvasRenderingContext2D,
-    canvas: HTMLCanvasElement,
-    rotation: number
-  ): void {
-    if (rotation === 90) {
-      ctx.translate(canvas.width, 0)
-      ctx.rotate(Math.PI / 2)
-    } else if (rotation === 180) {
-      ctx.translate(canvas.width, canvas.height)
-      ctx.rotate(Math.PI)
-    } else if (rotation === 270) {
-      ctx.translate(0, canvas.height)
-      ctx.rotate(-Math.PI / 2)
-    }
+  private readonly _labelCanvasRef = (
+    canvas: HTMLCanvasElement | null
+  ): void => {
+    if (canvas !== null) this.updateCanvas(canvas, false)
   }
 
   /**
@@ -442,26 +423,18 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   public render(): JSX.Element[] {
     const { classes } = this.props
-    let controlCanvas = (
+    const controlCanvas = (
       <canvas
         key="control-canvas"
         className={classes.control_canvas}
-        ref={(canvas) => {
-          if (canvas !== null) {
-            this.updateCanvas(canvas, true)
-          }
-        }}
+        ref={this._controlCanvasRef}
       />
     )
-    let labelCanvas = (
+    const labelCanvas = (
       <canvas
         key="label2d-canvas"
         className={classes.label2d_canvas}
-        ref={(canvas) => {
-          if (canvas !== null) {
-            this.updateCanvas(canvas, false)
-          }
-        }}
+        ref={this._labelCanvasRef}
         onMouseDown={(e) => {
           this.onMouseDown(e)
         }}
@@ -483,17 +456,6 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         innerRef={this.crosshair}
       />
     )
-    if (this.display !== null) {
-      const displayRect = this.display.getBoundingClientRect()
-      controlCanvas = React.cloneElement(controlCanvas, {
-        height: displayRect.height,
-        width: displayRect.width
-      })
-      labelCanvas = React.cloneElement(labelCanvas, {
-        height: displayRect.height,
-        width: displayRect.width
-      })
-    }
 
     const contextMenu = (
       <Menu
@@ -562,10 +524,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @return {boolean}
    */
   public redraw(): boolean {
-    // The frame may have changed since the scale was last computed; the ref
-    // callback does not fire on a frame change, so rescale here or the new
-    // frame's labels are drawn at the previous frame's scale.
-    this.rescaleIfItemChanged()
+    // Refresh the projection every frame, but allocate only on a real resize.
+    this.updateViewport()
 
     this.clear()
     if (
@@ -575,6 +535,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this.controlContext !== null
     ) {
       const config = this.state.user.viewerConfigs[this.props.id]
+      const viewport = this._viewport
+      if (config === undefined || viewport === null) return false
       const mode = this.state.session.mode
       const viewScale =
         "viewScale" in config
@@ -596,39 +558,15 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         (config as unknown as { showCurvesOnly?: boolean }).showCurvesOnly ===
           true
 
-      // Compute viewport bounds in image coordinates for culling
-      let viewportBounds: [number, number, number, number] | undefined
-      if (
-        viewScale > 2 &&
-        this.viewRotation === 0 &&
-        this.display !== null &&
-        "displayLeft" in config &&
-        "displayTop" in config
-      ) {
-        const displayRect = this.display.getBoundingClientRect()
-        const imgConfig = config as unknown as {
-          displayLeft: number
-          displayTop: number
-        }
-        // Viewport in image coordinates
-        // Note: displayToImageRatio already includes viewScale factor
-        // displayLeft/Top are CSS pixel offsets (negative when panned)
-        const ratio = this.displayToImageRatio
-        const viewportX = -imgConfig.displayLeft / ratio
-        const viewportY = -imgConfig.displayTop / ratio
-        const viewportW = displayRect.width / ratio
-        const viewportH = displayRect.height / ratio
-        viewportBounds = [viewportX, viewportY, viewportW, viewportH]
-      }
+      const viewportBounds = viewportImageBounds(viewport)
 
       // Rotate the label AND control contexts identically so labels, the
       // delete/lasso overlays, and color-coded hit-testing all turn with the
       // view. Their image-frame coordinates need no changes.
-      const rotation = this.viewRotation
       this.labelContext.save()
       this.controlContext.save()
-      this.applyRotation(this.labelContext, this.labelCanvas, rotation)
-      this.applyRotation(this.controlContext, this.controlCanvas, rotation)
+      applyViewportTransform(this.labelContext, viewport, this._pixelRatio)
+      applyViewportTransform(this.controlContext, viewport, this._pixelRatio)
       this._labelList.redraw(
         this.labelContext,
         this.controlContext,
@@ -642,7 +580,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         hiddenCategories,
         !isInteracting(),
         lineWidthMultiplier,
-        showCurvesOnly
+        showCurvesOnly,
+        this.displayToImageRatio
       )
       this.drawSegmentDeleteOverlay(
         this.labelContext,
@@ -710,9 +649,18 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       )
       return
     }
+    this._pointerDown = true
     // Control + click for dragging
     // get mouse position in image coordinates
     const mousePos = this.getMousePos(e)
+    this._pressInsideImage = !this._pointerOutsideImage
+    if (this._pointerOutsideImage) {
+      const rect = this.display?.getBoundingClientRect()
+      if (rect !== undefined) {
+        armEmptyDrag(e.clientX - rect.left, e.clientY - rect.top)
+      }
+      return
+    }
     const [labelIndex, handleIndex] = this.fetchHandleId(mousePos)
     resetPanState()
     // Freeform (lasso) select: armed via the toolbar, or ad-hoc via Shift+drag.
@@ -902,6 +850,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @param {MouseEvent} e - event
    */
   public onMouseUp(e: React.MouseEvent<HTMLCanvasElement>): void {
+    if (e.button === 0) this._pointerDown = false
     if (e.button !== 0 || this.checkFreeze()) {
       return
     }
@@ -955,7 +904,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       const panned = didPan()
       resetPanState()
       this.setDefaultCursor()
-      if (!panned) {
+      if (!panned && this._pressInsideImage) {
         // It was a click, not a pan: perform the deferred draw now (down then
         // up) so an empty-space click still adds a polyline point.
         const pos = this.getMousePos(e)
@@ -979,6 +928,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @param {MouseEvent} e - event
    */
   public onMouseMove(e: React.MouseEvent<HTMLCanvasElement>): void {
+    this._lastClientPos = { x: e.clientX, y: e.clientY }
     if (this.checkFreeze()) {
       return
     }
@@ -1015,16 +965,23 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (isGrabbing()) {
       // The carried line follows the cursor with no button held.
       updateGrab(mousePos.x, mousePos.y)
-      this.redraw()
+      this._labelList.onDrawableUpdate()
       return
     }
     if (isArcMode() && getArcPicks().length > 0) {
       // Rubber-band the curve: the cursor is a provisional next point, so the
       // shape has to repaint as the mouse moves.
-      this.redraw()
+      this._labelList.onDrawableUpdate()
       return
     }
-    const [labelIndex, handleIndex] = this.fetchHandleId(mousePos)
+    const active = this._labelList.selectedLabels.find(
+      (label) =>
+        label.editing && !(label instanceof Polygon2D && label.isDrawing)
+    )
+    const [labelIndex, handleIndex] =
+      active !== undefined
+        ? [active.index, active.highlightedHandle]
+        : this.fetchHandleId(mousePos)
     if (
       this._labelHandler.onMouseMove(
         mousePos,
@@ -1480,27 +1437,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (label === undefined) {
       return
     }
-    const points = label.shapes
-      .map((id) => state.task.items[grab.itemIndex].shapes[id])
-      .filter((shape) => shape !== undefined)
-    if (points.length < 2) {
-      return
-    }
-    // Preview only — the real geometry is not touched until the drop commits.
-    const p = points as Array<{ x: number; y: number }>
-    const trace = (): void => {
-      context.beginPath()
-      context.moveTo(
-        (p[0].x + grab.offsetX) * ratio,
-        (p[0].y + grab.offsetY) * ratio
-      )
-      for (let i = 1; i < p.length; i++) {
-        context.lineTo(
-          (p[i].x + grab.offsetX) * ratio,
-          (p[i].y + grab.offsetY) * ratio
-        )
-      }
-    }
+    const drawable = this._labelList.getLabelById(grab.labelId)
+    if (!(drawable instanceof Polygon2D)) return
+    const path = drawable.getPath()
+    if (path === null) return
 
     const categories = state.task.config.categories
     const categoryIndex = label.category[0]
@@ -1510,18 +1450,15 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     )
 
     context.save()
-    // Black casing under the line, matching the vertex handles: the preview
-    // has to stay readable over imagery of any brightness.
-    context.lineWidth = 4
+    context.translate(grab.offsetX * ratio, grab.offsetY * ratio)
+    context.scale(ratio, ratio)
+    // Use the same cached Bézier path as the committed line, not its controls.
+    context.lineWidth = 4 / ratio
     context.strokeStyle = "#000000"
-    trace()
-    context.stroke()
-    // The line's own category colour on top, so what is being carried is
-    // identifiable at a glance rather than an anonymous white outline.
-    context.lineWidth = 2
+    context.stroke(path)
+    context.lineWidth = 2 / ratio
     context.strokeStyle = toCssColor(color)
-    trace()
-    context.stroke()
+    context.stroke(path)
     context.restore()
   }
 
@@ -1575,6 +1512,12 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     }
     if (this.checkFreeze()) {
       return
+    }
+    if (this._lastClientPos !== null) {
+      this._lastMousePos = this.getMousePos({
+        clientX: this._lastClientPos.x,
+        clientY: this._lastClientPos.y
+      })
     }
 
     if (e.key === Key.ESCAPE && isSegmentDeleteActive()) {
@@ -2121,14 +2064,27 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @param mode whether the drop moves the original or leaves a copy
    */
   private grabHoveredLine(mode: GrabMode): void {
-    if (this._lastMousePos === null || isGrabbing()) {
+    if (
+      this._lastMousePos === null ||
+      this._pointerOutsideImage ||
+      this.controlContext === null ||
+      isGrabbing()
+    ) {
       return
     }
-    const labelId = findGrabbableLabel(
+    this.updateViewport(false)
+    const config = this.state.user.viewerConfigs[
+      this.props.id
+    ] as ImageViewerConfigType
+    const [index] = this._labelList.pickPolyline(
       this._lastMousePos,
-      CUT_CLICK_RADIUS_PX / this.displayToImageRatio
+      this.controlContext,
+      config.lineWidthMultiplier ?? 1,
+      config.showCurvesOnly === true,
+      true
     )
-    if (labelId === null) {
+    const label = this._labelList.labelList[index]
+    if (label === undefined) {
       alert(
         Severity.WARNING,
         "Hover a line first, then press W to move it or E to copy it."
@@ -2136,7 +2092,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       return
     }
     startGrab(
-      labelId,
+      label.labelId,
       this.state.user.select.item,
       mode,
       this._lastMousePos.x,
@@ -2250,7 +2206,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    */
   public updateState(state: State): void {
     if (this.display !== this.props.display) {
+      this._resizeObserver?.disconnect()
       this.display = this.props.display
+      if (this.display !== null) this._resizeObserver?.observe(this.display)
       this.forceUpdate()
     }
     if (this._cutItemIndex !== state.user.select.item) {
@@ -2281,180 +2239,135 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @return {Vector2D}
    * mouse position (x,y) on the canvas
    */
-  private getMousePos(e: React.MouseEvent<HTMLCanvasElement>): Vector2D {
-    if (this.display !== null && this.labelCanvas !== null) {
-      const displayCoord = normalizeMouseCoordinates(
-        this.labelCanvas,
-        this.canvasWidth,
-        this.canvasHeight,
-        this.displayToImageRatio,
-        e.clientX,
-        e.clientY
-      )
-      // With a rotated view, normalizeMouseCoordinates returns the point in
-      // the rotated/display frame; map it back to the original image frame so
-      // every stored coordinate stays in the original (unrotated) frame.
-      const rotation = this.viewRotation
-      if (rotation === 0) {
-        return displayCoord
-      }
-      const size = getCurrentImageSize(this.state, this.props.id)
-      return unrotatePoint(displayCoord, rotation, size.width, size.height)
+  private getMousePos(e: { clientX: number; clientY: number }): Vector2D {
+    this.updateViewport(false)
+    if (this.labelCanvas === null || this._viewport === null) {
+      this._pointerOutsideImage = true
+      return new Vector2D(0, 0)
     }
-    return new Vector2D(0, 0)
+    const rect = this.labelCanvas.getBoundingClientRect()
+    const point = viewportToImage(
+      new Vector2D(e.clientX - rect.left, e.clientY - rect.top),
+      this._viewport,
+      false
+    )
+    const view = this._viewport
+    this._pointerOutsideImage =
+      point.x < 0 ||
+      point.y < 0 ||
+      point.x > view.imageWidth ||
+      point.y > view.imageHeight
+    point.x = Math.max(0, Math.min(view.imageWidth, point.x))
+    point.y = Math.max(0, Math.min(view.imageHeight, point.y))
+    return point
   }
 
-  /**
-   * Get the label under the mouse.
-   *
-   * @param {Vector2D} mousePos: position of the mouse
-   * @param mousePos
-   * @return {number[]}
-   */
+  /** Geometry picking is independent of antialiasing and backing resolution. */
   private fetchHandleId(mousePos: Vector2D): number[] {
-    if (this.controlContext !== null) {
-      // The control canvas is drawn through the rotation, but getImageData
-      // reads raw backing pixels (ignoring the context transform), so probe
-      // at the rotated position of the (original-frame) mouse coordinate.
-      const rotation = this.viewRotation
-      let probe = mousePos
-      if (rotation !== 0) {
-        const size = getCurrentImageSize(this.state, this.props.id)
-        probe = rotatePoint(mousePos, rotation, size.width, size.height)
-      }
-      const [x, y] = toCanvasCoords(
-        probe,
-        true,
-        this.displayToImageRatio,
-        this._upResRatio
-      )
-      const data = this.controlContext.getImageData(x, y, 4, 4).data
-      return imageDataToHandleId(data)
-    } else {
+    if (
+      this.controlContext === null ||
+      this._viewport === null ||
+      this._pointerOutsideImage
+    )
       return [-1, 0]
-    }
+    const config = this.state.user.viewerConfigs[
+      this.props.id
+    ] as ImageViewerConfigType
+    const hit = this._labelList.pickPolyline(
+      mousePos,
+      this.controlContext,
+      config.lineWidthMultiplier ?? 1,
+      config.showCurvesOnly === true
+    )
+    if (!this._labelList.hasColorControls) return hit
+
+    // Other drawable types retain their existing color-based controls. Never
+    // fall back to a polyline's wider control stroke after a geometry miss.
+    const probe = imageToViewport(mousePos, this._viewport).scale(
+      this._pixelRatio
+    )
+    const x = Math.floor(probe.x)
+    const y = Math.floor(probe.y)
+    if (
+      this.controlCanvas === null ||
+      x < 0 ||
+      y < 0 ||
+      x >= this.controlCanvas.width ||
+      y >= this.controlCanvas.height
+    )
+      return hit
+    const data = this.controlContext.getImageData(x, y, 1, 1).data
+    const tile = new Uint8ClampedArray(64)
+    for (let i = 0; i < 16; i++) tile.set(data, i * 4)
+    const fallback = imageDataToHandleId(tile)
+    const label = this._labelList.labelList[fallback[0]]
+    if (label === undefined || label instanceof Polygon2D) return hit
+    // Non-polyline controls share the original global paint order.
+    return fallback[0] > hit[0] ? fallback : hit
   }
 
-  /**
-   * Update the canvas dimentions from the htmlcanvas element
-   *
-   * @param canva
-   * @param canvas
-   * @param isContorl
-   */
-  private updateCanvas(canvas: HTMLCanvasElement, isContorl: boolean): void {
-    // The control canvas is read back every interaction via getImageData for
-    // hit-testing; willReadFrequently avoids GPU readback stalls. The visible
-    // label canvas is composited, so it keeps the default (GPU) context.
+  /** Set up each context once; refs stay stable through view updates. */
+  private updateCanvas(canvas: HTMLCanvasElement, isControl: boolean): void {
     const context = canvas.getContext(
       "2d",
-      isContorl ? { willReadFrequently: true } : undefined
+      isControl ? { willReadFrequently: true } : undefined
     )
-    if (context === null) {
-      return
+    if (context === null) return
+    if (isControl) {
+      this.controlCanvas = canvas
+      this.controlContext = context
+    } else {
+      this.labelCanvas = canvas
+      this.labelContext = context
     }
-    if (canvas !== null && this.display !== null) {
-      if (isContorl) {
-        this.controlCanvas = canvas
-        this.controlContext = context
-      } else {
-        this.labelCanvas = canvas
-        this.labelContext = context
-      }
-      const displayRect = this.display.getBoundingClientRect()
-      const item = this.state.user.select.item
-      const sensor = this.state.user.viewerConfigs[this.props.id].sensor
-      if (
-        isFrameLoaded(this.state, item, sensor) &&
-        displayRect.width !== 0 &&
-        !isNaN(displayRect.width) &&
-        displayRect.height !== 0 &&
-        !isNaN(displayRect.height)
-      ) {
-        this.updateScale(canvas, context, true)
-        // Draw synchronously in the same commit so the freshly-resized (and
-        // therefore cleared) label/control canvases are never painted blank.
-        // React re-renders this component on every pan frame (viewer config
-        // changes), which clears the canvases; without an immediate redraw the
-        // deferred RAF redraw leaves a blank frame and the labels visibly
-        // flicker/disappear while panning. redraw() is a no-op until both the
-        // label and control contexts are set, so calling it from each canvas's
-        // ref is safe regardless of ref order. Mirrors ImageCanvas.
-        this.redraw()
-      }
-    }
+    this.redraw()
   }
 
-  /**
-   * Set the scale of the image in the display
-   *
-   * @param {object} canvas
-   * @param context
-   * @param {boolean} upRes
-   */
-  private updateScale(
-    canvas: HTMLCanvasElement,
-    context: CanvasRenderingContext2D,
-    upRes: boolean
-  ): void {
-    if (this.display === null) {
-      return
-    }
-    const imgConfig = getCurrentViewerConfig(
-      this.state,
-      this.props.id
-    ) as ImageViewerConfigType
-    if (isScaleRenderable(this.props.id, imgConfig.viewScale)) {
-      ;[
-        this.canvasWidth,
-        this.canvasHeight,
-        this.displayToImageRatio,
-        this.scale,
-        this._upResRatio
-      ] = updateCanvasScale(
-        this.state,
-        this.display,
-        canvas,
-        context,
-        imgConfig,
-        imgConfig.viewScale / this.scale,
-        upRes
-      )
-      this._scaledForItem = this.state.user.select.item
-    }
-  }
-
-  /**
-   * Recompute the canvas scale when the displayed frame has changed.
-   *
-   * Frames within a single task differ hugely in size, and the cached
-   * displayToImageRatio belongs to whichever frame was last scaled. Drawing a
-   * new frame with it puts labels far outside the image, so the scale is
-   * refreshed as soon as the item index moves.
-   */
-  private rescaleIfItemChanged(): void {
+  /** Refresh view geometry; pan and zoom never reallocate annotation buffers. */
+  private updateViewport(resize: boolean = true): void {
+    const config = this.state.user.viewerConfigs[this.props.id] as
+      | ImageViewerConfigType
+      | undefined
+    if (this.display === null || config === undefined) return
     const item = this.state.user.select.item
-    if (item === this._scaledForItem) {
+    if (!isFrameLoaded(this.state, item, config.sensor)) {
+      this._viewport = null
       return
     }
-    if (this.display === null) {
-      return
+    if (resize) {
+      const rect = this.display.getBoundingClientRect()
+      this.canvasWidth = rect.width
+      this.canvasHeight = rect.height
     }
-    const sensor = this.state.user.viewerConfigs[this.props.id].sensor
-    if (!isFrameLoaded(this.state, item, sensor)) {
-      // The new frame's image has not arrived yet; its size is unknown, so
-      // leave the old scale and rescale once it loads.
-      return
-    }
-    const rect = this.display.getBoundingClientRect()
-    if (rect.width === 0 || rect.height === 0) {
-      return
-    }
-    if (this.labelCanvas !== null && this.labelContext !== null) {
-      this.updateScale(this.labelCanvas, this.labelContext, true)
-    }
-    if (this.controlCanvas !== null && this.controlContext !== null) {
-      this.updateScale(this.controlCanvas, this.controlContext, true)
+    if (this.canvasWidth <= 0 || this.canvasHeight <= 0) return
+    const image = getCurrentImageSize(this.state, this.props.id)
+    if (image.width <= 0 || image.height <= 0) return
+    this._viewport = makeViewportTransform(
+      this.canvasWidth,
+      this.canvasHeight,
+      image.width,
+      image.height,
+      config
+    )
+    this.displayToImageRatio = this._viewport.scale
+    this._labelList.setDisplayScale(this.displayToImageRatio, config)
+    if (!resize) return
+    this._pixelRatio = Math.min(
+      window.devicePixelRatio || 1,
+      MAX_CANVAS_DIMENSION / Math.max(this.canvasWidth, this.canvasHeight)
+    )
+    const width = Math.ceil(this.canvasWidth * this._pixelRatio)
+    const height = Math.ceil(this.canvasHeight * this._pixelRatio)
+    for (const canvas of [this.labelCanvas, this.controlCanvas]) {
+      if (canvas === null) continue
+      if (canvas.width !== width) canvas.width = width
+      if (canvas.height !== height) canvas.height = height
+      // Preserve an exact backing/CSS ratio with fractional pane dimensions.
+      // The subpixel excess is clipped by the viewer's viewport wrapper.
+      canvas.style.width = width / this._pixelRatio + "px"
+      canvas.style.height = height / this._pixelRatio + "px"
+      canvas.style.left = "0px"
+      canvas.style.top = "0px"
     }
   }
 }

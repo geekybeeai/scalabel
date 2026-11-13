@@ -212,6 +212,7 @@ export const label2dViewStyle = (): StyleRules<
   createStyles({
     label2d_canvas: {
       position: "absolute",
+      "pointer-events": "auto",
       "z-index": 1
     },
     control_canvas: {

@@ -3,16 +3,17 @@ import _ from "lodash"
 import { policyFromString } from "../../common/track"
 import { LabelTypeName, TrackPolicyType } from "../../const/common"
 import { makeState } from "../../functional/states"
-import { Label2DTemplateType, ModeStatus, State } from "../../types/state"
+import {
+  ImageViewerConfigType,
+  Label2DTemplateType,
+  ModeStatus,
+  State
+} from "../../types/state"
 import { Context2D } from "../util"
 import { Box2D } from "./box2d"
 import { CustomLabel2D } from "./custom_label"
 import { DrawMode, Label2D } from "./label2d"
 import { Vector2D } from "../../math/vector2d"
-import {
-  nearestSnapPointIndex,
-  snapTargetIndices
-} from "./endpoint_snap_geometry"
 import { Polygon2D } from "./polygon2d"
 import { Tag2D } from "./tag2d"
 
@@ -79,10 +80,11 @@ export class Label2DList {
   private readonly _callbacks: Array<() => void>
   /** New labels to be committed */
   private readonly _updatedLabels: Set<Label2D>
-  /** last display-to-image ratio from draw */
-  private _lastRatio: number
-  /** last view scale from draw */
-  private _lastViewScale: number
+  /** Actual CSS pixels per image pixel; independent of canvas allocation. */
+  private _displayScale: number = 1
+  private _displayConfig: ImageViewerConfigType | null = null
+  /** Most lane projects need no GPU color readback at all. */
+  public hasColorControls: boolean = false
 
   /**
    * Constructor
@@ -95,8 +97,6 @@ export class Label2DList {
     this._callbacks = []
     this._labelTemplates = {}
     this._updatedLabels = new Set()
-    this._lastRatio = 1
-    this._lastViewScale = 1
   }
 
   /**
@@ -164,7 +164,7 @@ export class Label2DList {
    *
    * @param id
    */
-  public getLabelById(id: number): Label2D {
+  public getLabelById(id: number | string): Label2D {
     return this._labels[id]
   }
 
@@ -252,10 +252,10 @@ export class Label2DList {
     hiddenCategories?: number[],
     drawControl: boolean = true,
     lineWidthMultiplier: number = 1,
-    showCurvesOnly: boolean = false
+    showCurvesOnly: boolean = false,
+    displayScale?: number
   ): void {
-    this._lastRatio = ratio
-    this._lastViewScale = viewScale ?? 1
+    this._displayScale = displayScale ?? ratio / ((viewScale ?? 1) > 3 ? 1 : 2)
     const isTrackLinking = this._state.session.trackLinking
     let labelsToDraw =
       hideLabels !== null && hideLabels !== undefined && hideLabels
@@ -317,13 +317,19 @@ export class Label2DList {
       })
     }
 
+    this.hasColorControls = labelsToDraw.some(
+      (label) => !(label instanceof Polygon2D)
+    )
     labelsToDraw.forEach((v) => {
-      const passes = drawControl
-        ? [
-            { ctx: labelContext, mode: DrawMode.VIEW },
-            { ctx: controlContext, mode: DrawMode.CONTROL }
-          ]
-        : [{ ctx: labelContext, mode: DrawMode.VIEW }]
+      if (v instanceof Polygon2D)
+        v.setViewportBounds(viewportBounds, this._displayScale)
+      const passes =
+        drawControl && !(displayScale !== undefined && v instanceof Polygon2D)
+          ? [
+              { ctx: labelContext, mode: DrawMode.VIEW },
+              { ctx: controlContext, mode: DrawMode.CONTROL }
+            ]
+          : [{ ctx: labelContext, mode: DrawMode.VIEW }]
       passes.forEach(({ ctx, mode }) => {
         v.draw(
           ctx,
@@ -340,6 +346,74 @@ export class Label2DList {
     })
   }
 
+  /** Called before interaction as well as paint so a pending zoom is current. */
+  public setDisplayScale(scale: number, config: ImageViewerConfigType): void {
+    this._displayScale = scale
+    this._displayConfig = config
+  }
+
+  private isDisplayed(label: Label2D): boolean {
+    const config = this._displayConfig
+    if (config === null) return true
+    if (config.hideLabels && !label.selected) return false
+    if (config.hiddenLabelTypes?.includes(label.type) && !label.selected)
+      return false
+    if (config.hiddenCategories?.includes(label.category[0]) && !label.editing)
+      return false
+    return (
+      config.showCurvesOnly !== true ||
+      label.editing ||
+      (label instanceof Polygon2D && label.hasCurves)
+    )
+  }
+
+  /** Bounds first, then native path hits; no control-color readback for lines. */
+  public pickPolyline(
+    coord: Vector2D,
+    context: Context2D,
+    multiplier: number,
+    curvesOnly: boolean,
+    bodiesOnly: boolean = false
+  ): number[] {
+    const scale = this._displayScale
+    const margin = Math.max(7, 15 * multiplier) / scale
+    const candidates: Array<{ label: Polygon2D; index: number }> = []
+    for (let i = this._labelList.length - 1; i >= 0; i--) {
+      const label = this._labelList[i]
+      if (!(label instanceof Polygon2D) || !this.isDisplayed(label)) continue
+      const bounds = label.bounds()
+      if (
+        bounds !== null &&
+        (coord.x < bounds[0] - margin ||
+          coord.y < bounds[1] - margin ||
+          coord.x > bounds[0] + bounds[2] + margin ||
+          coord.y > bounds[1] + bounds[3] + margin)
+      )
+        continue
+      candidates.push({ label, index: i })
+    }
+    if (!bodiesOnly) {
+      for (const candidate of candidates) {
+        const handle = candidate.label.pickHandle(coord, scale, curvesOnly)
+        if (handle > 0) return [candidate.index, handle]
+      }
+    }
+    for (const candidate of candidates) {
+      if (
+        candidate.label.containsStroke(
+          context,
+          coord,
+          scale,
+          multiplier,
+          curvesOnly
+        )
+      ) {
+        return [candidate.index, 0]
+      }
+    }
+    return [-1, 0]
+  }
+
   /**
    * update labels from the state
    *
@@ -351,7 +425,20 @@ export class Label2DList {
       return
     }
 
+    const previous = this._state
     this._state = state
+    const index = state.user.select.item
+    const previousItem = previous.task.items[previous.user.select.item]
+    const nextItem = state.task.items[index]
+    if (
+      previous.user.select.item === index &&
+      previousItem === nextItem &&
+      previous.task.config === state.task.config &&
+      previous.user.select.labels === state.user.select.labels &&
+      previous.user.viewerConfigs[0]?.sensor ===
+        state.user.viewerConfigs[0]?.sensor
+    )
+      return
     this._labelTemplates = state.task.config.label2DTemplates
     const itemIndex = state.user.select.item
     const item = state.task.items[itemIndex]
@@ -442,29 +529,37 @@ export class Label2DList {
     coord: Vector2D,
     radiusLimit: number
   ): EndpointSnapCandidate | null {
-    const upResRatio = this._lastViewScale > 3 ? 1 : 2
-    const displayToImageRatio = this._lastRatio / upResRatio
-    const snapRadiusImage = radiusLimit / displayToImageRatio
+    const snapRadiusImage = radiusLimit / this._displayScale
 
     let bestCandidate: EndpointSnapCandidate | null = null
     let minDistance = snapRadiusImage
 
     // Open polylines contribute endpoints; closed polygons contribute every
     // visible handle as a connect-only target.
-    const polylines = this._labelList.filter(
-      (label) => label instanceof Polygon2D
-    ) as Polygon2D[]
-
     const draggedIndex = source.highlightedHandle - 1
+    const curvesOnly = this._displayConfig?.showCurvesOnly === true
 
-    for (const polyline of polylines) {
+    for (const polyline of this._labelList) {
+      if (!(polyline instanceof Polygon2D) || !this.isDisplayed(polyline))
+        continue
+      const bounds = polyline.bounds()
+      if (
+        bounds !== null &&
+        (coord.x < bounds[0] - snapRadiusImage ||
+          coord.y < bounds[1] - snapRadiusImage ||
+          coord.x > bounds[0] + bounds[2] + snapRadiusImage ||
+          coord.y > bounds[1] + bounds[3] + snapRadiusImage)
+      )
+        continue
       // If it is the same polyline (self-closing checks)
       if (polyline === source) {
-        const points = polyline.points
+        const points = polyline.snapPoints
         if (points.length === 0) {
           continue
         }
         if (draggedIndex === 0) {
+          if (!polyline.isPointDisplayed(points.length - 1, curvesOnly))
+            continue
           // Dragging start, can only snap to end
           const endPoint = points[points.length - 1]
           const dx = coord.x - endPoint.x
@@ -480,6 +575,7 @@ export class Label2DList {
             }
           }
         } else if (draggedIndex === points.length - 1) {
+          if (!polyline.isPointDisplayed(0, curvesOnly)) continue
           // Dragging end, can only snap to start
           const startPoint = points[0]
           const dx = coord.x - startPoint.x
@@ -502,30 +598,26 @@ export class Label2DList {
       // Different category => snap only (connect without merging).
       const mergeable = source.category[0] === polyline.category[0]
 
-      const points = polyline.points
+      const points = polyline.snapPoints
       if (points.length === 0) {
         continue
       }
 
       if (polyline.closed) {
-        const targetIndices = snapTargetIndices(points)
-        const nearestTargetIndex = nearestSnapPointIndex(
-          targetIndices.map((index) => points[index]),
-          coord,
-          minDistance
-        )
-        if (nearestTargetIndex !== null) {
-          const targetIndex = targetIndices[nearestTargetIndex]
+        for (let targetIndex = 0; targetIndex < points.length; targetIndex++) {
+          if (!polyline.isPointDisplayed(targetIndex, curvesOnly)) continue
           const targetPoint = points[targetIndex]
           const dx = coord.x - targetPoint.x
           const dy = coord.y - targetPoint.y
           const distance = Math.sqrt(dx * dx + dy * dy)
-          minDistance = distance
-          bestCandidate = {
-            polyline,
-            isStart: targetIndex === 0,
-            targetPointIndex: targetIndex,
-            mergeable: false
+          if (distance < minDistance) {
+            minDistance = distance
+            bestCandidate = {
+              polyline,
+              isStart: targetIndex === 0,
+              targetPointIndex: targetIndex,
+              mergeable: false
+            }
           }
         }
         continue
@@ -536,7 +628,7 @@ export class Label2DList {
       const dxStart = coord.x - startPoint.x
       const dyStart = coord.y - startPoint.y
       const distStart = Math.sqrt(dxStart * dxStart + dyStart * dyStart)
-      if (distStart < minDistance) {
+      if (distStart < minDistance && polyline.isPointDisplayed(0, curvesOnly)) {
         minDistance = distStart
         bestCandidate = {
           polyline,
@@ -551,7 +643,10 @@ export class Label2DList {
       const dxEnd = coord.x - endPoint.x
       const dyEnd = coord.y - endPoint.y
       const distEnd = Math.sqrt(dxEnd * dxEnd + dyEnd * dyEnd)
-      if (distEnd < minDistance) {
+      if (
+        distEnd < minDistance &&
+        polyline.isPointDisplayed(points.length - 1, curvesOnly)
+      ) {
         minDistance = distEnd
         bestCandidate = {
           polyline,

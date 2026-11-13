@@ -93,6 +93,10 @@ export class Label2DHandler {
     // user starts dragging immediately after selecting a tool). In that case
     // the canvas hit-test is the only source of the label under the pointer.
     // Resolve it before falling back to creating a new temporary label.
+    if (labelIndex < 0 && !this.isEditingSelectedLabels()) {
+      this._highlightedLabel?.setHighlighted(false)
+      this._highlightedLabel = null
+    }
     if (labelIndex >= 0) {
       const clickedLabel = this._labelList.labelList[labelIndex]
       if (clickedLabel !== undefined) {
@@ -137,6 +141,7 @@ export class Label2DHandler {
             label.single = true
           }
           this._labelList.selectedLabels.push(label)
+          label.index = this._labelList.labelList.length
           this._labelList.labelList.push(label)
           label.onMouseDown(coord, handleIndex)
         }

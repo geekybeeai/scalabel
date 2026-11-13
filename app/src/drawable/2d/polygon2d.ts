@@ -86,6 +86,18 @@ export class Polygon2D extends Label2D {
   private _snapMergeable: boolean
   /** whether this polyline has been merged out into another */
   private _mergedOut: boolean
+  /** Display caches never become label shapes or exported JSON. */
+  private _pathCache: Path2D | null = null
+  private _curvePathCache: Path2D | null = null
+  private _boundsCache: [number, number, number, number] | null = null
+  private _curveGroupsCache: number[][] | null = null
+  private _curvePointIndices: Set<number> | null = null
+  private _shapeSources: ShapeType[] | null = null
+  private _sourceClosed: boolean = false
+  private _pointDeleted: boolean = false
+  private _dragMoved: boolean = false
+  private _viewportBounds: [number, number, number, number] | null = null
+  private _handleMargin: number = 0
 
   /**
    * Constructor
@@ -139,6 +151,8 @@ export class Polygon2D extends Label2D {
    * @param labelId
    */
   public updateState(state: State, itemIndex: number, labelId: IdType): void {
+    const label = state.task.items[itemIndex].labels[labelId]
+    this._closed = label.type === LabelTypeName.POLYGON_2D || !!label.closed
     super.updateState(state, itemIndex, labelId)
     if (this._label !== null) {
       this._closed =
@@ -150,6 +164,7 @@ export class Polygon2D extends Label2D {
    * Set (cloned) points
    */
   public set points(ps: PathPoint2D[]) {
+    this.invalidateGeometry()
     this._points = ps.map((p) => p.clone())
   }
 
@@ -158,6 +173,11 @@ export class Polygon2D extends Label2D {
    */
   public get points(): PathPoint2D[] {
     return this._points.map((p) => p.clone())
+  }
+
+  /** Read-only interaction view avoids deep-cloning every snap candidate. */
+  public get snapPoints(): readonly PathPoint2D[] {
+    return this._points
   }
 
   /**
@@ -214,10 +234,8 @@ export class Polygon2D extends Label2D {
       this._snapTargetPolyline._points[this._snapTargetPointIndex]
     const realCoord = targetPoint.vector().scale(ratio)
 
-    // Scale the join indicator with zoom the same way vertices/edges do (via
-    // styleFactor = 1/sqrt(zoom)), so the green dot tracks the line and point
-    // sizes instead of staying a fixed pixel size at every zoom level. The
-    // floors mirror the point-style floors in draw() so it never vanishes.
+    // Indicator and handle styles share logical screen units. The viewport
+    // transform preserves their CSS size at every zoom and display density.
     const haloRadius = Math.max(4, 16 * styleFactor)
     const endpointRadius = Math.max(2, 8 * styleFactor)
     const centerRadius = Math.max(1, 3 * styleFactor)
@@ -273,6 +291,7 @@ export class Polygon2D extends Label2D {
    * @param isStartB
    */
   private mergeWith(targetPolyline: Polygon2D, isStartB: boolean): void {
+    this.invalidateGeometry()
     if (targetPolyline === this) {
       // Self-closing
       const vertices = this.getVertices()
@@ -365,6 +384,7 @@ export class Polygon2D extends Label2D {
    * the live cursor endpoint so viewport culling retains the preview segment.
    */
   public bounds(): [number, number, number, number] | null {
+    if (this._boundsCache !== null) return this._boundsCache
     if (this._points.length === 0) {
       return null
     }
@@ -385,7 +405,139 @@ export class Polygon2D extends Label2D {
       maxX = Math.max(maxX, this._mouseCoord.x)
       maxY = Math.max(maxY, this._mouseCoord.y)
     }
-    return [minX, minY, maxX - minX, maxY - minY]
+    this._boundsCache = [minX, minY, maxX - minX, maxY - minY]
+    return this._boundsCache
+  }
+
+  /** Invalidate only after geometry edits, never merely for pan/zoom. */
+  private invalidateGeometry(): void {
+    this._pathCache = null
+    this._curvePathCache = null
+    this._boundsCache = null
+    this._curveGroupsCache = null
+    this._curvePointIndices = null
+    this._shapeSources = null
+  }
+
+  private curveGroups(): number[][] {
+    if (this._curveGroupsCache === null) {
+      this._curveGroupsCache = curveGroupIndices(
+        this._points.map((p) => p.type),
+        this._closed
+      )
+    }
+    return this._curveGroupsCache
+  }
+
+  /** Reused by both handle painting and snap/pick eligibility. */
+  public isPointDisplayed(index: number, curvesOnly: boolean): boolean {
+    if (!curvesOnly || this.editing) return true
+    if (this._curvePointIndices === null) {
+      this._curvePointIndices = new Set<number>()
+      for (const group of this.curveGroups()) {
+        for (const i of group) this._curvePointIndices.add(i)
+      }
+    }
+    return this._curvePointIndices.has(index)
+  }
+
+  public setViewportBounds(
+    bounds: [number, number, number, number] | undefined,
+    scale: number
+  ): void {
+    this._viewportBounds = bounds ?? null
+    this._handleMargin = 7 / scale
+  }
+
+  private isPointVisible(point: PathPoint2D): boolean {
+    const bounds = this._viewportBounds
+    const margin = this._handleMargin
+    return (
+      bounds === null ||
+      (point.x >= bounds[0] - margin &&
+        point.y >= bounds[1] - margin &&
+        point.x <= bounds[0] + bounds[2] + margin &&
+        point.y <= bounds[1] + bounds[3] + margin)
+    )
+  }
+
+  /** Cached original-image path shared by painting, picking, and grab preview. */
+  public getPath(curvesOnly: boolean = false): Path2D | null {
+    if (typeof Path2D === "undefined") return null
+    const cached = curvesOnly ? this._curvePathCache : this._pathCache
+    if (cached !== null) return cached
+    const path = new Path2D()
+    if (curvesOnly) {
+      for (const [a, c1, c2, b] of this.curveGroups()) {
+        const p = this._points
+        path.moveTo(p[a].x, p[a].y)
+        path.bezierCurveTo(p[c1].x, p[c1].y, p[c2].x, p[c2].y, p[b].x, p[b].y)
+      }
+      this._curvePathCache = path
+    } else {
+      const p = this._points
+      if (p.length > 0) {
+        path.moveTo(p[0].x, p[0].y)
+        for (let i = 1; i < p.length; i++) {
+          if (p[i].type === PathPointType.CURVE) {
+            const c2 = p[(i + 1) % p.length]
+            const b = p[(i + 2) % p.length]
+            path.bezierCurveTo(p[i].x, p[i].y, c2.x, c2.y, b.x, b.y)
+            i += 2
+          } else if (p[i].type === PathPointType.LINE) {
+            path.lineTo(p[i].x, p[i].y)
+          }
+        }
+        if (this.isDrawing) path.lineTo(this._mouseCoord.x, this._mouseCoord.y)
+        if (this._closed) path.closePath()
+      }
+      this._pathCache = path
+    }
+    return path
+  }
+
+  /** Only visible handles are interactive; body selection uses the actual stroke. */
+  public pickHandle(
+    coord: Vector2D,
+    scale: number,
+    curvesOnly: boolean
+  ): number {
+    if (!this.highlighted && !this.isDrawing) return -1
+    let best = -1
+    let distance = Infinity
+    for (let i = 0; i < this._points.length; i++) {
+      if (this.isDrawing && this._points[i].type !== PathPointType.LINE)
+        continue
+      if (!this.isPointDisplayed(i, curvesOnly)) continue
+      const point = this._points[i]
+      const d = Math.hypot(point.x - coord.x, point.y - coord.y) * scale
+      const radius = this._highlightedHandle === i + 1 ? 7 : 6
+      if (d <= radius && d < distance) {
+        distance = d
+        best = i + 1
+      }
+    }
+    return best
+  }
+
+  public containsStroke(
+    context: Context2D,
+    coord: Vector2D,
+    scale: number,
+    multiplier: number,
+    curvesOnly: boolean = false
+  ): boolean {
+    const path = this.getPath(curvesOnly && !this.editing)
+    if (path === null || scale <= 0) return false
+    context.save()
+    context.setTransform(1, 0, 0, 1, 0, 0)
+    context.lineWidth = (3 * multiplier) / scale
+    context.lineCap = "butt"
+    context.lineJoin = "miter"
+    context.setLineDash([])
+    const hit = context.isPointInStroke(path, coord.x, coord.y)
+    context.restore()
+    return hit
   }
 
   /**
@@ -411,7 +563,7 @@ export class Polygon2D extends Label2D {
     isTrackLinking: boolean,
     hideLabelTags: boolean,
     sessionMode: ModeStatus | undefined,
-    viewScale: number = 1,
+    _viewScale: number = 1,
     lineWidthMultiplier: number = 1,
     curvesOnly: boolean = false
   ): void {
@@ -420,19 +572,13 @@ export class Polygon2D extends Label2D {
     // Curves-only display: stroke only bezier groups; the label being
     // actively edited is exempt and renders in full.
     const curvesOnlyActive = curvesOnly && !this.editing
-    const curveGroups = curvesOnlyActive
-      ? curveGroupIndices(
-          this._points.map((p) => p.type),
-          this._closed
-        )
-      : null
+    const curveGroups = curvesOnlyActive ? this.curveGroups() : null
     if (curveGroups !== null && curveGroups.length === 0) {
       return
     }
 
-    // Compute zoom-aware scale factor: styles thin out as you zoom in
-    const zoomScale = Math.max(1, viewScale)
-    const styleFactor = 1 / Math.sqrt(zoomScale)
+    // Styles are logical pixels (two per CSS pixel), independent of zoom.
+    const styleFactor = 1
 
     if (numPoints === 0) return
     let pointStyle = makePathPoint2DStyle()
@@ -445,7 +591,7 @@ export class Polygon2D extends Label2D {
         pointStyle = _.assign(pointStyle, DEFAULT_VIEW_POINT_STYLE)
         highPointStyle = _.assign(highPointStyle, DEFAULT_VIEW_HIGH_POINT_STYLE)
         edgeStyle = _.assign(edgeStyle, DEFAULT_VIEW_EDGE_STYLE)
-        // Scale styles inversely with zoom for better precision at high zoom
+        // Fixed logical sizes keep opacity and controls stable at every zoom.
         pointStyle.radius = Math.max(2, pointStyle.radius * styleFactor)
         highPointStyle.radius = Math.max(3, highPointStyle.radius * styleFactor)
         edgeStyle.lineWidth = Math.max(
@@ -493,61 +639,84 @@ export class Polygon2D extends Label2D {
       context.setLineDash(DASH_LINE)
       context.lineDashOffset = -getAntsOffset()
     }
-    context.beginPath()
-    if (curveGroups !== null) {
-      for (const [a, c1, c2, b] of curveGroups) {
-        const pa = this._points[a].vector().scale(ratio)
-        const p1 = this._points[c1].vector().scale(ratio)
-        const p2 = this._points[c2].vector().scale(ratio)
-        const pb = this._points[b].vector().scale(ratio)
-        context.moveTo(pa.x, pa.y)
-        context.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, pb.x, pb.y)
+    const cachedPath = this.getPath(curvesOnlyActive)
+    if (cachedPath !== null) {
+      context.save()
+      context.scale(ratio, ratio)
+      context.lineWidth /= ratio
+      context.setLineDash(context.getLineDash().map((dash) => dash / ratio))
+      context.lineDashOffset /= ratio
+      if (
+        this._closed &&
+        !curvesOnlyActive &&
+        mode === DrawMode.CONTROL &&
+        sessionMode === ModeStatus.SELECTING
+      ) {
+        context.fillStyle = toCssColor(edgeStyle.color)
+        context.fill(cachedPath)
       }
+      context.stroke(cachedPath)
+      context.restore()
     } else {
-      const begin = this._points[0].vector().scale(ratio)
-      context.moveTo(begin.x, begin.y)
-      for (let i = 1; i < numPoints; ++i) {
-        const point = this._points[i]
-        const pointToDraw = point.vector().scale(ratio)
-        if (point.type === PathPointType.CURVE) {
-          const nextPointToDraw = this._points[(i + 1) % numPoints]
-            .vector()
-            .scale(ratio)
-          const nextVertexToDraw = this._points[(i + 2) % numPoints]
-            .vector()
-            .scale(ratio)
-          context.bezierCurveTo(
-            pointToDraw.x,
-            pointToDraw.y,
-            nextPointToDraw.x,
-            nextPointToDraw.y,
-            nextVertexToDraw.x,
-            nextVertexToDraw.y
-          )
-          i = i + 2
-        } else if (point.type === PathPointType.LINE) {
-          context.lineTo(pointToDraw.x, pointToDraw.y)
+      context.beginPath()
+      if (curveGroups !== null) {
+        for (const [a, c1, c2, b] of curveGroups) {
+          const pa = this._points[a].vector().scale(ratio)
+          const p1 = this._points[c1].vector().scale(ratio)
+          const p2 = this._points[c2].vector().scale(ratio)
+          const pb = this._points[b].vector().scale(ratio)
+          context.moveTo(pa.x, pa.y)
+          context.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, pb.x, pb.y)
+        }
+      } else {
+        const begin = this._points[0].vector().scale(ratio)
+        context.moveTo(begin.x, begin.y)
+        for (let i = 1; i < numPoints; ++i) {
+          const point = this._points[i]
+          const pointToDraw = point.vector().scale(ratio)
+          if (point.type === PathPointType.CURVE) {
+            const nextPointToDraw = this._points[(i + 1) % numPoints]
+              .vector()
+              .scale(ratio)
+            const nextVertexToDraw = this._points[(i + 2) % numPoints]
+              .vector()
+              .scale(ratio)
+            context.bezierCurveTo(
+              pointToDraw.x,
+              pointToDraw.y,
+              nextPointToDraw.x,
+              nextPointToDraw.y,
+              nextVertexToDraw.x,
+              nextVertexToDraw.y
+            )
+            i = i + 2
+          } else if (point.type === PathPointType.LINE) {
+            context.lineTo(pointToDraw.x, pointToDraw.y)
+          }
+        }
+
+        if (this._state === Polygon2DState.DRAW) {
+          const tmp = this._mouseCoord.clone().scale(ratio)
+          context.lineTo(tmp.x, tmp.y)
+        }
+
+        if (this._closed) {
+          context.lineTo(begin.x, begin.y)
+          context.closePath()
+          // Closed shapes render as OUTLINE ONLY on the visible canvas — no
+          // solid fill (it hid the image). The CONTROL canvas still fills in
+          // selecting mode so a click anywhere inside the ring hit-tests it.
+          if (
+            mode === DrawMode.CONTROL &&
+            sessionMode === ModeStatus.SELECTING
+          ) {
+            context.fillStyle = toCssColor(edgeStyle.color)
+            context.fill()
+          }
         }
       }
-
-      if (this._state === Polygon2DState.DRAW) {
-        const tmp = this._mouseCoord.clone().scale(ratio)
-        context.lineTo(tmp.x, tmp.y)
-      }
-
-      if (this._closed) {
-        context.lineTo(begin.x, begin.y)
-        context.closePath()
-        // Closed shapes render as OUTLINE ONLY on the visible canvas — no
-        // solid fill (it hid the image). The CONTROL canvas still fills in
-        // selecting mode so a click anywhere inside the ring hit-tests it.
-        if (mode === DrawMode.CONTROL && sessionMode === ModeStatus.SELECTING) {
-          context.fillStyle = toCssColor(edgeStyle.color)
-          context.fill()
-        }
-      }
+      context.stroke()
     }
-    context.stroke()
     context.restore()
 
     if (mode === DrawMode.CONTROL || this._selected || this._highlighted) {
@@ -594,6 +763,10 @@ export class Polygon2D extends Label2D {
         let numVertices = 1
         _.forEach(this._points, (point, index) => {
           if (point.type === PathPointType.LINE) {
+            if (!this.isPointVisible(point)) {
+              numVertices++
+              return
+            }
             let style = { ...pointStyle }
             if (numVertices === this._highlightedHandle) {
               style = { ...highPointStyle }
@@ -612,7 +785,8 @@ export class Polygon2D extends Label2D {
         this._state === Polygon2DState.MOVE
       ) {
         for (let i = 0; i < numPoints; ++i) {
-          if (curveGroups !== null && !curveGroups.some((g) => g.includes(i))) {
+          if (!this.isPointVisible(this._points[i])) continue
+          if (!this.isPointDisplayed(i, curvesOnly)) {
             continue
           }
           const point = this._points[i]
@@ -671,6 +845,8 @@ export class Polygon2D extends Label2D {
    * @param handleIndex
    */
   public onMouseDown(coord: Vector2D, handleIndex: number): boolean {
+    this._pointDeleted = false
+    this._dragMoved = false
     this._mouseDown = true
     this._mouseCoord = coord.clone()
     if (this._selected) {
@@ -733,6 +909,7 @@ export class Polygon2D extends Label2D {
           consumeArmedKey(Key.D_UP)
           consumeArmedKey(Key.D_LOW)
           this.toCache()
+          this._pointDeleted = true
           this.deleteVertex()
         } else {
           // Drag vertex, midpoint, or curve control point
@@ -776,9 +953,13 @@ export class Polygon2D extends Label2D {
   ): boolean {
     if (this._state === Polygon2DState.DRAW) {
       // Move to add vertex
+      this.invalidateGeometry()
       this._mouseCoord = coord.clone()
       this._highlightedHandle = handleIndex
     } else if (this._mouseDown && this._state === Polygon2DState.RESHAPE) {
+      // D+click has already removed this target; never drag its old array slot.
+      if (this._pointDeleted) return true
+      this._dragMoved = true
       // Dragging point
       const draggedIndex = this._highlightedHandle - 1
       // Snapping can be switched off from the toolbar when lines legitimately
@@ -807,6 +988,7 @@ export class Polygon2D extends Label2D {
       this.reshape(coord, _limit)
       this._labelList.addUpdatedLabel(this)
     } else if (this._mouseDown && this._state === Polygon2DState.MOVE) {
+      this._dragMoved = true
       // Dragging edges
       this.move(coord, _limit)
       this._labelList.addUpdatedLabel(this)
@@ -820,6 +1002,24 @@ export class Polygon2D extends Label2D {
    * @param coord
    */
   public onMouseUp(coord: Vector2D): boolean {
+    // Apply the release position even when the last move event was coalesced.
+    if (
+      this._mouseDown &&
+      !this._pointDeleted &&
+      (this._dragMoved ||
+        coord.x !== this._mouseDownCoord.x ||
+        coord.y !== this._mouseDownCoord.y) &&
+      (this._state === Polygon2DState.RESHAPE ||
+        this._state === Polygon2DState.MOVE)
+    ) {
+      this.onMouseMove(
+        coord.clone(),
+        new Size2D(),
+        this._index,
+        this._highlightedHandle
+      )
+    }
+    this.invalidateGeometry()
     this._mouseCoord = coord.clone()
     if (this.editing && this._state === Polygon2DState.DRAW) {
       // Add vertex
@@ -969,6 +1169,16 @@ export class Polygon2D extends Label2D {
     if (this._label === null) {
       return
     }
+    if (
+      this._shapeSources !== null &&
+      this._sourceClosed === this._closed &&
+      shapes.length === this._shapeSources.length &&
+      shapes.every((shape, index) => shape === this._shapeSources?.[index])
+    )
+      return
+    this.invalidateGeometry()
+    this._shapeSources = shapes.slice()
+    this._sourceClosed = this._closed
     this._points = []
     for (const shape of shapes) {
       const point = shape as PathPoint2DType
@@ -1092,6 +1302,7 @@ export class Polygon2D extends Label2D {
    * @param _limit
    */
   private move(end: Vector2D, _limit: Size2D): void {
+    this.invalidateGeometry()
     if (this._highlightedHandle !== 0) {
       throw new Error(`not operation move`)
     }
@@ -1111,6 +1322,7 @@ export class Polygon2D extends Label2D {
    * @param coord
    */
   private addVertex(coord: Vector2D): boolean {
+    this.invalidateGeometry()
     let closed = false
     const newPoint = makeDrawablePathPoint2D(
       coord.x,
@@ -1144,6 +1356,7 @@ export class Polygon2D extends Label2D {
    * delete one vertex in polygon
    */
   private deleteVertex(): boolean {
+    this.invalidateGeometry()
     const numPoints = this._points.length
     if (numPoints === 0) return false
     switch (this._state) {
@@ -1238,6 +1451,7 @@ export class Polygon2D extends Label2D {
 
   /** Finish the drawing of a polygon or polyline.*/
   private finishDrawing(): void {
+    this.invalidateGeometry()
     if (this._closed) {
       const point1 = this._points[0]
       const point2 = this._points[this._points.length - 1]
@@ -1259,6 +1473,7 @@ export class Polygon2D extends Label2D {
    * @param _limit
    */
   private reshape(end: Vector2D, _limit: Size2D): void {
+    this.invalidateGeometry()
     //
     if (this._highlightedHandle <= 0) {
       throw new Error("No handle is selected for reshape")
@@ -1344,6 +1559,7 @@ export class Polygon2D extends Label2D {
    * convert a midpoint to a vertex
    */
   private midToVertex(): void {
+    this.invalidateGeometry()
     const selectedLabelIndex = this._highlightedHandle - 1
     const point = this._points[selectedLabelIndex]
     if (point.type !== PathPointType.MID) {
@@ -1371,6 +1587,7 @@ export class Polygon2D extends Label2D {
    * straighten gesture)
    */
   private lineToCurve(): void {
+    this.invalidateGeometry()
     const highlightedHandleIndex = this._highlightedHandle - 1
     const point = this._points[highlightedHandleIndex]
     if (point.type !== PathPointType.MID) {
