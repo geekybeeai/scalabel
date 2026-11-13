@@ -2,6 +2,7 @@ import _ from "lodash"
 
 import * as action from "../../src/action/common"
 import Session, { dispatch, getState } from "../../src/common/session"
+import { Label2DList } from "../../src/drawable/2d/label2d_list"
 import { getNumLabels, getShapes } from "../../src/functional/state_util"
 import { Size2D } from "../../src/math/size2d"
 import { Vector2D } from "../../src/math/vector2d"
@@ -184,67 +185,82 @@ test("direct drag on a polygon handle does not create a new label", () => {
   expect(label2dHandler.highlightedLabel?.labelId).toEqual(labelId)
 })
 
-test("validation check for polygon2d", () => {
+test("self-intersecting closed polygons are retained", () => {
+  Session.label2dList = new Label2DList()
   const [label2dHandler] = initializeTestingObjects()
   dispatch(action.changeSelect({ labelType: 1 }))
-  const labelIds: IdType[] = []
-
-  // Draw a valid polygon
   const canvasSize = new Size2D(1000, 1000)
-  drawPolygon(label2dHandler, canvasSize, [
+  const vertices = [
+    [200, 100],
+    [400, 300],
+    [200, 300],
+    [400, 100]
+  ]
+
+  const labelId = drawPolygon(label2dHandler, canvasSize, vertices)
+
+  const state = getState()
+  expect(_.size(state.task.items[0].labels)).toEqual(1)
+  expect(Session.label2dList.labelList.length).toEqual(1)
+  expect(getShapes(state, 0, labelId)).toMatchObject(
+    vertices.map(([x, y]) => ({ x, y, pointType: "line" }))
+  )
+})
+
+test("closed polygons that touch a non-adjacent vertex are retained", () => {
+  Session.label2dList = new Label2DList()
+  const [label2dHandler] = initializeTestingObjects()
+  dispatch(action.changeSelect({ labelType: 1 }))
+  const canvasSize = new Size2D(1000, 1000)
+  const vertices = [
+    [200, 100],
+    [400, 300],
+    [300, 200],
+    [300, 0]
+  ]
+
+  const labelId = drawPolygon(label2dHandler, canvasSize, vertices)
+
+  const state = getState()
+  expect(_.size(state.task.items[0].labels)).toEqual(1)
+  expect(Session.label2dList.labelList.length).toEqual(1)
+  expect(getShapes(state, 0, labelId)).toMatchObject(
+    vertices.map(([x, y]) => ({ x, y, pointType: "line" }))
+  )
+})
+
+test("reshaping a closed polygon into a self-intersection keeps it", () => {
+  Session.label2dList = new Label2DList()
+  const [label2dHandler] = initializeTestingObjects()
+  dispatch(action.changeSelect({ labelType: 1 }))
+  const canvasSize = new Size2D(1000, 1000)
+  const labelId = drawPolygon(label2dHandler, canvasSize, [
     [120, 120],
     [210, 210],
     [310, 260],
     [410, 210],
     [210, 110]
   ])
-  /**
-   * polygon 1: (120, 120) (210, 210) (310, 260) (410, 210) (210, 110)
-   */
-  labelIds.push(findNewLabels(getState().task.items[0].labels, labelIds)[0])
 
-  // Draw one invalid polygon
-  drawPolygon(
-    label2dHandler,
-    canvasSize,
-    [
-      [200, 100],
-      [400, 300],
-      [300, 200],
-      [300, 0]
-    ],
-    false,
-    false
-  )
-  /**
-   * polygon 1: (120, 120) (210, 210) (310, 260) (410, 210) (210, 110)
-   * polygon 2: (200, 100) (400, 300) (300, 200) (300, 0) invalid
-   */
-
-  let state = getState()
-  expect(_.size(state.task.items[0].labels)).toEqual(1)
-  expect(Session.label2dList.labelList.length).toEqual(1)
-
-  // Drag the polygon to an invalid shape
+  // Moving this vertex creates a self-crossing ring.
   mouseMove(label2dHandler, 310, 260, canvasSize, 0, 5)
   mouseDown(label2dHandler, 310, 260, 0, 5)
   mouseMove(label2dHandler, 310, 0, canvasSize, 0, 5)
   mouseUp(label2dHandler, 310, 0, 0, 5)
-  /**
-   * polygon 1: (120, 120) (210, 210) (310, 0) (410, 210) (210, 110)
-   * polygon 1 is an invalid shape
-   */
 
-  state = getState()
-  const points = getShapes(state, 0, labelIds[0]) as PathPoint2DType[]
-  expect(points[2]).toMatchObject({ x: 310, y: 260, pointType: "line" })
+  const state = getState()
+  expect(state.task.items[0].labels[labelId]).toBeDefined()
+  expect(Session.label2dList.labelList.length).toEqual(1)
+  const points = getShapes(state, 0, labelId) as PathPoint2DType[]
+  expect(points[2]).toMatchObject({ x: 310, y: 0, pointType: "line" })
+})
 
-  /**
-   * polygon 1: (120, 120) (210, 210) (310, 260) (410, 210) (210, 110)
-   */
-  labelIds.push(findNewLabels(getState().task.items[0].labels, [])[0])
+test("too-small closed polygons are rejected", () => {
+  Session.label2dList = new Label2DList()
+  const [label2dHandler] = initializeTestingObjects()
+  dispatch(action.changeSelect({ labelType: 1 }))
+  const canvasSize = new Size2D(1000, 1000)
 
-  // Draw a too small polygon
   drawPolygon(
     label2dHandler,
     canvasSize,
@@ -256,13 +272,10 @@ test("validation check for polygon2d", () => {
     false,
     false
   )
-  /**
-   * polygon 1: (120, 120) (210, 210) (310, 260) (410, 210) (210, 110)
-   * polygon 2: (0, 0) (0.5, 0) (0, 0.5) too small, invalid
-   */
-  state = getState()
-  expect(_.size(state.task.items[0].labels)).toEqual(1)
-  expect(Session.label2dList.labelList.length).toEqual(1)
+
+  const state = getState()
+  expect(_.size(state.task.items[0].labels)).toEqual(0)
+  expect(Session.label2dList.labelList.length).toEqual(0)
 })
 
 test("2d polygons drag vertices, midpoints and edges", () => {
