@@ -129,15 +129,22 @@ does not meet the requested behavior.
 ## Review follow-up
 
 The first implementation dropped the gap-direction guard entirely and let any
-two different-category endpoints snap. Review found that this merged or snapped
+two different-category endpoints snap. Two rounds of review found that this merged or snapped
 side-by-side parallel lines, snapped at right angles when `minAngle` is 0,
 could pull apart endpoints that already touched, and could move a Bezier
 anchor away from its control points. The behavior is now:
 
-- **Straight endpoints:** a gap of at most 12 image pixels
-  (`STRAIGHT_JITTER_GAP`) may run sideways (annotator jitter, which covers the
-  verified 10.728-pixel pair) but the spliced seam must stay straight. Wider
-  gaps must again follow both tangents, so parallel neighbours are rejected.
+- **Straight endpoints:** the gap must follow both tangents, so parallel
+  neighbours are rejected, including overlapping ones only a few pixels
+  apart. The one exception is a stub: when either endpoint's direction comes
+  from a segment shorter than the gap itself, that direction is noise, and a
+  gap of at most 12 image pixels (`STRAIGHT_JITTER_GAP`) may run sideways as
+  long as the spliced seam stays straight. The verified 10.728-pixel pair
+  qualifies because its earlier label is a 1.4-pixel stub.
+- **Curve sampling allowance:** the 5-pixel `CURVE_SAMPLING_GAP` allowance,
+  which skips the angle check, applies to same-category merges only.
+  Cross-category snaps next to a curve must pass the full angle and seam
+  checks.
 - **Snap angle floor:** cross-category snaps always use at least 150 degrees
   (`SNAP_MIN_ANGLE`), even when the merge guard is disabled.
 - **Touching endpoints:** endpoints that already coincide are consumed before
