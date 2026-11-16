@@ -73,10 +73,19 @@ export function makeDrawablePathPoint2D(
   return new PathPoint2D(makePathPoint2D({ x, y, pointType, label }))
 }
 
+/** Told when a point it holds moves or changes type. */
+export interface GeometryOwner {
+  /** Invalidate anything derived from the owner's points. */
+  markGeometryDirty: () => void
+}
+
 /**
  * Drawable 2D path point
  */
 export class PathPoint2D {
+  /** Line whose cached geometry depends on this point; not copied by clone. */
+  public owner: GeometryOwner | null = null
+
   /**
    * The actual path point data type
    * This separate the drawing and actual content. If we add new fields to the
@@ -109,6 +118,7 @@ export class PathPoint2D {
    */
   public set type(t: PathPointType) {
     this._point.pointType = t
+    this.owner?.markGeometryDirty()
   }
 
   /**
@@ -121,6 +131,7 @@ export class PathPoint2D {
   /** set x */
   public set x(v: number) {
     this._point.x = v
+    this.owner?.markGeometryDirty()
   }
 
   /**
@@ -133,6 +144,7 @@ export class PathPoint2D {
   /** set y */
   public set y(v: number) {
     this._point.y = v
+    this.owner?.markGeometryDirty()
   }
 
   /**
@@ -170,6 +182,7 @@ export class PathPoint2D {
    */
   public copy(p: PathPoint2D): void {
     this._point = p.shape()
+    this.owner?.markGeometryDirty()
   }
 
   /**

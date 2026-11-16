@@ -48,24 +48,6 @@ const DEFAULT_CONTROL_HIGH_POINT_STYLE = makePathPoint2DStyle({ radius: 14 })
 /** Extra stroke width multiplier for a marked line, for emphasis. */
 const MULTI_DELETE_HIGHLIGHT_WIDTH_FACTOR = 1.5
 
-/**
- * Numeric code for a point type, for geometry stamps.
- *
- * @param type point type
- */
-function pointTypeCode(type: PathPointType): number {
-  switch (type) {
-    case PathPointType.LINE:
-      return 1
-    case PathPointType.CURVE:
-      return 2
-    case PathPointType.MID:
-      return 3
-    default:
-      return 0
-  }
-}
-
 /** list all states */
 export enum Polygon2DState {
   FREE,
@@ -112,10 +94,22 @@ export class Polygon2D extends Label2D {
   private _curvePointIndices: Set<number> | null = null
   private _shapeSources: ShapeType[] | null = null
   private _sourceClosed: boolean = false
-  /** Geometry the display caches were built from (see geometryStamp). */
-  private _cacheStamp: number[] | null = null
-  /** Geometry right after the last rebuild from saved shapes. */
-  private _sourceStamp: number[] | null = null
+  /**
+   * Change tracking for the display caches. A point notifies its line when it
+   * moves or changes type (markGeometryDirty); swapping, adding or removing
+   * points shows up as a different array or length. Checking costs O(1).
+   */
+  private _geometryDirty: boolean = true
+  private _watchedPoints: PathPoint2D[] | null = null
+  private _watchedLength: number = -1
+  private _watchedClosed: boolean = false
+  private _watchedDrawing: boolean = false
+  private _watchedMouseX: number = NaN
+  private _watchedMouseY: number = NaN
+  /** Bumped each time a geometry change is detected. */
+  private _geometryVersion: number = 0
+  /** _geometryVersion right after the last rebuild from saved shapes. */
+  private _sourceVersion: number = -1
   private _pointDeleted: boolean = false
   private _dragMoved: boolean = false
   private _viewportBounds: [number, number, number, number] | null = null
@@ -434,8 +428,9 @@ export class Polygon2D extends Label2D {
 
   /**
    * Explicit invalidation after a geometry edit. Not required for
-   * correctness: refreshCaches also notices any change to the points, so a
-   * mutation that forgets to call this cannot leave a stale path or bounds.
+   * correctness: points report their own changes and refreshCaches notices
+   * added, removed or replaced points, so a mutation that forgets to call
+   * this cannot leave a stale path or bounds.
    */
   private invalidateGeometry(): void {
     this.clearDisplayCaches()
@@ -449,68 +444,62 @@ export class Polygon2D extends Label2D {
     this._boundsCache = null
     this._curveGroupsCache = null
     this._curvePointIndices = null
-    this._cacheStamp = null
+    this._geometryDirty = true
   }
 
-  /**
-   * Everything the cached path, bounds and curve groups depend on: each
-   * point's position and type, whether the shape is closed, and the live
-   * cursor while drawing.
-   */
-  private geometryStamp(): number[] {
-    const stamp = [this._points.length, this._closed ? 1 : 0]
-    if (this.isDrawing) stamp.push(this._mouseCoord.x, this._mouseCoord.y)
-    for (const point of this._points) {
-      stamp.push(point.x, point.y, pointTypeCode(point.type))
-    }
-    return stamp
+  /** Called by a point of this line when it moves or changes type. */
+  public markGeometryDirty(): void {
+    this._geometryDirty = true
   }
 
-  /**
-   * Whether the current geometry equals a stamp, without allocating.
-   *
-   * @param stamp stamp from geometryStamp
-   */
-  private matchesStamp(stamp: number[] | null): boolean {
-    if (stamp === null) return false
-    const points = this._points
-    let k = 2
-    if (stamp[0] !== points.length || stamp[1] !== (this._closed ? 1 : 0))
+  /** Whether nothing the caches depend on changed since watchGeometry. */
+  private geometryUnchanged(): boolean {
+    if (
+      this._geometryDirty ||
+      this._points !== this._watchedPoints ||
+      this._points.length !== this._watchedLength ||
+      this._closed !== this._watchedClosed
+    )
       return false
-    if (this.isDrawing) {
-      if (stamp[2] !== this._mouseCoord.x || stamp[3] !== this._mouseCoord.y)
-        return false
-      k = 4
-    }
-    if (stamp.length !== k + points.length * 3) return false
-    for (const point of points) {
-      if (
-        stamp[k] !== point.x ||
-        stamp[k + 1] !== point.y ||
-        stamp[k + 2] !== pointTypeCode(point.type)
-      )
-        return false
-      k += 3
-    }
-    return true
+    const drawing = this._state === Polygon2DState.DRAW
+    if (drawing !== this._watchedDrawing) return false
+    return (
+      !drawing ||
+      (this._mouseCoord.x === this._watchedMouseX &&
+        this._mouseCoord.y === this._watchedMouseY)
+    )
+  }
+
+  /** Start tracking the current geometry. O(points); runs after a change. */
+  private watchGeometry(): void {
+    for (const point of this._points) point.owner = this
+    this._watchedPoints = this._points
+    this._watchedLength = this._points.length
+    this._watchedClosed = this._closed
+    this._watchedDrawing = this.isDrawing
+    this._watchedMouseX = this._mouseCoord.x
+    this._watchedMouseY = this._mouseCoord.y
+    this._geometryDirty = false
   }
 
   /** Drop the display caches if the geometry changed since they were built. */
   private refreshCaches(): void {
-    if (this.matchesStamp(this._cacheStamp)) return
+    if (this.geometryUnchanged()) return
     this.clearDisplayCaches()
-    this._cacheStamp = this.geometryStamp()
+    this._geometryVersion++
+    this.watchGeometry()
   }
 
   /**
-   * Whether the points differ from the saved shapes they were last built
-   * from, e.g. a midpoint promoted on mouse-down and never committed.
+   * Whether the points may differ from the saved shapes they were last built
+   * from, e.g. a midpoint promoted on mouse-down and never committed. O(1).
    */
   public hasLocalGeometryChanges(): boolean {
+    this.refreshCaches()
     return (
       this._shapeSources === null ||
       this._sourceClosed !== this._closed ||
-      !this.matchesStamp(this._sourceStamp)
+      this._geometryVersion !== this._sourceVersion
     )
   }
 
@@ -1351,7 +1340,7 @@ export class Polygon2D extends Label2D {
 
     // The root of a set of linked polygons has no points.
     if (this._points.length === 0) {
-      this._sourceStamp = this.geometryStamp()
+      this.markRebuiltFromSource()
       return
     }
     if (this._closed) {
@@ -1361,7 +1350,13 @@ export class Polygon2D extends Label2D {
       }
     }
     this._state = Polygon2DState.FINISHED
-    this._sourceStamp = this.geometryStamp()
+    this.markRebuiltFromSource()
+  }
+
+  /** Record that the points now match the saved shapes exactly. */
+  private markRebuiltFromSource(): void {
+    this.refreshCaches()
+    this._sourceVersion = this._geometryVersion
   }
 
   /**

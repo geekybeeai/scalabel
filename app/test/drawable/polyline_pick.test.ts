@@ -6,6 +6,7 @@ import { configureStore } from "../../src/common/configure_store"
 import Session, { dispatch } from "../../src/common/session"
 import { PathPointType } from "../../src/const/common"
 import { Label2DList, PICK_STROKE_PX } from "../../src/drawable/2d/label2d_list"
+import { PathPoint2D } from "../../src/drawable/2d/path_point2d"
 import { Polygon2D } from "../../src/drawable/2d/polygon2d"
 import { Context2D } from "../../src/drawable/util"
 import {
@@ -373,5 +374,18 @@ describe("syncing lines with the saved state", () => {
     expect(label.bounds()).toEqual([100, 100, 250, 0])
     expect(label.getPath()).not.toBe(path)
     expect(pick(list, 340, 100)).toEqual([0, 0])
+  })
+
+  test("cached bounds follow a point added without invalidation", () => {
+    const list = setup([LINE])
+    const label = list.labelList[0] as Polygon2D
+    expect(label.bounds()).toEqual([100, 100, 200, 0])
+    const extra = label.snapPoints[2].clone()
+    extra.y = 160
+    ;(label.snapPoints as PathPoint2D[]).push(extra)
+    expect(label.bounds()).toEqual([100, 100, 200, 60])
+    // Moving the added point is noticed too, once it has been tracked.
+    extra.y = 180
+    expect(label.bounds()).toEqual([100, 100, 200, 80])
   })
 })
