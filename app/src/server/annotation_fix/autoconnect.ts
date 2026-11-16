@@ -490,16 +490,20 @@ function collectEndpoints(
 }
 
 /**
- * Length of the segment that sets an endpoint's direction: the distance to
- * its first distinct neighbour, or 0 if every vertex coincides.
+ * Outward direction of an endpoint measured over at least `reach` pixels: the
+ * unit vector from the first vertex that far from the tip, or null when the
+ * whole line stays closer than that (a stub). Skipping shorter segments keeps
+ * a double-click or near-duplicate final vertex from passing for a stub.
  *
  * @param poly the polyline
  * @param isStart which endpoint
+ * @param reach minimum distance from the tip
  */
-function tangentSegmentLength(
+function reachDirection(
   poly: PolygonExportType,
-  isStart: boolean
-): number {
+  isStart: boolean,
+  reach: number
+): [number, number] | null {
   const vs = poly.vertices
   const tip = isStart ? vs[0] : vs[vs.length - 1]
   const step = isStart ? 1 : -1
@@ -508,15 +512,14 @@ function tangentSegmentLength(
     index >= 0 && index < vs.length;
     index += step
   ) {
-    const length = Math.hypot(
-      Number(tip[0]) - Number(vs[index][0]),
-      Number(tip[1]) - Number(vs[index][1])
-    )
-    if (length >= 1e-9) {
-      return length
+    const dx = Number(tip[0]) - Number(vs[index][0])
+    const dy = Number(tip[1]) - Number(vs[index][1])
+    const length = Math.hypot(dx, dy)
+    if (length >= Math.max(reach, 1e-9)) {
+      return [dx / length, dy / length]
     }
   }
-  return 0
+  return null
 }
 
 /**
@@ -526,10 +529,11 @@ function tangentSegmentLength(
  * the CURVE_SAMPLING_GAP allowance, which skips the angle check for curve
  * fragments a few pixels apart; cross-category snaps never do.
  * Straight gaps must run along both tangents, which rejects side-by-side
- * parallel lines. The one exception is a stub: when either endpoint's
- * direction comes from a segment shorter than the gap itself (and the gap is
- * within STRAIGHT_JITTER_GAP), that direction is noise, so a sideways gap is
- * allowed as long as the spliced seam stays straight.
+ * parallel lines; each tangent is measured over at least the gap's length so
+ * a short final segment cannot fake a direction. The one exception is a stub:
+ * when either whole line stays within the gap's length of its endpoint (and
+ * the gap is within STRAIGHT_JITTER_GAP), its direction is noise, so a
+ * sideways gap is allowed as long as the spliced seam stays straight.
  *
  * @param a first endpoint
  * @param b second endpoint
@@ -567,18 +571,22 @@ function candidateGeometry(
   }
   const seamFollows = (): boolean =>
     splicedSeamFollowsTangents(a.poly, a.isStart, b.poly, b.isStart, minAngle)
-  const stub =
-    Math.min(
-      tangentSegmentLength(a.poly, a.isStart),
-      tangentSegmentLength(b.poly, b.isStart)
-    ) < gap
+  const reachA = reachDirection(a.poly, a.isStart, gap)
+  const reachB = reachDirection(b.poly, b.isStart, gap)
+  const stub = reachA === null || reachB === null
   let followsTangents: boolean
   if (curveAdjacent) {
     followsTangents = curveSamplingGap || seamFollows()
   } else if (stub && gap <= STRAIGHT_JITTER_GAP) {
     followsTangents = seamFollows()
   } else {
-    followsTangents = gapFollowsTangents(a.point, dirA, b.point, dirB, minAngle)
+    followsTangents = gapFollowsTangents(
+      a.point,
+      reachA ?? dirA,
+      b.point,
+      reachB ?? dirB,
+      minAngle
+    )
   }
   return followsTangents ? { gap, angle } : null
 }

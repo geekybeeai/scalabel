@@ -1370,3 +1370,38 @@ describe("connectLabels eligibility and guards", () => {
     expect(JSON.stringify(untouched)).toBe(before)
   })
 })
+
+describe("connectLabels stub detection", () => {
+  test.each([3, 0.5])(
+    "a %d px final segment does not make a parallel line end a stub",
+    (last) => {
+      // A double-click or near-duplicate final vertex is collinear with the
+      // line, so it must not unlock the sideways stub allowance.
+      const ends: Array<[number, number]> = [
+        [0, 0],
+        [100 - last, 0],
+        [100, 0]
+      ]
+      const offset: Array<[number, number]> = [
+        [95, 8],
+        [195, 8]
+      ]
+      const [merged, mergeResult] = connectLabels(
+        [line("a", "lane", ends), line("b", "lane", offset)],
+        40,
+        150
+      )
+      expect(merged).toHaveLength(2)
+      expect(mergeResult.connections).toEqual([])
+
+      const crossCategory = [
+        line("white", "white_line", ends),
+        line("yellow", "yellow_line", offset)
+      ]
+      const before = JSON.stringify(crossCategory.map((label) => label.poly2d))
+      const [out, snapResult] = connectLabels(crossCategory, 40, 150)
+      expect(snapResult.snaps).toEqual([])
+      expect(JSON.stringify(out.map((label) => label.poly2d))).toBe(before)
+    }
+  )
+})
