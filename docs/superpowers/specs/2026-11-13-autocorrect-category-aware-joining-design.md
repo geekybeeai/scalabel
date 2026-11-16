@@ -125,3 +125,24 @@ does not meet the requested behavior.
 - Do not add segment-level categories.
 - Do not change the configured 40-pixel tolerance or 150-degree angle guard.
 - Do not merge perpendicular same-category lines.
+
+## Review follow-up
+
+The first implementation dropped the gap-direction guard entirely and let any
+two different-category endpoints snap. Review found that this merged or snapped
+side-by-side parallel lines, snapped at right angles when `minAngle` is 0,
+could pull apart endpoints that already touched, and could move a Bezier
+anchor away from its control points. The behavior is now:
+
+- **Straight endpoints:** a gap of at most 12 image pixels
+  (`STRAIGHT_JITTER_GAP`) may run sideways (annotator jitter, which covers the
+  verified 10.728-pixel pair) but the spliced seam must stay straight. Wider
+  gaps must again follow both tangents, so parallel neighbours are rejected.
+- **Snap angle floor:** cross-category snaps always use at least 150 degrees
+  (`SNAP_MIN_ANGLE`), even when the merge guard is disabled.
+- **Touching endpoints:** endpoints that already coincide are consumed before
+  snapping, so a third label cannot pull them apart.
+- **Bezier anchors:** if the later endpoint is a Bezier anchor, the earlier
+  endpoint moves instead. If both are anchors, the pair is skipped.
+- **Python reference:** `tools/annotation_fix` implements the same rules and
+  reports `snapped`/`snaps`/`totalSnapped`. The parity tool compares snaps too.
