@@ -27,12 +27,12 @@ export const DEFAULT_MIN_ANGLE = 0.0
 const CURVE_SAMPLING_GAP = 5.0
 
 /**
- * Straight endpoints whose gap is at most this many image pixels are treated
- * as annotator jitter: the gap may run sideways to the tangents (an overshoot
- * or a slightly offset restart) as long as the spliced seam itself stays
- * straight. Wider gaps must run along both tangents, which is what keeps two
- * side-by-side parallel lines from being merged or snapped. 12 px admits the
- * verified 10.7 px aligned overshoot and is well below typical lane spacing.
+ * Upper bound on the stub allowance: when one endpoint's direction comes from
+ * a segment shorter than the gap (a stub whose heading is noise), a gap of at
+ * most this many image pixels may run sideways to the tangents, as long as
+ * the spliced seam stays straight. Every other straight gap must run along
+ * both tangents, which keeps side-by-side parallel lines apart. 12 px admits
+ * the verified 10.7 px overshoot, whose earlier label is a 1.4 px stub.
  */
 const STRAIGHT_JITTER_GAP = 12.0
 
@@ -490,25 +490,59 @@ function collectEndpoints(
 }
 
 /**
+ * Length of the segment that sets an endpoint's direction: the distance to
+ * its first distinct neighbour, or 0 if every vertex coincides.
+ *
+ * @param poly the polyline
+ * @param isStart which endpoint
+ */
+function tangentSegmentLength(
+  poly: PolygonExportType,
+  isStart: boolean
+): number {
+  const vs = poly.vertices
+  const tip = isStart ? vs[0] : vs[vs.length - 1]
+  const step = isStart ? 1 : -1
+  for (
+    let index = isStart ? 1 : vs.length - 2;
+    index >= 0 && index < vs.length;
+    index += step
+  ) {
+    const length = Math.hypot(
+      Number(tip[0]) - Number(vs[index][0]),
+      Number(tip[1]) - Number(vs[index][1])
+    )
+    if (length >= 1e-9) {
+      return length
+    }
+  }
+  return 0
+}
+
+/**
  * Apply the shared distance, angle and seam guards to two endpoints.
  *
- * Curve-adjacent endpoints keep the spliced-seam check (plus the small
- * curve sampling allowance).
- * Straight endpoints within STRAIGHT_JITTER_GAP may be offset sideways, but
- * the spliced seam must stay straight so the result never doubles back.
- * Wider straight gaps must run along both tangents, which rejects
- * side-by-side parallel lines.
+ * Curve-adjacent endpoints keep the spliced-seam check. Merges may also use
+ * the CURVE_SAMPLING_GAP allowance, which skips the angle check for curve
+ * fragments a few pixels apart; cross-category snaps never do.
+ * Straight gaps must run along both tangents, which rejects side-by-side
+ * parallel lines. The one exception is a stub: when either endpoint's
+ * direction comes from a segment shorter than the gap itself (and the gap is
+ * within STRAIGHT_JITTER_GAP), that direction is noise, so a sideways gap is
+ * allowed as long as the spliced seam stays straight.
  *
  * @param a first endpoint
  * @param b second endpoint
  * @param tolerance maximum endpoint gap
  * @param minAngle minimum continuation angle
+ * @param allowCurveSampling whether the curve sampling allowance applies
  */
 function candidateGeometry(
   a: Endpoint,
   b: Endpoint,
   tolerance: number,
-  minAngle: number
+  minAngle: number,
+  allowCurveSampling: boolean
 ): { gap: number; angle: number | null } | null {
   const gap = Math.hypot(a.point[0] - b.point[0], a.point[1] - b.point[1])
   if (gap > tolerance) {
@@ -526,16 +560,22 @@ function candidateGeometry(
   const curveAdjacent =
     endpointTouchesCurve(a.poly, a.isStart) ||
     endpointTouchesCurve(b.poly, b.isStart)
-  const curveSamplingGap = curveAdjacent && gap <= CURVE_SAMPLING_GAP
+  const curveSamplingGap =
+    allowCurveSampling && curveAdjacent && gap <= CURVE_SAMPLING_GAP
   if (angle === null || (angle < minAngle && !curveSamplingGap)) {
     return null
   }
   const seamFollows = (): boolean =>
     splicedSeamFollowsTangents(a.poly, a.isStart, b.poly, b.isStart, minAngle)
+  const stub =
+    Math.min(
+      tangentSegmentLength(a.poly, a.isStart),
+      tangentSegmentLength(b.poly, b.isStart)
+    ) < gap
   let followsTangents: boolean
   if (curveAdjacent) {
     followsTangents = curveSamplingGap || seamFollows()
-  } else if (gap <= STRAIGHT_JITTER_GAP) {
+  } else if (stub && gap <= STRAIGHT_JITTER_GAP) {
     followsTangents = seamFollows()
   } else {
     followsTangents = gapFollowsTangents(a.point, dirA, b.point, dirB, minAngle)
@@ -1022,7 +1062,7 @@ function snapDifferentCategories(
       if (categoryOf(labels[a.index]) === categoryOf(labels[b.index])) {
         continue
       }
-      const geometry = candidateGeometry(a, b, tolerance, snapAngle)
+      const geometry = candidateGeometry(a, b, tolerance, snapAngle, false)
       if (geometry === null) {
         continue
       }
@@ -1073,7 +1113,7 @@ function snapDifferentCategories(
       poly: polyB,
       point: endpoint(polyB, candidate.startB)
     }
-    const geometry = candidateGeometry(endA, endB, tolerance, snapAngle)
+    const geometry = candidateGeometry(endA, endB, tolerance, snapAngle, false)
     if (geometry === null || geometry.gap < 1e-9) {
       continue
     }
@@ -1150,7 +1190,7 @@ export function connectLabels(
         if (categoryOf(labelA) !== categoryOf(working[eb.index])) {
           continue
         }
-        const geometry = candidateGeometry(ea, eb, tolerance, minAngle)
+        const geometry = candidateGeometry(ea, eb, tolerance, minAngle, true)
         if (geometry === null) {
           continue
         }

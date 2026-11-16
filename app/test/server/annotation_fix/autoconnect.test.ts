@@ -330,16 +330,20 @@ describe("connectLabels category-aware snapping", () => {
         [0, 0],
         [100, 0]
       ]),
-      // 6.3 px jitter offset: snapping its start tilts this short line 26.6 deg.
+      // 11.2 px gap running 26.6 deg off both tangents (within the 30 deg
+      // cone): snapping its start tilts this short line 12.8 deg down.
       line("middle", "category-b", [
-        [102, 6],
-        [112, 6]
+        [110, 5],
+        [122, 5]
       ]),
-      // Tilted 5 deg the other way: a valid continuation of the original
-      // middle line, but only 148.4 deg from the tilted one.
+      // Tilted 20 deg up: a valid continuation of the original middle line
+      // (160 deg), but only 147.2 deg from the tilted one.
       line("later", "category-c", [
-        [120, 6],
-        [170, 6 - 50 * Math.tan((5 * Math.PI) / 180)]
+        [140, 5],
+        [
+          140 + 50 * Math.cos((20 * Math.PI) / 180),
+          5 - 50 * Math.sin((20 * Math.PI) / 180)
+        ]
       ])
     ]
 
@@ -347,15 +351,15 @@ describe("connectLabels category-aware snapping", () => {
 
     expect(out[1].poly2d?.[0].vertices).toEqual([
       [100, 0],
-      [112, 6]
+      [122, 5]
     ])
-    expect(out[2].poly2d?.[0].vertices[0]).toEqual([120, 6])
+    expect(out[2].poly2d?.[0].vertices[0]).toEqual([140, 5])
     expect(result.snaps).toHaveLength(1)
     expect(result.snaps[0]).toMatchObject({
       anchorId: "anchor",
       movedId: "middle"
     })
-    expect(result.snaps[0].gap).toBeCloseTo(Math.hypot(2, 6), 9)
+    expect(result.snaps[0].gap).toBeCloseTo(Math.hypot(10, 5), 9)
   })
 
   test.each(["Lane", "lane "])(
@@ -456,6 +460,98 @@ describe("connectLabels review regressions", () => {
 
     expect(out[1].poly2d?.[0].vertices[0]).toEqual([100, 0])
     expect(result.snaps).toHaveLength(1)
+  })
+})
+
+describe("connectLabels overlap and curve-snap guards", () => {
+  test("does not merge overlapping parallel lines 8 px apart", () => {
+    // Ends overlap by 5 px with an 8 px offset: inside the 12 px stub
+    // allowance, but neither end segment is a stub.
+    const labels = [
+      line("a", "lane", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("b", "lane", [
+        [95, 8],
+        [195, 8]
+      ])
+    ]
+
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(out).toHaveLength(2)
+    expect(result.connections).toEqual([])
+  })
+
+  test("does not snap a yellow line 8 px sideways onto an overlapping white line", () => {
+    const labels = [
+      line("white", "white_line", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("yellow", "yellow_line", [
+        [95, 8],
+        [195, 8]
+      ])
+    ]
+    const before = JSON.stringify(labels.map((label) => label.poly2d))
+
+    const [out, result] = connectLabels(labels, 40, 150)
+
+    expect(result.snaps).toEqual([])
+    expect(JSON.stringify(out.map((label) => label.poly2d))).toBe(before)
+  })
+
+  test.each([0, 150])(
+    "never snaps across categories at a right angle next to a curve (minAngle %d)",
+    (minAngle) => {
+      const labels = [
+        line(
+          "curve",
+          "white_line",
+          [
+            [0, 0],
+            [40, 0],
+            [80, 0],
+            [100, 0]
+          ],
+          "LCCL"
+        ),
+        line("yellow", "yellow_line", [
+          [103, 0],
+          [103, 100]
+        ])
+      ]
+      const before = JSON.stringify(labels.map((label) => label.poly2d))
+
+      const [out, result] = connectLabels(labels, 40, minAngle)
+
+      expect(result.snaps).toEqual([])
+      expect(JSON.stringify(out.map((label) => label.poly2d))).toBe(before)
+    }
+  )
+
+  test("same-category curve fragments a few px apart still merge", () => {
+    const labels = [
+      line(
+        "curve",
+        "white_line",
+        [
+          [0, 0],
+          [40, 0],
+          [80, 0],
+          [100, 0]
+        ],
+        "LCCL"
+      ),
+      line("tail", "white_line", [
+        [103, 0],
+        [103, 100]
+      ])
+    ]
+
+    expect(connectLabels(labels, 40, 150)[0]).toHaveLength(1)
   })
 
   test("does not pull apart endpoints that already touch", () => {
