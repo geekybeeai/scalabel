@@ -309,12 +309,23 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * The base class defers redraw() to the next animation frame, but the image
    * layer is repositioned synchronously during the React commit. With the
    * labels on a viewport-pinned overlay, that one-frame gap made annotations
-   * visibly trail the image while panning.
+   * visibly trail the image while panning. Only a viewer config change (pan,
+   * zoom, rotation) moves the image, so every other update keeps the base
+   * class's frame-batched redraw.
    */
   public componentDidUpdate(): void {
+    const config = this.state.user.viewerConfigs[this.props.id]
+    if (config === this._lastViewerConfig) {
+      super.componentDidUpdate()
+      return
+    }
+    this._lastViewerConfig = config
     this.updateState(this.state)
     this.redraw()
   }
+
+  /** Viewer config seen by the last componentDidUpdate. */
+  private _lastViewerConfig: unknown = undefined
 
   /**
    * Component mount callback
@@ -2081,7 +2092,9 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this._lastMousePos === null ||
       this._pointerOutsideImage ||
       this.controlContext === null ||
-      isGrabbing()
+      isGrabbing() ||
+      // Move/copy bypasses track semantics, like freeform and Ctrl-mark.
+      this.state.task.config.tracking
     ) {
       return
     }
@@ -2089,12 +2102,15 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     const config = this.state.user.viewerConfigs[
       this.props.id
     ] as ImageViewerConfigType
+    // Any line within CUT_CLICK_RADIUS_PX of the cursor can be grabbed, as
+    // before the geometry picker replaced findGrabbableLabel.
     const [index] = this._labelList.pickPolyline(
       this._lastMousePos,
       this.controlContext,
       config.lineWidthMultiplier ?? 1,
       config.showCurvesOnly === true,
-      true
+      true,
+      2 * CUT_CLICK_RADIUS_PX
     )
     const label = this._labelList.labelList[index]
     if (label === undefined) {
@@ -2309,10 +2325,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       y >= this.controlCanvas.height
     )
       return hit
-    const data = this.controlContext.getImageData(x, y, 1, 1).data
-    const tile = new Uint8ClampedArray(64)
-    for (let i = 0; i < 16; i++) tile.set(data, i * 4)
-    const fallback = imageDataToHandleId(tile)
+    // Read a real 4x4 tile: imageDataToHandleId takes the most common color,
+    // which rejects antialiased edge pixels that decode to the wrong id.
+    // getImageData returns transparent pixels for any part past the edge.
+    const data = this.controlContext.getImageData(x, y, 4, 4).data
+    const fallback = imageDataToHandleId(data)
     const label = this._labelList.labelList[fallback[0]]
     if (label === undefined || label instanceof Polygon2D) return hit
     // Non-polyline controls share the original global paint order.
