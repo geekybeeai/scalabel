@@ -405,6 +405,23 @@ class CategoryAwareJoiningTest(unittest.TestCase):
         output, _ = connect_labels(labels, tolerance=40, min_angle=150)
         self.assertEqual(len(output), 1)
 
+    def test_short_final_segment_does_not_make_a_parallel_line_end_a_stub(self):
+        for last in (3, 0.5):
+            ends = [[0, 0], [100 - last, 0], [100, 0]]
+            offset = [[95, 8], [195, 8]]
+            output, result = connect_labels(
+                [cat_line("a", "lane", ends), cat_line("b", "lane", offset)],
+                tolerance=40,
+                min_angle=150,
+            )
+            self.assertEqual(len(output), 2, last)
+            self.assertEqual(result.connections, [], last)
+            labels = [cat_line("white", "white_line", ends), cat_line("yellow", "yellow_line", offset)]
+            before = geometry(labels)
+            output, result = connect_labels(labels, tolerance=40, min_angle=150)
+            self.assertEqual(result.snaps, [], last)
+            self.assertEqual(geometry(output), before, last)
+
     def test_does_not_pull_apart_endpoints_that_already_touch(self):
         labels = [
             cat_line("fork", "white_line", [[103, 1], [200, 20]]),
