@@ -467,8 +467,21 @@ export class Label2DList {
       previous.user.select.labels === state.user.select.labels &&
       previous.user.viewerConfigs[0]?.sensor ===
         state.user.viewerConfigs[0]?.sensor
-    )
+    ) {
+      // Nothing saved changed, so skip the full rebuild, but still reset any
+      // line whose local points drifted from its saved shapes without being
+      // committed. A full rebuild used to do this on every state update.
+      for (const [labelId, drawable] of Object.entries(this._labels)) {
+        if (
+          drawable instanceof Polygon2D &&
+          !drawable.editing &&
+          drawable.hasLocalGeometryChanges()
+        ) {
+          drawable.updateState(state, index, labelId)
+        }
+      }
       return
+    }
     this._labelTemplates = state.task.config.label2DTemplates
     const itemIndex = state.user.select.item
     const item = state.task.items[itemIndex]

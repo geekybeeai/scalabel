@@ -5,10 +5,7 @@ import { addPolygon2dLabel } from "../../src/action/polygon2d"
 import { configureStore } from "../../src/common/configure_store"
 import Session, { dispatch } from "../../src/common/session"
 import { PathPointType } from "../../src/const/common"
-import {
-  Label2DList,
-  PICK_STROKE_PX
-} from "../../src/drawable/2d/label2d_list"
+import { Label2DList, PICK_STROKE_PX } from "../../src/drawable/2d/label2d_list"
 import { Polygon2D } from "../../src/drawable/2d/polygon2d"
 import { Context2D } from "../../src/drawable/util"
 import {
@@ -321,5 +318,60 @@ describe("overlapping lines", () => {
     }
     const list = setup([LOWER, LINE])
     expect(pick(list, 300, 100)).toEqual([1, 3])
+  })
+})
+
+describe("syncing lines with the saved state", () => {
+  /**
+   * Dispatch a view-only change (a pan), which keeps every saved label.
+   */
+  function pan(): void {
+    const config = Session.getState().user
+      .viewerConfigs[1] as ImageViewerConfigType
+    const panned: ImageViewerConfigType = {
+      ...config,
+      displayLeft: config.displayLeft + 10
+    }
+    dispatch(action.changeViewerConfig(1, panned))
+  }
+
+  test("an uncommitted midpoint promotion is reset on the next update", () => {
+    const list = setup([LINE])
+    const label = list.labelList[0] as Polygon2D
+    expect(label.snapPoints).toHaveLength(3)
+    // Press the segment midpoint (handle 2) and release without moving and
+    // without committing: the midpoint has become a vertex locally only.
+    label.setSelected(true)
+    label.setHighlighted(true, 2)
+    label.onMouseDown(new Vector2D(200, 100), 2)
+    label.onMouseUp(new Vector2D(200, 100))
+    expect(label.snapPoints).toHaveLength(5)
+    expect(label.hasLocalGeometryChanges()).toBe(true)
+
+    pan()
+
+    const synced = list.labelList[0] as Polygon2D
+    expect(synced.snapPoints).toHaveLength(3)
+    expect(synced.hasLocalGeometryChanges()).toBe(false)
+  })
+
+  test("an unchanged line is not rebuilt by a pan", () => {
+    const list = setup([LINE])
+    const points = (list.labelList[0] as Polygon2D).snapPoints
+    pan()
+    expect((list.labelList[0] as Polygon2D).snapPoints).toBe(points)
+  })
+
+  test("cached bounds and path follow a point moved in place", () => {
+    const list = setup([LINE])
+    const label = list.labelList[0] as Polygon2D
+    expect(label.bounds()).toEqual([100, 100, 200, 0])
+    const path = label.getPath()
+    // Move a vertex without going through any method that invalidates.
+    const end = label.snapPoints[2]
+    end.x = 350
+    expect(label.bounds()).toEqual([100, 100, 250, 0])
+    expect(label.getPath()).not.toBe(path)
+    expect(pick(list, 340, 100)).toEqual([0, 0])
   })
 })
