@@ -10,10 +10,12 @@ Two deliberate differences from the interactive path:
 
 * Tolerance is in IMAGE pixels, not screen pixels. There is no zoom level
   offline, and results must not depend on one.
-* Only same-``category`` pairs are merged. The editor also snaps endpoints
-  across categories (coordinates align, labels stay distinct), but that relies
-  on a visible indicator and one-step undo. Neither exists at import time, so
-  moving vertices with nobody watching is not worth it.
+* Same-``category`` pairs merge into one label. Different-category pairs
+  snap: the moved endpoint takes the anchor endpoint's exact coordinates and
+  both labels keep their ids and categories. Because nobody is watching at
+  import time, snaps always require a near-straight continuation
+  (``SNAP_MIN_ANGLE``), never pull apart endpoints that already touch, and
+  never move a Bezier anchor away from its control points.
 
 The four splice orientations mirror ``Polygon2D.mergeWith`` exactly, including
 dropping the duplicate junction vertex.
@@ -22,7 +24,7 @@ dropping the duplicate junction vertex.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -39,36 +41,23 @@ DEFAULT_MIN_ANGLE = 0.0
 # server search radius, so offset parallel lines remain guarded.
 CURVE_SAMPLING_GAP = 5.0
 
-# Category pairs that describe the SAME physical feature and may therefore be
-# merged across the class boundary.
-#
-# A road edge changes curb status partway along constantly, which splits one
-# continuous edge into two labels of different classes whose ends touch. Across
-# a 145-frame batch this accounted for 209 of the 266 near-touching pairs the
-# same-category rule refused.
-#
-# Paint markings are deliberately NOT in here: a yellow line meeting a white one
-# is usually a real class boundary, and merging would silently rewrite one of
-# their classes.
-DEFAULT_MERGEABLE_CATEGORIES: Tuple[frozenset, ...] = (
-    frozenset({"curb_road_edge", "without_curb_road_edge"}),
-)
+# Straight endpoints whose gap is at most this many image pixels are treated as
+# annotator jitter: the gap may run sideways to the tangents (an overshoot or a
+# slightly offset restart) as long as the spliced seam itself stays straight.
+# Wider gaps must run along both tangents, which is what keeps two side-by-side
+# parallel lines from being merged or snapped. 12 px admits the verified 10.7 px
+# aligned overshoot and is well below typical lane spacing.
+STRAIGHT_JITTER_GAP = 12.0
+
+# Cross-category snaps move vertices across a class boundary with nobody
+# watching, so they always require a near-straight continuation, even when the
+# merge angle guard is disabled (min_angle 0).
+SNAP_MIN_ANGLE = 150.0
 
 
-def _categories_compatible(
-    category_a: str,
-    category_b: str,
-    mergeable: Sequence[frozenset],
-) -> bool:
-    """Whether two categories may be joined.
-
-    Identical categories always may. Different ones may only when the pair is
-    listed as describing one physical feature.
-    """
-    if category_a == category_b:
-        return True
-    pair = {category_a, category_b}
-    return any(pair == allowed for allowed in mergeable)
+def _category_of(label: dict) -> str:
+    """A label's category as compared by the connector (exact string match)."""
+    return str(label.get("category", ""))
 
 
 @dataclass
@@ -97,10 +86,42 @@ class Connection:
 
 
 @dataclass
+class Snap:
+    """One cross-category endpoint snap that preserves both labels.
+
+    ``anchor_id`` is the label whose endpoint stayed fixed: the earlier label,
+    unless the later label's endpoint is a Bezier anchor.
+    """
+
+    anchor_id: str
+    moved_id: str
+    anchor_category: str
+    moved_category: str
+    junction: Tuple[float, float]
+    gap: float
+    angle: Optional[float] = None
+
+    def to_dict(self) -> dict:
+        """Serialise for the run report."""
+        payload = {
+            "anchorId": self.anchor_id,
+            "movedId": self.moved_id,
+            "anchorCategory": self.anchor_category,
+            "movedCategory": self.moved_category,
+            "junction": [round(v, 3) for v in self.junction],
+            "gap": round(self.gap, 3),
+        }
+        if self.angle is not None:
+            payload["angle"] = round(self.angle, 2)
+        return payload
+
+
+@dataclass
 class ConnectResult:
     """Outcome of auto-connecting one frame."""
 
     connections: List[Connection] = field(default_factory=list)
+    snaps: List[Snap] = field(default_factory=list)
     labels_before: int = 0
     labels_after: int = 0
 
@@ -108,6 +129,11 @@ class ConnectResult:
     def merged_count(self) -> int:
         """How many merges were applied."""
         return len(self.connections)
+
+    @property
+    def snapped_count(self) -> int:
+        """How many cross-category snaps were applied."""
+        return len(self.snaps)
 
 
 def _open_polyline(label: dict) -> Optional[dict]:
@@ -301,6 +327,69 @@ def _splice(
     return list_a + list_b[::-1][1:], "".join(seq_a + seq_b[::-1][1:])
 
 
+# (label index, is_start, poly, endpoint coordinates)
+_Endpoint = Tuple[int, bool, dict, Tuple[float, float]]
+
+
+def _collect_endpoints(labels: List[dict], skip: Optional[Set[int]] = None) -> List[_Endpoint]:
+    """Both endpoints of every eligible open polyline, in label order.
+
+    ``skip`` holds ``id()`` values of labels to leave out (e.g. absorbed ones).
+    """
+    endpoints: List[_Endpoint] = []
+    for index, label in enumerate(labels):
+        if skip is not None and id(label) in skip:
+            continue
+        poly = _open_polyline(label)
+        if poly is None:
+            continue
+        for is_start in (True, False):
+            endpoints.append((index, is_start, poly, _endpoint(poly, is_start)))
+    return endpoints
+
+
+def _candidate_geometry(
+    a: _Endpoint, b: _Endpoint, tolerance: float, min_angle: float
+) -> Optional[Tuple[float, Optional[float]]]:
+    """Apply the shared distance, angle and seam guards to two endpoints.
+
+    Returns ``(gap, angle)`` or None when the pair is not eligible.
+
+    Curve-adjacent endpoints keep the spliced-seam check (plus the small curve
+    sampling allowance). Straight endpoints within ``STRAIGHT_JITTER_GAP`` may
+    be offset sideways, but the spliced seam must stay straight so the result
+    never doubles back. Wider straight gaps must run along both tangents, which
+    rejects side-by-side parallel lines.
+    """
+    _, start_a, poly_a, point_a = a
+    _, start_b, poly_b, point_b = b
+    gap = float(np.hypot(point_a[0] - point_b[0], point_a[1] - point_b[1]))
+    if gap > tolerance:
+        return None
+    if min_angle <= 0.0:
+        return gap, None
+    dir_a = _direction(poly_a, start_a)
+    dir_b = _direction(poly_b, start_b)
+    if dir_a is None or dir_b is None:
+        return None
+    angle = _junction_angle(poly_a, start_a, poly_b, start_b)
+    curve_adjacent = _endpoint_touches_curve(poly_a, start_a) or _endpoint_touches_curve(
+        poly_b, start_b
+    )
+    curve_sampling_gap = curve_adjacent and gap <= CURVE_SAMPLING_GAP
+    if angle is None or (angle < min_angle and not curve_sampling_gap):
+        return None
+    if curve_adjacent:
+        follows = curve_sampling_gap or _spliced_seam_follows_tangents(
+            poly_a, start_a, poly_b, start_b, min_angle
+        )
+    elif gap <= STRAIGHT_JITTER_GAP:
+        follows = _spliced_seam_follows_tangents(poly_a, start_a, poly_b, start_b, min_angle)
+    else:
+        follows = _gap_follows_tangents(point_a, dir_a, point_b, dir_b, min_angle)
+    return (gap, angle) if follows else None
+
+
 @dataclass(frozen=True)
 class _BridgePair:
     """A guarded curve endpoint paired with an external straight endpoint."""
@@ -361,22 +450,16 @@ def _active_bridge_edges(
     labels: List[dict],
     tolerance: float,
     min_angle: float,
-    mergeable_categories: Sequence[frozenset],
 ) -> List[_BridgePair]:
     """Build reciprocal curve/straight pairs and retain complete bridges."""
-    endpoints: List[Tuple[int, bool, dict, Tuple[float, float]]] = []
-    endpoint_by_key: Dict[Tuple[int, bool], Tuple[int, bool, dict, Tuple[float, float]]] = {}
+    endpoints = _collect_endpoints(labels)
+    endpoint_by_key: Dict[Tuple[int, bool], _Endpoint] = {}
     curve_indices: List[int] = []
-    for index, label in enumerate(labels):
-        poly = _open_polyline(label)
-        if poly is None:
-            continue
-        if _endpoint_touches_curve(poly, True) and _endpoint_touches_curve(poly, False):
+    for entry in endpoints:
+        index, is_start, poly, _ = entry
+        endpoint_by_key[_endpoint_key(index, is_start)] = entry
+        if is_start and _endpoint_touches_curve(poly, True) and _endpoint_touches_curve(poly, False):
             curve_indices.append(index)
-        for is_start in (True, False):
-            entry = (index, is_start, poly, _endpoint(poly, is_start))
-            endpoints.append(entry)
-            endpoint_by_key[_endpoint_key(index, is_start)] = entry
 
     candidates: List[_BridgePair] = []
     for curve_index in curve_indices:
@@ -386,11 +469,7 @@ def _active_bridge_edges(
                 if (
                     external_index == curve_index
                     or _endpoint_touches_curve(external_poly, external_start)
-                    or not _categories_compatible(
-                        str(labels[curve_index].get("category", "")),
-                        str(labels[external_index].get("category", "")),
-                        mergeable_categories,
-                    )
+                    or _category_of(labels[curve_index]) != _category_of(labels[external_index])
                 ):
                     continue
                 gap = float(np.hypot(curve_point[0] - external_point[0], curve_point[1] - external_point[1]))
@@ -513,12 +592,11 @@ def _connect_atomic_curve_bridges(
     labels: List[dict],
     tolerance: float,
     min_angle: float,
-    mergeable_categories: Sequence[frozenset],
 ) -> Tuple[set, List[Connection]]:
     """Connect complete non-branching curve-bridge paths before pairwise fallback."""
     if min_angle <= 0.0:
         return set(), []
-    edges = _active_bridge_edges(labels, tolerance, min_angle, mergeable_categories)
+    edges = _active_bridge_edges(labels, tolerance, min_angle)
     adjacency: Dict[int, List[_BridgePair]] = {}
     for edge in edges:
         adjacency.setdefault(edge.curve_index, []).append(edge)
@@ -568,91 +646,125 @@ def _connect_atomic_curve_bridges(
     return absorbed, connections
 
 
+def _snap_different_categories(
+    labels: List[dict], tolerance: float, min_angle: float
+) -> List[Snap]:
+    """Snap eligible cross-category endpoints without absorbing either label.
+
+    Endpoints that already coincide are consumed up front, so a third label can
+    never pull apart a junction the annotator drew touching. The continuation
+    guard is at least ``SNAP_MIN_ANGLE``, even when the merge guard is
+    disabled, and side-by-side parallel ends are never snapped. The earlier
+    label's endpoint stays fixed and the later one moves, unless the later
+    endpoint is a Bezier anchor; then the later endpoint stays and the earlier
+    one moves. When both are Bezier anchors the pair is skipped, because moving
+    an anchor while its control points stay put would reshape the curve.
+    """
+    snap_angle = max(min_angle, SNAP_MIN_ANGLE)
+    endpoints = _collect_endpoints(labels)
+    consumed: set = set()
+    candidates: List[Tuple[float, int, bool, int, bool, Optional[float]]] = []
+    for i in range(len(endpoints)):
+        a = endpoints[i]
+        for j in range(i + 1, len(endpoints)):
+            b = endpoints[j]
+            if a[0] == b[0]:
+                continue
+            gap = float(np.hypot(a[3][0] - b[3][0], a[3][1] - b[3][1]))
+            if gap < 1e-9:
+                consumed.add(_endpoint_key(a[0], a[1]))
+                consumed.add(_endpoint_key(b[0], b[1]))
+                continue
+            if _category_of(labels[a[0]]) == _category_of(labels[b[0]]):
+                continue
+            geometry = _candidate_geometry(a, b, tolerance, snap_angle)
+            if geometry is None:
+                continue
+            candidates.append((geometry[0], a[0], a[1], b[0], b[1], geometry[1]))
+    candidates.sort(key=lambda c: (c[0], c[1], 0 if c[2] else 1, c[3], 0 if c[4] else 1))
+
+    snaps: List[Snap] = []
+    for _, idx_a, start_a, idx_b, start_b, _ in candidates:
+        key_a = _endpoint_key(idx_a, start_a)
+        key_b = _endpoint_key(idx_b, start_b)
+        if key_a in consumed or key_b in consumed:
+            continue
+        poly_a = _open_polyline(labels[idx_a])
+        poly_b = _open_polyline(labels[idx_b])
+        if poly_a is None or poly_b is None:
+            continue
+        # An earlier snap may have moved the opposite endpoint of a two-vertex
+        # line and turned this endpoint's tangent, so revalidate.
+        end_a: _Endpoint = (idx_a, start_a, poly_a, _endpoint(poly_a, start_a))
+        end_b: _Endpoint = (idx_b, start_b, poly_b, _endpoint(poly_b, start_b))
+        geometry = _candidate_geometry(end_a, end_b, tolerance, snap_angle)
+        if geometry is None or geometry[0] < 1e-9:
+            continue
+        curve_a = _endpoint_touches_curve(poly_a, start_a)
+        curve_b = _endpoint_touches_curve(poly_b, start_b)
+        if curve_a and curve_b:
+            continue
+        anchor, moved = (end_b, end_a) if curve_b else (end_a, end_b)
+        junction = anchor[3]
+        moved_poly = moved[2]
+        moved_index = 0 if moved[1] else len(moved_poly["vertices"]) - 1
+        moved_poly["vertices"][moved_index] = [junction[0], junction[1]]
+        consumed.add(key_a)
+        consumed.add(key_b)
+        anchor_label = labels[anchor[0]]
+        moved_label = labels[moved[0]]
+        snaps.append(
+            Snap(
+                anchor_id=str(anchor_label.get("id", "")),
+                moved_id=str(moved_label.get("id", "")),
+                anchor_category=_category_of(anchor_label),
+                moved_category=_category_of(moved_label),
+                junction=junction,
+                gap=geometry[0],
+                angle=geometry[1],
+            )
+        )
+    return snaps
+
+
 def connect_labels(
     labels: List[dict],
     tolerance: float = DEFAULT_TOLERANCE,
     min_angle: float = DEFAULT_MIN_ANGLE,
-    mergeable_categories: Sequence[frozenset] = DEFAULT_MERGEABLE_CATEGORIES,
 ) -> Tuple[List[dict], ConnectResult]:
-    """Merge same-category polylines whose endpoints nearly touch.
+    """Merge same-category polylines and snap different-category ones.
 
     Pairs are considered shortest-gap first and each endpoint is consumed at
     most once, so three lines converging on one point cannot all claim it. After
     each merge the surviving line's endpoints have moved, so candidates are
     re-derived from scratch; chains (A-B-C) therefore resolve across passes.
+    Cross-category snaps run afterwards over the survivors. ``min_angle`` 0
+    disables the angle guard for merges only; snaps always use at least
+    ``SNAP_MIN_ANGLE``.
     """
     result = ConnectResult(labels_before=len(labels))
     working: List[dict] = list(labels)
-    absorbed, atomic_connections = _connect_atomic_curve_bridges(
-        working, tolerance, min_angle, mergeable_categories
-    )
+    absorbed, atomic_connections = _connect_atomic_curve_bridges(working, tolerance, min_angle)
     result.connections.extend(atomic_connections)
 
     while True:
-        # (label index, is_start) for every free endpoint of an eligible line.
-        endpoints: List[Tuple[int, bool, dict, Tuple[float, float]]] = []
-        for index, label in enumerate(working):
-            if id(label) in absorbed:
-                continue
-            poly = _open_polyline(label)
-            if poly is None:
-                continue
-            for is_start in (True, False):
-                endpoints.append((index, is_start, poly, _endpoint(poly, is_start)))
-
+        endpoints = _collect_endpoints(working, absorbed)
         best: Optional[Tuple[float, int, bool, int, bool, Optional[float]]] = None
 
         for i in range(len(endpoints)):
-            idx_a, start_a, poly_a, point_a = endpoints[i]
-            label_a = working[idx_a]
+            a = endpoints[i]
+            label_a = working[a[0]]
             for j in range(i + 1, len(endpoints)):
-                idx_b, start_b, poly_b, point_b = endpoints[j]
-                if idx_a == idx_b:
+                b = endpoints[j]
+                if a[0] == b[0]:
                     continue  # Self-closing is an editor gesture, not a batch one.
-                label_b = working[idx_b]
-                if not _categories_compatible(
-                    str(label_a.get("category", "")),
-                    str(label_b.get("category", "")),
-                    mergeable_categories,
-                ):
+                if _category_of(label_a) != _category_of(working[b[0]]):
                     continue
-
-                gap = float(np.hypot(point_a[0] - point_b[0], point_a[1] - point_b[1]))
-                if gap > tolerance:
+                geometry = _candidate_geometry(a, b, tolerance, min_angle)
+                if geometry is None:
                     continue
-
-                angle = None
-                if min_angle > 0.0:
-                    dir_a = _direction(poly_a, start_a)
-                    dir_b = _direction(poly_b, start_b)
-                    if dir_a is None or dir_b is None:
-                        continue
-                    angle = _junction_angle(poly_a, start_a, poly_b, start_b)
-                    curve_adjacent = _endpoint_touches_curve(
-                        poly_a, start_a
-                    ) or _endpoint_touches_curve(poly_b, start_b)
-                    curve_sampling_gap = curve_adjacent and gap <= CURVE_SAMPLING_GAP
-                    follows_tangents = (
-                        curve_sampling_gap
-                        or (
-                            _spliced_seam_follows_tangents(
-                                poly_a, start_a, poly_b, start_b, min_angle
-                            )
-                            if curve_adjacent
-                            else _gap_follows_tangents(
-                                point_a, dir_a, point_b, dir_b, min_angle
-                            )
-                        )
-                    )
-                    if (
-                        angle is None
-                        or (angle < min_angle and not curve_sampling_gap)
-                        or not follows_tangents
-                    ):
-                        continue
-
-                if best is None or gap < best[0]:
-                    best = (gap, idx_a, start_a, idx_b, start_b, angle)
+                if best is None or geometry[0] < best[0]:
+                    best = (geometry[0], a[0], a[1], b[0], b[1], geometry[1])
 
         if best is None:
             break
@@ -688,5 +800,6 @@ def connect_labels(
         )
 
     survivors = [label for label in working if id(label) not in absorbed]
+    result.snaps.extend(_snap_different_categories(survivors, tolerance, min_angle))
     result.labels_after = len(survivors)
     return survivors, result
