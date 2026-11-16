@@ -194,29 +194,15 @@ export class Label2DHandler {
     }
 
     if (this.hasSelectedLabels() && !this.isKeyDown(Key.META)) {
-      const labelsToRemove: Label2D[] = []
       this._labelList.selectedLabels.forEach((selectedLabel) => {
         selectedLabel.onMouseUp(coord)
         if (selectedLabel !== this._highlightedLabel) {
           selectedLabel.setHighlighted(false)
         }
-        if (!selectedLabel.isValid() && !selectedLabel.editing) {
-          labelsToRemove.push(selectedLabel)
-        }
       })
       commit2DLabels([...this._labelList.popUpdatedLabels()])
       this._labelList.clearUpdatedLabels()
-
-      for (const label of labelsToRemove) {
-        const labelListIndex = this._labelList.labelList.indexOf(label)
-        if (labelListIndex >= 0) {
-          this._labelList.labelList.splice(labelListIndex, 1)
-        }
-        const selectedIndex = this._labelList.selectedLabels.indexOf(label)
-        if (selectedIndex >= 0) {
-          this._labelList.selectedLabels.splice(selectedIndex, 1)
-        }
-      }
+      this.removeInvalidSelectedLabels()
       console.log("[DEBUG] Label2DHandler.onMouseUp completed:", {
         highlightedLabel: this._highlightedLabel
           ? {
