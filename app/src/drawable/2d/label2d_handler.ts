@@ -277,6 +277,26 @@ export class Label2DHandler {
   }
 
   /**
+   * Drop selected drawings that are finished but invalid (e.g. a lone vertex
+   * after pressing Enter), so no stray point stays on the canvas.
+   */
+  private removeInvalidSelectedLabels(): void {
+    const toRemove = this._labelList.selectedLabels.filter(
+      (label) => !label.isValid() && !label.editing
+    )
+    if (toRemove.length === 0) return
+    for (const label of toRemove) {
+      const listIndex = this._labelList.labelList.indexOf(label)
+      if (listIndex >= 0) this._labelList.labelList.splice(listIndex, 1)
+      const selectedIndex = this._labelList.selectedLabels.indexOf(label)
+      if (selectedIndex >= 0) {
+        this._labelList.selectedLabels.splice(selectedIndex, 1)
+      }
+    }
+    this._labelList.onDrawableUpdate()
+  }
+
+  /**
    * Handle keyboard down events
    *
    * @param e
@@ -402,6 +422,7 @@ export class Label2DHandler {
           this.mergeTracks()
         } else {
           commit2DLabels([...this._labelList.popUpdatedLabels()])
+          this.removeInvalidSelectedLabels()
         }
         break
       case Key.SPACE:
