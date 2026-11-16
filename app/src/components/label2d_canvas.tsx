@@ -227,6 +227,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _viewport: ViewportTransform | null = null
   /** Observe actual viewport resize rather than resizing on every pan. */
   private _resizeObserver: ResizeObserver | null = null
+  /** The container size must be re-read before the next redraw. */
+  private _sizeDirty: boolean = true
+  /** devicePixelRatio the canvas buffers were last allocated for. */
+  private _allocatedDpr: number = 0
 
   // Keyboard and mouse status
   /** The hashed list of keys currently down */
@@ -350,9 +354,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     // optional non-polyline control pass when the gesture settles.
     this._offIdle = onIdle(() => this._labelList.onDrawableUpdate())
     if (typeof ResizeObserver !== "undefined") {
-      this._resizeObserver = new ResizeObserver(() =>
+      this._resizeObserver = new ResizeObserver(() => {
+        this._sizeDirty = true
         this._labelList.onDrawableUpdate()
-      )
+      })
       if (this.display !== null) this._resizeObserver.observe(this.display)
     }
     // The settings panel renders in the viewer, so its own re-render does not
@@ -548,7 +553,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
    * @return {boolean}
    */
   public redraw(): boolean {
-    // Refresh the projection every frame, but allocate only on a real resize.
+    // Refresh the projection every frame; the container is measured and the
+    // buffers reallocated only after a real resize.
     this.updateViewport()
 
     this.clear()
@@ -2238,6 +2244,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (this.display !== this.props.display) {
       this._resizeObserver?.disconnect()
       this.display = this.props.display
+      this._sizeDirty = true
       if (this.display !== null) this._resizeObserver?.observe(this.display)
       this.forceUpdate()
     }
@@ -2365,7 +2372,18 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       this._viewport = null
       return
     }
-    if (resize) {
+    // Reading the container's size forces a layout, so avoid it on every pan
+    // frame: re-measure only when the ResizeObserver reported a change, the
+    // display density changed, or no size is known yet (or there is no
+    // ResizeObserver to tell us).
+    const measure =
+      resize &&
+      (this._sizeDirty ||
+        this._resizeObserver === null ||
+        this.canvasWidth <= 0 ||
+        this.canvasHeight <= 0 ||
+        currentDevicePixelRatio() !== this._allocatedDpr)
+    if (measure) {
       const rect = this.display.getBoundingClientRect()
       this.canvasWidth = rect.width
       this.canvasHeight = rect.height
@@ -2382,9 +2400,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     )
     this.displayToImageRatio = this._viewport.scale
     this._labelList.setDisplayScale(this.displayToImageRatio, config)
-    if (!resize) return
+    if (!measure) return
+    this._sizeDirty = false
+    this._allocatedDpr = currentDevicePixelRatio()
     this._pixelRatio = Math.min(
-      window.devicePixelRatio || 1,
+      this._allocatedDpr,
       MAX_CANVAS_DIMENSION / Math.max(this.canvasWidth, this.canvasHeight)
     )
     const width = Math.ceil(this.canvasWidth * this._pixelRatio)
@@ -2401,6 +2421,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       canvas.style.top = "0px"
     }
   }
+}
+
+/** The window's device pixel ratio, or 1 where it is not reported. */
+function currentDevicePixelRatio(): number {
+  return window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
 }
 
 const styledCanvas = withStyles(label2dViewStyle, { withTheme: true })(
