@@ -244,6 +244,10 @@ export class Label2DList {
    * @param drawControl
    * @param lineWidthMultiplier
    * @param showCurvesOnly display only curved parts of lines
+   * @param displayScale CSS pixels per image pixel; derived from ratio and
+   *   viewScale when omitted
+   * @param pickLinesByGeometry polylines and polygons are picked from their
+   *   geometry (pickPolyline), so skip their colour-coded control pass
    */
   public redraw(
     labelContext: Context2D,
@@ -259,7 +263,8 @@ export class Label2DList {
     drawControl: boolean = true,
     lineWidthMultiplier: number = 1,
     showCurvesOnly: boolean = false,
-    displayScale?: number
+    displayScale?: number,
+    pickLinesByGeometry: boolean = false
   ): void {
     this._displayScale = displayScale ?? ratio / ((viewScale ?? 1) > 3 ? 1 : 2)
     const isTrackLinking = this._state.session.trackLinking
@@ -330,7 +335,7 @@ export class Label2DList {
       if (v instanceof Polygon2D)
         v.setViewportBounds(viewportBounds, this._displayScale)
       const passes =
-        drawControl && !(displayScale !== undefined && v instanceof Polygon2D)
+        drawControl && !(pickLinesByGeometry && v instanceof Polygon2D)
           ? [
               { ctx: labelContext, mode: DrawMode.VIEW },
               { ctx: controlContext, mode: DrawMode.CONTROL }
