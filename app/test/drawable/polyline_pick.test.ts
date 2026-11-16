@@ -294,3 +294,32 @@ describe("closed polygon picking", () => {
     expect(pick(list, 200, 300)).toEqual([1, 0])
   })
 })
+
+describe("overlapping lines", () => {
+  test("the line drawn on top beats a vertex of the line underneath", () => {
+    // The lower line (index 0) ends 5 px from a point on the upper line's
+    // body. Pressing there must pick the upper line, as the colour-coded
+    // control canvas did, not start reshaping the line underneath.
+    const LOWER = {
+      points: [
+        [0, 105],
+        [200, 105]
+      ] as Array<[number, number]>,
+      closed: false
+    }
+    const list = setup([LOWER, LINE])
+    expect(pick(list, 200, 100)).toEqual([1, 0])
+  })
+
+  test("a vertex of the top line still wins over its own body", () => {
+    const LOWER = {
+      points: [
+        [0, 105],
+        [400, 105]
+      ] as Array<[number, number]>,
+      closed: false
+    }
+    const list = setup([LOWER, LINE])
+    expect(pick(list, 300, 100)).toEqual([1, 3])
+  })
+})

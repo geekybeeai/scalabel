@@ -376,9 +376,11 @@ export class Label2DList {
   /**
    * Bounds first, then native path hits; no control-color readback for lines.
    *
-   * Order: vertex handles, then line bodies (a band at least minStrokePx
-   * wide), then, in selecting mode, the interior of closed polygons. Interior
-   * hits come last so a line drawn inside a polygon stays clickable.
+   * Lines are tried topmost first. For each line its vertex handles come
+   * before its body (a band at least minStrokePx wide), so a line drawn on
+   * top wins over the handles of a line underneath. In selecting mode the
+   * interiors of closed polygons are tried last, so a line drawn inside a
+   * polygon stays clickable.
    *
    * @param coord cursor in image coordinates
    * @param context any 2D context (only used for path hit testing)
@@ -412,13 +414,13 @@ export class Label2DList {
         continue
       candidates.push({ label, index: i })
     }
-    if (!bodiesOnly) {
-      for (const candidate of candidates) {
+    // Topmost line first, as the colour-coded control canvas resolved it: a
+    // line's handles beat its own body, but never a line drawn above it.
+    for (const candidate of candidates) {
+      if (!bodiesOnly) {
         const handle = candidate.label.pickHandle(coord, scale, curvesOnly)
         if (handle > 0) return [candidate.index, handle]
       }
-    }
-    for (const candidate of candidates) {
       if (
         candidate.label.containsStroke(
           context,
