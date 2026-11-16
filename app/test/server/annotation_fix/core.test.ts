@@ -128,6 +128,7 @@ test("clamps then connects, deep-copies the input and keeps the bare-list shape"
     frames: 1,
     totalClamped: 1,
     totalMerged: 1,
+    totalSnapped: 0,
     totalFlagged: 0,
     missingImages: []
   })
@@ -154,9 +155,53 @@ test("clamps then connects, deep-copies the input and keeps the bare-list shape"
       "merged",
       "name",
       "roiCoverage",
+      "snapped",
+      "snaps",
       "totalVertices"
     ].sort()
   )
+})
+
+test("reports a cross-category snap without absorbing either label", async () => {
+  const frame: Frame = {
+    name: "nowhere.png",
+    labels: [
+      line("earlier", "curb", [
+        [0, 0],
+        [100, 0]
+      ]),
+      line("later", "road_edge", [
+        [105, 0],
+        [200, 0]
+      ])
+    ]
+  }
+
+  const report = await processFrame(frame, {
+    ...defaultOptions(),
+    imageRoot: dir,
+    clamp: false
+  })
+
+  expect(frame.labels).toHaveLength(2)
+  expect(frame.labels?.[0].poly2d?.[0].vertices[1]).toEqual([100, 0])
+  expect(frame.labels?.[1].poly2d?.[0].vertices[0]).toEqual([100, 0])
+  expect(report).toMatchObject({
+    merged: 0,
+    snapped: 1,
+    labelsBefore: 2,
+    labelsAfter: 2,
+    snaps: [
+      {
+        anchorId: "earlier",
+        movedId: "later",
+        anchorCategory: "curb",
+        movedCategory: "road_edge",
+        junction: [100, 0],
+        gap: 5
+      }
+    ]
+  })
 })
 
 test("clamps an endpoint before accepting an atomic line-curve-line bridge", async () => {

@@ -132,6 +132,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"frames processed : {len(report.frames)}")
     print(f"vertices clamped : {report.total_clamped}")
     print(f"lines merged     : {report.total_merged}")
+    print(f"endpoints snapped: {report.total_snapped}")
     print(f"flagged for review: {report.total_flagged}")
     missing = report.missing_images
     if missing:

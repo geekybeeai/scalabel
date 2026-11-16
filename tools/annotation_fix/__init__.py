@@ -17,7 +17,7 @@ Typical use::
     print(report.total_clamped, report.total_merged)
 """
 
-from .autoconnect import Connection, ConnectResult, connect_labels
+from .autoconnect import Connection, ConnectResult, Snap, connect_labels
 from .clamp import ClampResult, VertexCorrection, clamp_labels, clamp_vertices
 from .core import (
     FrameReport,
@@ -46,6 +46,7 @@ __all__ = [
     "connect_labels",
     "ConnectResult",
     "Connection",
+    "Snap",
 ]
 
 __version__ = "0.1.0"

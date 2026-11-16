@@ -79,13 +79,16 @@ if (!py.ok || !js.ok) {
     const frameJ = fj[i]
     const rp = py.report.frames[i]
     const rj = js.report.frames[i]
-    for (const k of ["clamped", "merged", "labelsAfter", "imageFound"]) {
+    for (const k of ["clamped", "merged", "snapped", "labelsAfter", "imageFound"]) {
       if (rp[k] !== rj[k]) {
         diffs.push(`${frameP.name} ${k}: python=${rp[k]} js=${rj[k]}`)
       }
     }
     if (JSON.stringify(rp.connections) !== JSON.stringify(rj.connections)) {
       diffs.push(`${frameP.name} connections differ`)
+    }
+    if (JSON.stringify(rp.snaps) !== JSON.stringify(rj.snaps)) {
+      diffs.push(`${frameP.name} snaps differ`)
     }
     const lp = frameP.labels || []
     const lj = (frameJ && frameJ.labels) || []

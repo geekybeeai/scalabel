@@ -66,9 +66,11 @@ class FrameReport:
     clamped: int = 0
     flagged: List[dict] = field(default_factory=list)
     merged: int = 0
+    snapped: int = 0
     labels_before: int = 0
     labels_after: int = 0
     connections: List[dict] = field(default_factory=list)
+    snaps: List[dict] = field(default_factory=list)
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -83,9 +85,11 @@ class FrameReport:
             "clamped": self.clamped,
             "flagged": self.flagged,
             "merged": self.merged,
+            "snapped": self.snapped,
             "labelsBefore": self.labels_before,
             "labelsAfter": self.labels_after,
             "connections": self.connections,
+            "snaps": self.snaps,
             "error": self.error,
         }
 
@@ -107,6 +111,11 @@ class Report:
         return sum(f.merged for f in self.frames)
 
     @property
+    def total_snapped(self) -> int:
+        """Cross-category endpoints snapped without merging."""
+        return sum(f.snapped for f in self.frames)
+
+    @property
     def total_flagged(self) -> int:
         """Corrections large enough to warrant review."""
         return sum(len(f.flagged) for f in self.frames)
@@ -123,6 +132,7 @@ class Report:
                 "frames": len(self.frames),
                 "totalClamped": self.total_clamped,
                 "totalMerged": self.total_merged,
+                "totalSnapped": self.total_snapped,
                 "totalFlagged": self.total_flagged,
                 "missingImages": self.missing_images,
             },
@@ -201,8 +211,10 @@ def process_frame(
         )
         frame["labels"] = survivors
         report.merged = connect_result.merged_count
+        report.snapped = connect_result.snapped_count
         report.labels_after = connect_result.labels_after
         report.connections = [c.to_dict() for c in connect_result.connections]
+        report.snaps = [s.to_dict() for s in connect_result.snaps]
 
     return frame, report
 
