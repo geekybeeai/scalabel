@@ -136,11 +136,14 @@ anchor away from its control points. The behavior is now:
 
 - **Straight endpoints:** the gap must follow both tangents, so parallel
   neighbours are rejected, including overlapping ones only a few pixels
-  apart. The one exception is a stub: when either endpoint's direction comes
-  from a segment shorter than the gap itself, that direction is noise, and a
-  gap of at most 12 image pixels (`STRAIGHT_JITTER_GAP`) may run sideways as
-  long as the spliced seam stays straight. The verified 10.728-pixel pair
-  qualifies because its earlier label is a 1.4-pixel stub.
+  apart. Each tangent is measured from the first vertex at least one gap
+  length from the endpoint, so a short final segment (a double-click or a
+  near-duplicate vertex) cannot fake a direction. The one exception is a
+  stub: when either whole line stays within one gap length of its endpoint,
+  its direction is noise, and a gap of at most 12 image pixels
+  (`STRAIGHT_JITTER_GAP`) may run sideways as long as the spliced seam stays
+  straight. The verified 10.728-pixel pair qualifies because its earlier label
+  is a 1.4-pixel stub.
 - **Curve sampling allowance:** the 5-pixel `CURVE_SAMPLING_GAP` allowance,
   which skips the angle check, applies to same-category merges only.
   Cross-category snaps next to a curve must pass the full angle and seam
