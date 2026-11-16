@@ -304,6 +304,19 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   }
 
   /**
+   * Redraw in the same commit that moves the image.
+   *
+   * The base class defers redraw() to the next animation frame, but the image
+   * layer is repositioned synchronously during the React commit. With the
+   * labels on a viewport-pinned overlay, that one-frame gap made annotations
+   * visibly trail the image while panning.
+   */
+  public componentDidUpdate(): void {
+    this.updateState(this.state)
+    this.redraw()
+  }
+
+  /**
    * Component mount callback
    */
   public componentDidMount(): void {
