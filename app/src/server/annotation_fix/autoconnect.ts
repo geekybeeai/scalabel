@@ -26,6 +26,23 @@ export const DEFAULT_MIN_ANGLE = 0.0
  */
 const CURVE_SAMPLING_GAP = 5.0
 
+/**
+ * Straight endpoints whose gap is at most this many image pixels are treated
+ * as annotator jitter: the gap may run sideways to the tangents (an overshoot
+ * or a slightly offset restart) as long as the spliced seam itself stays
+ * straight. Wider gaps must run along both tangents, which is what keeps two
+ * side-by-side parallel lines from being merged or snapped. 12 px admits the
+ * verified 10.7 px aligned overshoot and is well below typical lane spacing.
+ */
+const STRAIGHT_JITTER_GAP = 12.0
+
+/**
+ * Cross-category snaps move vertices across a class boundary with nobody
+ * watching, so they always require a near-straight continuation, even when
+ * the merge angle guard is disabled (minAngle 0).
+ */
+export const SNAP_MIN_ANGLE = 150.0
+
 /** One merge of two polylines. */
 export interface Connection {
   /** id of the label that survived */
@@ -44,9 +61,12 @@ export interface Connection {
 
 /** One cross-category endpoint snap that preserves both labels. */
 export interface Snap {
-  /** id of the earlier label whose endpoint stayed fixed */
+  /**
+   * id of the label whose endpoint stayed fixed: the earlier label, unless
+   * the later label's endpoint is a Bezier anchor
+   */
   anchorId: string
-  /** id of the later label whose endpoint moved */
+  /** id of the label whose endpoint moved onto the anchor */
   movedId: string
   /** category of the anchor label */
   anchorCategory: string
@@ -122,13 +142,12 @@ export function snapToDict(snap: Snap): { [key: string]: unknown } {
 }
 
 /**
- * Whether two categories may be joined.
+ * A label's category as compared by the connector (exact string match).
  *
- * @param a first category
- * @param b second category
+ * @param label the label
  */
-function categoriesCompatible(a: string, b: string): boolean {
-  return a === b
+function categoryOf(label: LabelExport): string {
+  return String(label.category ?? "")
 }
 
 /**
@@ -229,6 +248,40 @@ function junctionAngle(
   }
   // Both point outward from their tips, so continuation shows as opposition.
   return 180 - angleBetween(dirA, [-dirB[0], -dirB[1]])
+}
+
+/**
+ * Whether the endpoint-to-endpoint gap follows both outward tangents.
+ *
+ * This rejects offset parallel lines even when their endpoint orientation makes
+ * them look like a straight continuation. Coincident endpoints have no gap
+ * direction, so their junction angle alone decides the candidate.
+ *
+ * @param pointA first endpoint
+ * @param dirA outward tangent at the first endpoint
+ * @param pointB second endpoint
+ * @param dirB outward tangent at the second endpoint
+ * @param minAngle minimum junction angle in degrees
+ */
+function gapFollowsTangents(
+  pointA: [number, number],
+  dirA: [number, number],
+  pointB: [number, number],
+  dirB: [number, number],
+  minAngle: number
+): boolean {
+  const dx = pointB[0] - pointA[0]
+  const dy = pointB[1] - pointA[1]
+  const gap = Math.hypot(dx, dy)
+  if (gap < 1e-9) {
+    return true
+  }
+  const connector: [number, number] = [dx / gap, dy / gap]
+  const maxDeviation = 180 - minAngle
+  return (
+    angleBetween(dirA, connector) <= maxDeviation &&
+    angleBetween(dirB, [-connector[0], -connector[1]]) <= maxDeviation
+  )
 }
 
 /**
@@ -411,9 +464,40 @@ interface Candidate {
 }
 
 /**
- * Apply the shared distance, angle and curve-seam guards to two endpoints.
- * Straight aligned endpoints may have a sideways gap; snapping or splicing
- * removes that gap without adding a connector segment.
+ * Both endpoints of every eligible open polyline, in label order.
+ *
+ * @param labels the labels to scan
+ * @param skip labels to leave out (e.g. already absorbed ones)
+ */
+function collectEndpoints(
+  labels: LabelExport[],
+  skip?: ReadonlySet<LabelExport>
+): Endpoint[] {
+  const endpoints: Endpoint[] = []
+  labels.forEach((label, index) => {
+    if (skip?.has(label) === true) {
+      return
+    }
+    const poly = openPolyline(label)
+    if (poly === null) {
+      return
+    }
+    for (const isStart of [true, false]) {
+      endpoints.push({ index, isStart, poly, point: endpoint(poly, isStart) })
+    }
+  })
+  return endpoints
+}
+
+/**
+ * Apply the shared distance, angle and seam guards to two endpoints.
+ *
+ * Curve-adjacent endpoints keep the spliced-seam check (plus the small
+ * curve sampling allowance).
+ * Straight endpoints within STRAIGHT_JITTER_GAP may be offset sideways, but
+ * the spliced seam must stay straight so the result never doubles back.
+ * Wider straight gaps must run along both tangents, which rejects
+ * side-by-side parallel lines.
  *
  * @param a first endpoint
  * @param b second endpoint
@@ -433,10 +517,9 @@ function candidateGeometry(
   if (minAngle <= 0) {
     return { gap, angle: null }
   }
-  if (
-    direction(a.poly, a.isStart) === null ||
-    direction(b.poly, b.isStart) === null
-  ) {
+  const dirA = direction(a.poly, a.isStart)
+  const dirB = direction(b.poly, b.isStart)
+  if (dirA === null || dirB === null) {
     return null
   }
   const angle = junctionAngle(a.poly, a.isStart, b.poly, b.isStart)
@@ -444,22 +527,20 @@ function candidateGeometry(
     endpointTouchesCurve(a.poly, a.isStart) ||
     endpointTouchesCurve(b.poly, b.isStart)
   const curveSamplingGap = curveAdjacent && gap <= CURVE_SAMPLING_GAP
-  if (
-    angle === null ||
-    (angle < minAngle && !curveSamplingGap) ||
-    (curveAdjacent &&
-      !curveSamplingGap &&
-      !splicedSeamFollowsTangents(
-        a.poly,
-        a.isStart,
-        b.poly,
-        b.isStart,
-        minAngle
-      ))
-  ) {
+  if (angle === null || (angle < minAngle && !curveSamplingGap)) {
     return null
   }
-  return { gap, angle }
+  const seamFollows = (): boolean =>
+    splicedSeamFollowsTangents(a.poly, a.isStart, b.poly, b.isStart, minAngle)
+  let followsTangents: boolean
+  if (curveAdjacent) {
+    followsTangents = curveSamplingGap || seamFollows()
+  } else if (gap <= STRAIGHT_JITTER_GAP) {
+    followsTangents = seamFollows()
+  } else {
+    followsTangents = gapFollowsTangents(a.point, dirA, b.point, dirB, minAngle)
+  }
+  return followsTangents ? { gap, angle } : null
 }
 
 /** A guarded curve endpoint paired with an external straight endpoint. */
@@ -594,28 +675,19 @@ function activeBridgeEdges(
   tolerance: number,
   minAngle: number
 ): BridgePair[] {
-  const endpoints: Endpoint[] = []
+  const endpoints = collectEndpoints(labels)
   const endpointsByKey = new Map<string, Endpoint>()
   const curveIndices = new Set<number>()
-  labels.forEach((label, index) => {
-    const poly = openPolyline(label)
-    if (poly === null) {
-      return
+  for (const entry of endpoints) {
+    endpointsByKey.set(endpointKey(entry.index, entry.isStart), entry)
+    if (
+      entry.isStart &&
+      endpointTouchesCurve(entry.poly, true) &&
+      endpointTouchesCurve(entry.poly, false)
+    ) {
+      curveIndices.add(entry.index)
     }
-    if (endpointTouchesCurve(poly, true) && endpointTouchesCurve(poly, false)) {
-      curveIndices.add(index)
-    }
-    for (const isStart of [true, false]) {
-      const entry: Endpoint = {
-        index,
-        isStart,
-        poly,
-        point: endpoint(poly, isStart)
-      }
-      endpoints.push(entry)
-      endpointsByKey.set(endpointKey(index, isStart), entry)
-    }
-  })
+  }
 
   const candidates: BridgePair[] = []
   curveIndices.forEach((curveIndex) => {
@@ -628,10 +700,7 @@ function activeBridgeEdges(
         if (
           external.index === curveIndex ||
           endpointTouchesCurve(external.poly, external.isStart) ||
-          !categoriesCompatible(
-            String(labels[curveIndex].category ?? ""),
-            String(labels[external.index].category ?? "")
-          )
+          categoryOf(labels[curveIndex]) !== categoryOf(labels[external.index])
         ) {
           continue
         }
@@ -914,47 +983,47 @@ function connectAtomicCurveBridges(
 /**
  * Snap eligible cross-category endpoints without absorbing either label.
  *
+ * Endpoints that already coincide are consumed up front, so a third label
+ * can never pull apart a junction the annotator drew touching.
+ * The continuation guard is at least SNAP_MIN_ANGLE, even when the merge
+ * guard is disabled, and side-by-side parallel ends are never snapped.
+ * The earlier label's endpoint stays fixed and the later one moves, unless
+ * the later endpoint is a Bezier anchor; then the later endpoint stays and
+ * the earlier one moves. When both are Bezier anchors the pair is skipped,
+ * because moving an anchor while its control points stay put would reshape
+ * the curve.
+ *
  * @param labels surviving labels in original order
  * @param tolerance maximum endpoint gap
- * @param minAngle minimum continuation angle
+ * @param minAngle configured continuation angle
  */
 function snapDifferentCategories(
   labels: LabelExport[],
   tolerance: number,
   minAngle: number
 ): Snap[] {
-  const endpoints: Endpoint[] = []
-  labels.forEach((label, index) => {
-    const poly = openPolyline(label)
-    if (poly === null) {
-      return
-    }
-    for (const isStart of [true, false]) {
-      endpoints.push({
-        index,
-        isStart,
-        poly,
-        point: endpoint(poly, isStart)
-      })
-    }
-  })
-
+  const snapAngle = Math.max(minAngle, SNAP_MIN_ANGLE)
+  const endpoints = collectEndpoints(labels)
+  const consumed = new Set<string>()
   const candidates: Candidate[] = []
   for (let i = 0; i < endpoints.length; i++) {
     const a = endpoints[i]
     for (let j = i + 1; j < endpoints.length; j++) {
       const b = endpoints[j]
-      if (
-        a.index === b.index ||
-        categoriesCompatible(
-          String(labels[a.index].category ?? ""),
-          String(labels[b.index].category ?? "")
-        )
-      ) {
+      if (a.index === b.index) {
         continue
       }
-      const geometry = candidateGeometry(a, b, tolerance, minAngle)
-      if (geometry === null || geometry.gap < 1e-9) {
+      const gap = Math.hypot(a.point[0] - b.point[0], a.point[1] - b.point[1])
+      if (gap < 1e-9) {
+        consumed.add(endpointKey(a.index, a.isStart))
+        consumed.add(endpointKey(b.index, b.isStart))
+        continue
+      }
+      if (categoryOf(labels[a.index]) === categoryOf(labels[b.index])) {
+        continue
+      }
+      const geometry = candidateGeometry(a, b, tolerance, snapAngle)
+      if (geometry === null) {
         continue
       }
       candidates.push({
@@ -978,52 +1047,54 @@ function snapDifferentCategories(
     return fields.find((difference) => difference !== 0) ?? 0
   })
 
-  const consumed = new Set<string>()
   const snaps: Snap[] = []
   for (const candidate of candidates) {
-    const anchorKey = endpointKey(candidate.idxA, candidate.startA)
-    const movedKey = endpointKey(candidate.idxB, candidate.startB)
-    if (consumed.has(anchorKey) || consumed.has(movedKey)) {
+    const keyA = endpointKey(candidate.idxA, candidate.startA)
+    const keyB = endpointKey(candidate.idxB, candidate.startB)
+    if (consumed.has(keyA) || consumed.has(keyB)) {
       continue
     }
-    const anchorLabel = labels[candidate.idxA]
-    const movedLabel = labels[candidate.idxB]
-    const anchorPoly = openPolyline(anchorLabel)
-    const movedPoly = openPolyline(movedLabel)
-    if (anchorPoly === null || movedPoly === null) {
+    const polyA = openPolyline(labels[candidate.idxA])
+    const polyB = openPolyline(labels[candidate.idxB])
+    if (polyA === null || polyB === null) {
       continue
     }
-    const anchorEndpoint: Endpoint = {
+    // An earlier snap may have moved the opposite endpoint of a two-vertex
+    // line and turned this endpoint's tangent, so revalidate.
+    const endA: Endpoint = {
       index: candidate.idxA,
       isStart: candidate.startA,
-      poly: anchorPoly,
-      point: endpoint(anchorPoly, candidate.startA)
+      poly: polyA,
+      point: endpoint(polyA, candidate.startA)
     }
-    const movedEndpoint: Endpoint = {
+    const endB: Endpoint = {
       index: candidate.idxB,
       isStart: candidate.startB,
-      poly: movedPoly,
-      point: endpoint(movedPoly, candidate.startB)
+      poly: polyB,
+      point: endpoint(polyB, candidate.startB)
     }
-    const geometry = candidateGeometry(
-      anchorEndpoint,
-      movedEndpoint,
-      tolerance,
-      minAngle
-    )
+    const geometry = candidateGeometry(endA, endB, tolerance, snapAngle)
     if (geometry === null || geometry.gap < 1e-9) {
       continue
     }
-    const junction = endpoint(anchorPoly, candidate.startA)
-    const movedIndex = candidate.startB ? 0 : movedPoly.vertices.length - 1
-    movedPoly.vertices[movedIndex] = [junction[0], junction[1]]
-    consumed.add(anchorKey)
-    consumed.add(movedKey)
+    const curveA = endpointTouchesCurve(polyA, candidate.startA)
+    const curveB = endpointTouchesCurve(polyB, candidate.startB)
+    if (curveA && curveB) {
+      continue
+    }
+    const [anchor, moved] = curveB ? [endB, endA] : [endA, endB]
+    const junction = anchor.point
+    const movedIndex = moved.isStart ? 0 : moved.poly.vertices.length - 1
+    moved.poly.vertices[movedIndex] = [junction[0], junction[1]]
+    consumed.add(keyA)
+    consumed.add(keyB)
+    const anchorLabel = labels[anchor.index]
+    const movedLabel = labels[moved.index]
     const snap: Snap = {
       anchorId: String(anchorLabel.id ?? ""),
       movedId: String(movedLabel.id ?? ""),
-      anchorCategory: String(anchorLabel.category ?? ""),
-      movedCategory: String(movedLabel.category ?? ""),
+      anchorCategory: categoryOf(anchorLabel),
+      movedCategory: categoryOf(movedLabel),
       junction,
       gap: geometry.gap
     }
@@ -1045,7 +1116,8 @@ function snapDifferentCategories(
  *
  * @param labels the frame's labels
  * @param tolerance maximum endpoint gap in image pixels
- * @param minAngle minimum junction angle in degrees, 0 disables
+ * @param minAngle minimum junction angle in degrees, 0 disables it for
+ * merges (cross-category snaps always use at least SNAP_MIN_ANGLE)
  */
 export function connectLabels(
   labels: LabelExport[],
@@ -1064,24 +1136,7 @@ export function connectLabels(
   result.connections.push(...atomic.connections)
 
   for (;;) {
-    const endpoints: Endpoint[] = []
-    working.forEach((label, index) => {
-      if (absorbed.has(label)) {
-        return
-      }
-      const poly = openPolyline(label)
-      if (poly === null) {
-        return
-      }
-      for (const isStart of [true, false]) {
-        endpoints.push({
-          index,
-          isStart,
-          poly,
-          point: endpoint(poly, isStart)
-        })
-      }
-    })
+    const endpoints = collectEndpoints(working, absorbed)
 
     let best: Candidate | null = null
     for (let i = 0; i < endpoints.length; i++) {
@@ -1092,13 +1147,7 @@ export function connectLabels(
         if (ea.index === eb.index) {
           continue // Self-closing is an editor gesture, not a batch one.
         }
-        const labelB = working[eb.index]
-        if (
-          !categoriesCompatible(
-            String(labelA.category ?? ""),
-            String(labelB.category ?? "")
-          )
-        ) {
+        if (categoryOf(labelA) !== categoryOf(working[eb.index])) {
           continue
         }
         const geometry = candidateGeometry(ea, eb, tolerance, minAngle)
