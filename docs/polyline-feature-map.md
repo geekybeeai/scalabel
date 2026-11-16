@@ -54,10 +54,9 @@ Open when: changing how a line is drawn, edited, its vertices/curves, merge, val
   sticky, session-local toggle, initially ON; `viewer2d.tsx getSnapButton`
   controls it. Turning it off suppresses snapping, merging, and the indicator,
   including a snap acquired earlier in the same drag.
-- `app/src/drawable/2d/endpoint_snap_geometry.ts` — `snapTargetIndices` and
-  `nearestSnapPointIndex`: pure handle-picking helpers and regression coverage.
-  The interactive snap scan in `Label2DList` directly reads `snapPoints`
-  (a read-only view) to avoid cloning entire candidate polylines.
+- The interactive snap scan in `Label2DList.findNearestEndpoint` reads
+  `snapPoints` (a read-only view) to avoid cloning entire candidate polylines,
+  and skips lines and handles that are not displayed.
 - `app/src/drawable/2d/path_point2d.ts` — `PathPoint2D`, `PathPointType` (LINE/MID/CURVE),
   point styles.
 - `app/src/drawable/2d/label2d.ts` — base **`Label2D`**: `editing`, `temporary`, `type`,
@@ -400,8 +399,7 @@ Open when: how a finished/edited/deleted line reaches redux; history behavior.
   polygon closing previews, and retained culling for committed labels.
 - `app/test/server/closed_polyline_roundtrip.test.ts` — closed polyline export
   and import behavior for polyline-only and polygon-enabled projects.
-- `app/test/drawable/endpoint_snap_geometry.test.ts`,
-  `app/test/drawable/curve_groups.test.ts`,
+- `app/test/drawable/curve_groups.test.ts`,
   `app/test/drawable/polyline_disjoint_geometry.test.ts`, and
   `app/test/drawable/polyline_disjoint.test.ts` — handle picking, Bézier groups,
   open/closed disjoint geometry, and history behavior.
