@@ -270,13 +270,6 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
           id={this.props.id}
         />
       )
-      views.push(
-        <Label2dCanvas
-          key={`label2dCanvas${this.props.id}`}
-          display={this._container}
-          id={this.props.id}
-        />
-      )
     }
 
     return views
@@ -289,6 +282,11 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
    */
   protected getOverlayComponents(): React.ReactElement[] {
     return [
+      <Label2dCanvas
+        key={`label2dCanvas${this.props.id}`}
+        display={this._container}
+        id={this.props.id}
+      />,
       <StampSettings
         key={`stampSettings${this.props.id}`}
         onChange={() => this.forceUpdate()}
@@ -1149,7 +1147,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
         e.ctrlKey ||
         e.metaKey ||
         didPan() ||
-        inPanWindow(Date.now()) ||
+        (isArmed() && inPanWindow(Date.now())) ||
         (isArmed() && exceededThreshold(this._mX, this._mY))
       if (allowPan) {
         markPanned()
@@ -1341,7 +1339,10 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
       if (this._container !== null && isFrameLoaded(this.state, item, sensor)) {
         const rect = this._container.getBoundingClientRect()
         const image = Session.images[item][sensor]
-        const imageAspect = image.width / image.height
+        const swap = config.rotation === 90 || config.rotation === 270
+        const imageAspect = swap
+          ? image.height / image.width
+          : image.width / image.height
 
         // Displayed image size + centering padding (CSS px) at a given scale,
         // matching updateCanvasScale's letterboxing.
