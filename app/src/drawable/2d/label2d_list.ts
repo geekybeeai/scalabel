@@ -18,6 +18,12 @@ import { Polygon2D } from "./polygon2d"
 import { Tag2D } from "./tag2d"
 
 /**
+ * Minimum width, in screen pixels, of the band around a line body that
+ * counts as a click on it. Matches the old 10 px control-canvas stroke.
+ */
+export const PICK_STROKE_PX = 10
+
+/**
  * Make a new drawable label based on the label type
  *
  * @param {string} labelType: type of the new label
@@ -367,16 +373,30 @@ export class Label2DList {
     )
   }
 
-  /** Bounds first, then native path hits; no control-color readback for lines. */
+  /**
+   * Bounds first, then native path hits; no control-color readback for lines.
+   *
+   * Order: vertex handles, then line bodies (a band at least minStrokePx
+   * wide), then, in selecting mode, the interior of closed polygons. Interior
+   * hits come last so a line drawn inside a polygon stays clickable.
+   *
+   * @param coord cursor in image coordinates
+   * @param context any 2D context (only used for path hit testing)
+   * @param multiplier line thickness multiplier
+   * @param curvesOnly whether only curve groups are displayed
+   * @param bodiesOnly pick line bodies only (no handles, no interiors)
+   * @param minStrokePx minimum body hit band width in screen pixels
+   */
   public pickPolyline(
     coord: Vector2D,
     context: Context2D,
     multiplier: number,
     curvesOnly: boolean,
-    bodiesOnly: boolean = false
+    bodiesOnly: boolean = false,
+    minStrokePx: number = PICK_STROKE_PX
   ): number[] {
     const scale = this._displayScale
-    const margin = Math.max(7, 15 * multiplier) / scale
+    const margin = Math.max(7, 15 * multiplier, minStrokePx / 2) / scale
     const candidates: Array<{ label: Polygon2D; index: number }> = []
     for (let i = this._labelList.length - 1; i >= 0; i--) {
       const label = this._labelList[i]
@@ -405,10 +425,18 @@ export class Label2DList {
           coord,
           scale,
           multiplier,
-          curvesOnly
+          curvesOnly,
+          minStrokePx
         )
       ) {
         return [candidate.index, 0]
+      }
+    }
+    if (!bodiesOnly && this._state.session.mode === ModeStatus.SELECTING) {
+      for (const candidate of candidates) {
+        if (candidate.label.containsInterior(context, coord)) {
+          return [candidate.index, 0]
+        }
       }
     }
     return [-1, 0]

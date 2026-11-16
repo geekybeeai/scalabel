@@ -496,17 +496,32 @@ export class Polygon2D extends Label2D {
     return path
   }
 
-  /** Only visible handles are interactive; body selection uses the actual stroke. */
+  /**
+   * Vertex handle under the cursor (1-based), or -1.
+   *
+   * Every displayed vertex is pickable, not only those of the highlighted
+   * line, as the old control canvas painted handles for all labels. Otherwise
+   * an endpoint approached from beyond the end of its line could not be
+   * grabbed, and a fast press on a vertex moved the whole line. Segment
+   * midpoints (which insert a vertex when dragged) stay limited to the
+   * highlighted line, where they are visible, so pressing the middle of an
+   * unhovered line still selects and moves the line.
+   *
+   * @param coord cursor in image coordinates
+   * @param scale display pixels per image pixel
+   * @param curvesOnly whether only curve groups are displayed
+   */
   public pickHandle(
     coord: Vector2D,
     scale: number,
     curvesOnly: boolean
   ): number {
-    if (!this.highlighted && !this.isDrawing) return -1
     let best = -1
     let distance = Infinity
     for (let i = 0; i < this._points.length; i++) {
       if (this.isDrawing && this._points[i].type !== PathPointType.LINE)
+        continue
+      if (!this.highlighted && this._points[i].type === PathPointType.MID)
         continue
       if (!this.isPointDisplayed(i, curvesOnly)) continue
       const point = this._points[i]
@@ -520,22 +535,55 @@ export class Polygon2D extends Label2D {
     return best
   }
 
+  /**
+   * Whether the cursor is on the line's body.
+   *
+   * The hit band is the visible stroke (3 px times the thickness multiplier)
+   * but never narrower than minWidthPx screen pixels, so thin lines stay as
+   * easy to click as they were with the old 10 px control stroke.
+   *
+   * @param context any 2D context (only used for path hit testing)
+   * @param coord cursor in image coordinates
+   * @param scale display pixels per image pixel
+   * @param multiplier line thickness multiplier
+   * @param curvesOnly whether only curve groups are displayed
+   * @param minWidthPx minimum hit band width in screen pixels
+   */
   public containsStroke(
     context: Context2D,
     coord: Vector2D,
     scale: number,
     multiplier: number,
-    curvesOnly: boolean = false
+    curvesOnly: boolean = false,
+    minWidthPx: number = 0
   ): boolean {
     const path = this.getPath(curvesOnly && !this.editing)
     if (path === null || scale <= 0) return false
     context.save()
     context.setTransform(1, 0, 0, 1, 0, 0)
-    context.lineWidth = (3 * multiplier) / scale
+    context.lineWidth = Math.max(3 * multiplier, minWidthPx) / scale
     context.lineCap = "butt"
     context.lineJoin = "miter"
     context.setLineDash([])
     const hit = context.isPointInStroke(path, coord.x, coord.y)
+    context.restore()
+    return hit
+  }
+
+  /**
+   * Whether the cursor is inside a closed polygon. Open polylines never
+   * contain a point.
+   *
+   * @param context any 2D context (only used for path hit testing)
+   * @param coord cursor in image coordinates
+   */
+  public containsInterior(context: Context2D, coord: Vector2D): boolean {
+    if (!this._closed) return false
+    const path = this.getPath(false)
+    if (path === null) return false
+    context.save()
+    context.setTransform(1, 0, 0, 1, 0, 0)
+    const hit = context.isPointInPath(path, coord.x, coord.y)
     context.restore()
     return hit
   }
