@@ -41,12 +41,12 @@ DEFAULT_MIN_ANGLE = 0.0
 # server search radius, so offset parallel lines remain guarded.
 CURVE_SAMPLING_GAP = 5.0
 
-# Straight endpoints whose gap is at most this many image pixels are treated as
-# annotator jitter: the gap may run sideways to the tangents (an overshoot or a
-# slightly offset restart) as long as the spliced seam itself stays straight.
-# Wider gaps must run along both tangents, which is what keeps two side-by-side
-# parallel lines from being merged or snapped. 12 px admits the verified 10.7 px
-# aligned overshoot and is well below typical lane spacing.
+# Upper bound on the stub allowance: when one endpoint's direction comes from a
+# segment shorter than the gap (a stub whose heading is noise), a gap of at most
+# this many image pixels may run sideways to the tangents, as long as the
+# spliced seam stays straight. Every other straight gap must run along both
+# tangents, which keeps side-by-side parallel lines apart. 12 px admits the
+# verified 10.7 px overshoot, whose earlier label is a 1.4 px stub.
 STRAIGHT_JITTER_GAP = 12.0
 
 # Cross-category snaps move vertices across a class boundary with nobody
@@ -348,18 +348,42 @@ def _collect_endpoints(labels: List[dict], skip: Optional[Set[int]] = None) -> L
     return endpoints
 
 
+def _tangent_segment_length(poly: dict, is_start: bool) -> float:
+    """Length of the segment that sets an endpoint's direction.
+
+    The distance to the endpoint's first distinct neighbour, or 0 if every
+    vertex coincides.
+    """
+    vertices = poly["vertices"]
+    tip = vertices[0] if is_start else vertices[-1]
+    indices = range(1, len(vertices)) if is_start else range(len(vertices) - 2, -1, -1)
+    for index in indices:
+        neighbour = vertices[index]
+        length = float(np.hypot(float(tip[0]) - float(neighbour[0]), float(tip[1]) - float(neighbour[1])))
+        if length >= 1e-9:
+            return length
+    return 0.0
+
+
 def _candidate_geometry(
-    a: _Endpoint, b: _Endpoint, tolerance: float, min_angle: float
+    a: _Endpoint,
+    b: _Endpoint,
+    tolerance: float,
+    min_angle: float,
+    allow_curve_sampling: bool,
 ) -> Optional[Tuple[float, Optional[float]]]:
     """Apply the shared distance, angle and seam guards to two endpoints.
 
     Returns ``(gap, angle)`` or None when the pair is not eligible.
 
-    Curve-adjacent endpoints keep the spliced-seam check (plus the small curve
-    sampling allowance). Straight endpoints within ``STRAIGHT_JITTER_GAP`` may
-    be offset sideways, but the spliced seam must stay straight so the result
-    never doubles back. Wider straight gaps must run along both tangents, which
-    rejects side-by-side parallel lines.
+    Curve-adjacent endpoints keep the spliced-seam check. Merges may also use
+    the ``CURVE_SAMPLING_GAP`` allowance, which skips the angle check for curve
+    fragments a few pixels apart; cross-category snaps never do. Straight gaps
+    must run along both tangents, which rejects side-by-side parallel lines.
+    The one exception is a stub: when either endpoint's direction comes from a
+    segment shorter than the gap itself (and the gap is within
+    ``STRAIGHT_JITTER_GAP``), that direction is noise, so a sideways gap is
+    allowed as long as the spliced seam stays straight.
     """
     _, start_a, poly_a, point_a = a
     _, start_b, poly_b, point_b = b
@@ -376,14 +400,18 @@ def _candidate_geometry(
     curve_adjacent = _endpoint_touches_curve(poly_a, start_a) or _endpoint_touches_curve(
         poly_b, start_b
     )
-    curve_sampling_gap = curve_adjacent and gap <= CURVE_SAMPLING_GAP
+    curve_sampling_gap = allow_curve_sampling and curve_adjacent and gap <= CURVE_SAMPLING_GAP
     if angle is None or (angle < min_angle and not curve_sampling_gap):
         return None
+    stub = (
+        min(_tangent_segment_length(poly_a, start_a), _tangent_segment_length(poly_b, start_b))
+        < gap
+    )
     if curve_adjacent:
         follows = curve_sampling_gap or _spliced_seam_follows_tangents(
             poly_a, start_a, poly_b, start_b, min_angle
         )
-    elif gap <= STRAIGHT_JITTER_GAP:
+    elif stub and gap <= STRAIGHT_JITTER_GAP:
         follows = _spliced_seam_follows_tangents(poly_a, start_a, poly_b, start_b, min_angle)
     else:
         follows = _gap_follows_tangents(point_a, dir_a, point_b, dir_b, min_angle)
@@ -677,7 +705,7 @@ def _snap_different_categories(
                 continue
             if _category_of(labels[a[0]]) == _category_of(labels[b[0]]):
                 continue
-            geometry = _candidate_geometry(a, b, tolerance, snap_angle)
+            geometry = _candidate_geometry(a, b, tolerance, snap_angle, False)
             if geometry is None:
                 continue
             candidates.append((geometry[0], a[0], a[1], b[0], b[1], geometry[1]))
@@ -697,7 +725,7 @@ def _snap_different_categories(
         # line and turned this endpoint's tangent, so revalidate.
         end_a: _Endpoint = (idx_a, start_a, poly_a, _endpoint(poly_a, start_a))
         end_b: _Endpoint = (idx_b, start_b, poly_b, _endpoint(poly_b, start_b))
-        geometry = _candidate_geometry(end_a, end_b, tolerance, snap_angle)
+        geometry = _candidate_geometry(end_a, end_b, tolerance, snap_angle, False)
         if geometry is None or geometry[0] < 1e-9:
             continue
         curve_a = _endpoint_touches_curve(poly_a, start_a)
@@ -760,7 +788,7 @@ def connect_labels(
                     continue  # Self-closing is an editor gesture, not a batch one.
                 if _category_of(label_a) != _category_of(working[b[0]]):
                     continue
-                geometry = _candidate_geometry(a, b, tolerance, min_angle)
+                geometry = _candidate_geometry(a, b, tolerance, min_angle, True)
                 if geometry is None:
                     continue
                 if best is None or geometry[0] < best[0]:

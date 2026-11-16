@@ -367,6 +367,44 @@ class CategoryAwareJoiningTest(unittest.TestCase):
         self.assertEqual(result.snaps, [])
         self.assertEqual(geometry(output), before)
 
+    def test_does_not_merge_overlapping_parallel_lines_8px_apart(self):
+        labels = [
+            cat_line("a", "lane", [[0, 0], [100, 0]]),
+            cat_line("b", "lane", [[95, 8], [195, 8]]),
+        ]
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(len(output), 2)
+        self.assertEqual(result.connections, [])
+
+    def test_does_not_snap_yellow_8px_sideways_onto_overlapping_white(self):
+        labels = [
+            cat_line("white", "white_line", [[0, 0], [100, 0]]),
+            cat_line("yellow", "yellow_line", [[95, 8], [195, 8]]),
+        ]
+        before = geometry(labels)
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(result.snaps, [])
+        self.assertEqual(geometry(output), before)
+
+    def test_never_snaps_at_a_right_angle_next_to_a_curve(self):
+        for min_angle in (0, 150):
+            labels = [
+                cat_line("curve", "white_line", [[0, 0], [40, 0], [80, 0], [100, 0]], "LCCL"),
+                cat_line("yellow", "yellow_line", [[103, 0], [103, 100]]),
+            ]
+            before = geometry(labels)
+            output, result = connect_labels(labels, tolerance=40, min_angle=min_angle)
+            self.assertEqual(result.snaps, [], min_angle)
+            self.assertEqual(geometry(output), before, min_angle)
+
+    def test_same_category_curve_fragments_a_few_px_apart_still_merge(self):
+        labels = [
+            cat_line("curve", "white_line", [[0, 0], [40, 0], [80, 0], [100, 0]], "LCCL"),
+            cat_line("tail", "white_line", [[103, 0], [103, 100]]),
+        ]
+        output, _ = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(len(output), 1)
+
     def test_does_not_pull_apart_endpoints_that_already_touch(self):
         labels = [
             cat_line("fork", "white_line", [[103, 1], [200, 20]]),
