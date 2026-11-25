@@ -8,7 +8,7 @@ test("a request without a document is rejected", async () => {
   })
 })
 
-test("a document round-trips with a report", async () => {
+test("different categories snap without merging or changing category", async () => {
   const response = await run({
     document: [
       {
@@ -50,10 +50,39 @@ test("a document round-trips with a report", async () => {
   })
   expect(response.ok).toBe(true)
   if (response.ok) {
-    expect(
-      (response.document as Array<{ labels: unknown[] }>)[0].labels
-    ).toHaveLength(1)
-    expect(response.report.summary.totalMerged).toBe(1)
+    const labels = (
+      response.document as Array<{
+        labels: Array<{
+          id: string
+          category: string
+          poly2d: Array<{ vertices: Array<[number, number]> }>
+        }>
+      }>
+    )[0].labels
+    expect(labels.map(({ id, category }) => ({ id, category }))).toEqual([
+      { id: "a", category: "curb_road_edge" },
+      { id: "b", category: "without_curb_road_edge" }
+    ])
+    expect(labels[0].poly2d[0].vertices[1]).toEqual([100, 0])
+    expect(labels[1].poly2d[0].vertices[0]).toEqual([100, 0])
+    expect(response.report.summary.totalMerged).toBe(0)
+    expect(response.report.summary.totalSnapped).toBe(1)
+    expect(response.report.frames[0]).toMatchObject({
+      merged: 0,
+      snapped: 1,
+      labelsBefore: 2,
+      labelsAfter: 2,
+      snaps: [
+        {
+          anchorId: "a",
+          movedId: "b",
+          anchorCategory: "curb_road_edge",
+          movedCategory: "without_curb_road_edge",
+          junction: [100, 0],
+          gap: 1
+        }
+      ]
+    })
   }
 })
 

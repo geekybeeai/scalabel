@@ -93,6 +93,10 @@ export class Label2DHandler {
     // user starts dragging immediately after selecting a tool). In that case
     // the canvas hit-test is the only source of the label under the pointer.
     // Resolve it before falling back to creating a new temporary label.
+    if (labelIndex < 0 && !this.isEditingSelectedLabels()) {
+      this._highlightedLabel?.setHighlighted(false)
+      this._highlightedLabel = null
+    }
     if (labelIndex >= 0) {
       const clickedLabel = this._labelList.labelList[labelIndex]
       if (clickedLabel !== undefined) {
@@ -137,6 +141,7 @@ export class Label2DHandler {
             label.single = true
           }
           this._labelList.selectedLabels.push(label)
+          label.index = this._labelList.labelList.length
           this._labelList.labelList.push(label)
           label.onMouseDown(coord, handleIndex)
         }
@@ -189,29 +194,15 @@ export class Label2DHandler {
     }
 
     if (this.hasSelectedLabels() && !this.isKeyDown(Key.META)) {
-      const labelsToRemove: Label2D[] = []
       this._labelList.selectedLabels.forEach((selectedLabel) => {
         selectedLabel.onMouseUp(coord)
         if (selectedLabel !== this._highlightedLabel) {
           selectedLabel.setHighlighted(false)
         }
-        if (!selectedLabel.isValid() && !selectedLabel.editing) {
-          labelsToRemove.push(selectedLabel)
-        }
       })
       commit2DLabels([...this._labelList.popUpdatedLabels()])
       this._labelList.clearUpdatedLabels()
-
-      for (const label of labelsToRemove) {
-        const labelListIndex = this._labelList.labelList.indexOf(label)
-        if (labelListIndex >= 0) {
-          this._labelList.labelList.splice(labelListIndex, 1)
-        }
-        const selectedIndex = this._labelList.selectedLabels.indexOf(label)
-        if (selectedIndex >= 0) {
-          this._labelList.selectedLabels.splice(selectedIndex, 1)
-        }
-      }
+      this.removeInvalidSelectedLabels()
       console.log("[DEBUG] Label2DHandler.onMouseUp completed:", {
         highlightedLabel: this._highlightedLabel
           ? {
@@ -269,6 +260,26 @@ export class Label2DHandler {
     }
 
     return false
+  }
+
+  /**
+   * Drop selected drawings that are finished but invalid (e.g. a lone vertex
+   * after pressing Enter), so no stray point stays on the canvas.
+   */
+  private removeInvalidSelectedLabels(): void {
+    const toRemove = this._labelList.selectedLabels.filter(
+      (label) => !label.isValid() && !label.editing
+    )
+    if (toRemove.length === 0) return
+    for (const label of toRemove) {
+      const listIndex = this._labelList.labelList.indexOf(label)
+      if (listIndex >= 0) this._labelList.labelList.splice(listIndex, 1)
+      const selectedIndex = this._labelList.selectedLabels.indexOf(label)
+      if (selectedIndex >= 0) {
+        this._labelList.selectedLabels.splice(selectedIndex, 1)
+      }
+    }
+    this._labelList.onDrawableUpdate()
   }
 
   /**
@@ -397,6 +408,7 @@ export class Label2DHandler {
           this.mergeTracks()
         } else {
           commit2DLabels([...this._labelList.popUpdatedLabels()])
+          this.removeInvalidSelectedLabels()
         }
         break
       case Key.SPACE:

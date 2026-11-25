@@ -1,5 +1,6 @@
 """Regression tests for the auto-connect continuity guard."""
 
+import copy
 import unittest
 
 from annotation_fix.autoconnect import connect_labels
@@ -282,6 +283,189 @@ class AtomicCurveBridgeTest(unittest.TestCase):
             },
         )
         self.assertTrue(all(connection.angle is None for connection in result.connections))
+
+
+
+def cat_line(identifier, category, vertices, types=None):
+    """Build an eligible open polyline with an explicit category."""
+    label = line(identifier, vertices, types)
+    label["category"] = category
+    return label
+
+
+def geometry(labels):
+    """Deep snapshot of every label's poly2d for unchanged-geometry checks."""
+    return copy.deepcopy([label["poly2d"] for label in labels])
+
+
+class CategoryAwareJoiningTest(unittest.TestCase):
+    def test_merges_the_verified_aligned_same_category_overshoot(self):
+        labels = [
+            cat_line("earlier", "curb_road_edge", [
+                [8744.650104411847, 3552.8204448835263],
+                [8744.598756697971, 3554.2061595876808],
+            ]),
+            cat_line("later", "curb_road_edge", [
+                [8753.047139466438, 3547.5943817688794],
+                [8746.250418555106, 3731.016688155336],
+            ]),
+        ]
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual([label["id"] for label in output], ["earlier"])
+        self.assertAlmostEqual(result.connections[0].gap, 10.728, places=3)
+        self.assertEqual(result.snaps, [])
+
+    def test_snaps_different_categories_without_merging(self):
+        labels = [
+            cat_line("anchor", "curb_road_edge", [[0, 0], [100, 0]]),
+            cat_line("moved", "without_curb_road_edge", [[105, 0], [200, 0]]),
+        ]
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(len(output), 2)
+        self.assertEqual(output[0]["poly2d"][0]["vertices"], [[0, 0], [100, 0]])
+        self.assertEqual(output[1]["poly2d"][0]["vertices"], [[100.0, 0.0], [200, 0]])
+        self.assertEqual(result.connections, [])
+        self.assertEqual(
+            [snap.to_dict() for snap in result.snaps],
+            [{
+                "anchorId": "anchor",
+                "movedId": "moved",
+                "anchorCategory": "curb_road_edge",
+                "movedCategory": "without_curb_road_edge",
+                "junction": [100.0, 0.0],
+                "gap": 5.0,
+                "angle": 180.0,
+            }],
+        )
+
+    def test_does_not_merge_same_category_lines_lying_side_by_side(self):
+        labels = [
+            cat_line("a", "lane", [[0, 0], [100, 0]]),
+            cat_line("b", "lane", [[70, 15], [80, 15], [170, 15]]),
+        ]
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(len(output), 2)
+        self.assertEqual(result.connections, [])
+
+    def test_does_not_snap_a_paint_marking_onto_a_parallel_neighbour(self):
+        labels = [
+            cat_line("white", "white_line", [[0, 0], [100, 0]]),
+            cat_line("yellow", "yellow_line", [[80, 25], [180, 25]]),
+        ]
+        before = geometry(labels)
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(result.snaps, [])
+        self.assertEqual(geometry(output), before)
+
+    def test_never_snaps_at_a_sharp_angle_even_with_min_angle_zero(self):
+        labels = [
+            cat_line("a", "white_line", [[0, 0], [100, 0]]),
+            cat_line("b", "yellow_line", [[105, 0], [105, 100]]),
+        ]
+        before = geometry(labels)
+        output, result = connect_labels(labels, tolerance=40, min_angle=0)
+        self.assertEqual(result.snaps, [])
+        self.assertEqual(geometry(output), before)
+
+    def test_does_not_merge_overlapping_parallel_lines_8px_apart(self):
+        labels = [
+            cat_line("a", "lane", [[0, 0], [100, 0]]),
+            cat_line("b", "lane", [[95, 8], [195, 8]]),
+        ]
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(len(output), 2)
+        self.assertEqual(result.connections, [])
+
+    def test_does_not_snap_yellow_8px_sideways_onto_overlapping_white(self):
+        labels = [
+            cat_line("white", "white_line", [[0, 0], [100, 0]]),
+            cat_line("yellow", "yellow_line", [[95, 8], [195, 8]]),
+        ]
+        before = geometry(labels)
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(result.snaps, [])
+        self.assertEqual(geometry(output), before)
+
+    def test_never_snaps_at_a_right_angle_next_to_a_curve(self):
+        for min_angle in (0, 150):
+            labels = [
+                cat_line("curve", "white_line", [[0, 0], [40, 0], [80, 0], [100, 0]], "LCCL"),
+                cat_line("yellow", "yellow_line", [[103, 0], [103, 100]]),
+            ]
+            before = geometry(labels)
+            output, result = connect_labels(labels, tolerance=40, min_angle=min_angle)
+            self.assertEqual(result.snaps, [], min_angle)
+            self.assertEqual(geometry(output), before, min_angle)
+
+    def test_same_category_curve_fragments_a_few_px_apart_still_merge(self):
+        labels = [
+            cat_line("curve", "white_line", [[0, 0], [40, 0], [80, 0], [100, 0]], "LCCL"),
+            cat_line("tail", "white_line", [[103, 0], [103, 100]]),
+        ]
+        output, _ = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(len(output), 1)
+
+    def test_short_final_segment_does_not_make_a_parallel_line_end_a_stub(self):
+        for last in (3, 0.5):
+            ends = [[0, 0], [100 - last, 0], [100, 0]]
+            offset = [[95, 8], [195, 8]]
+            output, result = connect_labels(
+                [cat_line("a", "lane", ends), cat_line("b", "lane", offset)],
+                tolerance=40,
+                min_angle=150,
+            )
+            self.assertEqual(len(output), 2, last)
+            self.assertEqual(result.connections, [], last)
+            labels = [cat_line("white", "white_line", ends), cat_line("yellow", "yellow_line", offset)]
+            before = geometry(labels)
+            output, result = connect_labels(labels, tolerance=40, min_angle=150)
+            self.assertEqual(result.snaps, [], last)
+            self.assertEqual(geometry(output), before, last)
+
+    def test_does_not_pull_apart_endpoints_that_already_touch(self):
+        labels = [
+            cat_line("fork", "white_line", [[103, 1], [200, 20]]),
+            cat_line("a", "curb_road_edge", [[0, 0], [100, 0]]),
+            cat_line("b", "without_curb_road_edge", [[100, 0], [200, 0]]),
+        ]
+        before = geometry(labels)
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(result.snaps, [])
+        self.assertEqual(geometry(output), before)
+
+    def test_moves_the_straight_endpoint_not_a_later_bezier_anchor(self):
+        labels = [
+            cat_line("straight", "curb_road_edge", [[0, 0], [100, 0]]),
+            cat_line(
+                "curve",
+                "without_curb_road_edge",
+                [[103, 0], [140, 0], [180, 40], [180, 80]],
+                "LCCL",
+            ),
+        ]
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(
+            output[1]["poly2d"][0]["vertices"], [[103, 0], [140, 0], [180, 40], [180, 80]]
+        )
+        self.assertEqual(output[0]["poly2d"][0]["vertices"], [[0, 0], [103.0, 0.0]])
+        self.assertEqual(
+            (result.snaps[0].anchor_id, result.snaps[0].moved_id), ("curve", "straight")
+        )
+
+    def test_skips_a_pair_when_both_endpoints_are_bezier_anchors(self):
+        labels = [
+            cat_line("curve-a", "curb_road_edge", [[0, 80], [0, 40], [40, 0], [97, 0]], "LCCL"),
+            cat_line(
+                "curve-b",
+                "without_curb_road_edge",
+                [[103, 0], [140, 0], [180, 40], [180, 80]],
+                "LCCL",
+            ),
+        ]
+        before = geometry(labels)
+        output, result = connect_labels(labels, tolerance=40, min_angle=150)
+        self.assertEqual(result.snaps, [])
+        self.assertEqual(geometry(output), before)
 
 
 if __name__ == "__main__":
