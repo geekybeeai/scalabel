@@ -197,18 +197,10 @@ export function findCurveCutSite(
     points.map((p) => p.pointType),
     closed
   )
-  // Index of the group each control point belongs to, so straight-span
-  // scanning can skip spans that are really part of a bezier.
-  const inGroup = new Set<number>()
-  for (const group of groups) {
-    for (const index of group) {
-      inGroup.add(index)
-    }
-  }
-
   let best: CurveCutSite | null = null
 
-  // Straight spans: both ends LINE, and not inside a bezier group.
+  // Adjacent LINE anchors always define a straight span, even when each
+  // anchor also belongs to a different curve group.
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i]
     const b = points[i + 1]
@@ -216,9 +208,6 @@ export function findCurveCutSite(
       a.pointType !== PathPointType.LINE ||
       b.pointType !== PathPointType.LINE
     ) {
-      continue
-    }
-    if (inGroup.has(i) && inGroup.has(i + 1)) {
       continue
     }
     const proj = projectOntoSegment(click.x, click.y, a.x, a.y, b.x, b.y)
@@ -398,10 +387,12 @@ export function buildDividedCurve(
  *
  * @param points the polyline's stored vertices
  * @param site a "site" result from findCurveCutSite for these points
+ * @param snapRadius max distance from the cut to a span anchor for snapping
  */
 export function buildCurveCutHalves(
   points: readonly SimplePathPoint2DType[],
-  site: CurveCutSite
+  site: CurveCutSite,
+  snapRadius: number = 0
 ): CurveCutHalves {
   const copy = (p: SimplePathPoint2DType): SimplePathPoint2DType => ({
     x: p.x,
@@ -418,6 +409,23 @@ export function buildCurveCutHalves(
     y: p.y,
     pointType: PathPointType.CURVE
   })
+
+  const startIndex = site.index
+  const endIndex = startIndex + (site.kind === "straight" ? 1 : 3)
+  const start = points[startIndex]
+  const end = points[endIndex]
+  const startDistance = Math.hypot(
+    site.point.x - start.x,
+    site.point.y - start.y
+  )
+  const endDistance = Math.hypot(site.point.x - end.x, site.point.y - end.y)
+  if (Math.min(startDistance, endDistance) <= snapRadius) {
+    const anchor = startDistance <= endDistance ? startIndex : endIndex
+    return {
+      first: points.slice(0, anchor + 1).map(copy),
+      second: points.slice(anchor).map(copy)
+    }
+  }
 
   if (site.kind === "straight") {
     const i = site.index
@@ -451,4 +459,32 @@ export function buildCurveCutHalves(
       ...points.slice(ai + 4).map(copy)
     ]
   }
+}
+
+/**
+ * Make every span of the outline explicit, including its closing span.
+ * Start on a LINE anchor so a wrapping cubic becomes a contiguous LCCL.
+ *
+ * @param points the closed outline's stored points
+ */
+export function linearizeClosedPath(
+  points: readonly SimplePathPoint2DType[]
+): SimplePathPoint2DType[] {
+  const start = points.findIndex(
+    (point) => point.pointType === PathPointType.LINE
+  )
+  if (start < 0) {
+    return []
+  }
+  const path = [...points.slice(start), ...points.slice(0, start)]
+  const first = path[0]
+  const last = path[path.length - 1]
+  if (
+    last.pointType !== PathPointType.LINE ||
+    last.x !== first.x ||
+    last.y !== first.y
+  ) {
+    path.push(first)
+  }
+  return path
 }

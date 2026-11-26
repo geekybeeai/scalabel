@@ -2,6 +2,11 @@ import _ from "lodash"
 
 import { addLabel, deleteLabel, makeSequential } from "../../action/common"
 import { selectLabels } from "../../action/select"
+import {
+  ClosedCutPick,
+  getClosedCutPick,
+  setClosedCutPick
+} from "../../common/cut_state"
 import { drawHistory, LineSnapshot } from "../../common/draw_history"
 import Session, { dispatch, getState } from "../../common/session"
 import { uid } from "../../common/uid"
@@ -16,6 +21,12 @@ import {
   State
 } from "../../types/state"
 import { buildCutHalves, CutSite, findCutSite } from "./polyline_cut_geometry"
+import {
+  buildCurveCutHalves,
+  CurveCutSite,
+  findCurveCutSite,
+  linearizeClosedPath
+} from "./polyline_curve_cut_geometry"
 
 /** Screen-space search radius for the cut click (display px). */
 export const CUT_CLICK_RADIUS_PX = 20
@@ -25,12 +36,27 @@ export const CUT_SNAP_RADIUS_PX = 8
 /** Outcome of a cut attempt, mapped to user feedback by the caller. */
 export type CutResult = "cut" | "miss" | "curve" | "near-endpoint" | "closed"
 
-interface Candidate {
-  /** the polyline's label id */
-  labelId: IdType
-  /** where it would be cut */
-  site: CutSite
-}
+/** Additional outcomes while cutting a closed polyline. */
+export type PolylineCutResult =
+  | CutResult
+  | "first-picked"
+  | "wrong-line"
+  | "stale"
+
+type Candidate =
+  | {
+      labelId: IdType
+      closed: false
+      site: CutSite
+      points: SimplePathPoint2DType[]
+    }
+  | {
+      labelId: IdType
+      closed: true
+      site: CurveCutSite
+      points: SimplePathPoint2DType[]
+      path: SimplePathPoint2DType[]
+    }
 
 /** Visibility filters the cut scan must respect (mirrors Label2DList.redraw). */
 export interface CutVisibilityFilter {
@@ -59,13 +85,52 @@ function storedPoints(
 }
 
 /**
- * Try to cut the open polyline nearest to a click.
+ * Whether a label is visible to the cut tool.
  *
- * Scans EVERY polyline/polygon in the current item from redux (no dependency
- * on the control-canvas hit-test, so thin lines are easy to hit), finds the
- * globally nearest cut site within `radius`, and applies it. Closed shapes
- * are scanned only so a click nearest to one reports "closed" instead of
- * silently missing. All parameters are in ORIGINAL-IMAGE pixels.
+ * @param label the current label
+ * @param visibility the optional viewer filter
+ */
+function isVisible(
+  label: LabelType,
+  visibility?: CutVisibilityFilter
+): boolean {
+  return (
+    visibility === undefined ||
+    (!visibility.hideLabels &&
+      !visibility.hiddenLabelTypes.includes(label.type) &&
+      !visibility.hiddenCategories.includes(label.category[0]))
+  )
+}
+
+/**
+ * Check that the pending outline is still the same editable label.
+ *
+ * @param state the current editor state
+ * @param pending the pending cut
+ * @param visibility the optional viewer filter
+ */
+function stillCuttable(
+  state: State,
+  pending: ClosedCutPick,
+  visibility?: CutVisibilityFilter
+): boolean {
+  const { itemIndex, labelId, points } = pending
+  const label = state.task.items[itemIndex]?.labels[labelId]
+  return (
+    !state.task.config.tracking &&
+    state.user.select.item === itemIndex &&
+    label?.type === LabelTypeName.POLYLINE_2D &&
+    label.closed === true &&
+    isVisible(label, visibility) &&
+    _.isEqual(points, storedPoints(state, itemIndex, labelId))
+  )
+}
+
+/**
+ * Try to cut the polyline nearest to a click.
+ *
+ * Open lines split immediately. The first pick on a closed polyline marks
+ * where to open it and the next pick splits it. All positions are image pixels.
  *
  * @param click the click position (image frame)
  * @param click.x click x (image px)
@@ -74,14 +139,42 @@ function storedPoints(
  * @param snapRadius vertex snap / endpoint-guard distance (image px)
  * @param visibility optional viewer-config visibility filter; labels the
  * renderer would hide are excluded from the scan
+ * @param viewerId the viewer that received the click
  */
 export function performCut(
   click: { x: number; y: number },
   radius: number,
   snapRadius: number,
-  visibility?: CutVisibilityFilter
-): CutResult {
+  visibility?: CutVisibilityFilter,
+  viewerId?: number
+): PolylineCutResult {
   const state = getState()
+  const pending = getClosedCutPick()
+  if (pending !== null) {
+    if (pending.viewerId !== viewerId) {
+      return "miss"
+    }
+    if (!stillCuttable(state, pending, visibility)) {
+      setClosedCutPick(null)
+      return "stale"
+    }
+    const result = findCurveCutSite(pending.openedPoints, click, radius, 0)
+    if (result.kind !== "site") {
+      return result.kind === "miss" ? "wrong-line" : result.kind
+    }
+    // Snap to anchors on the picked span. A point on the opposite side of
+    // a narrow outline can be close on screen and still split the path.
+    const { first, second } = buildCurveCutHalves(
+      pending.openedPoints,
+      result.site,
+      snapRadius
+    )
+    if (first.length < 2 || second.length < 2) {
+      return "near-endpoint"
+    }
+    setClosedCutPick(null)
+    return commitCut(pending.itemIndex, pending.labelId, first, second)
+  }
   if (state.task.config.tracking) {
     return "miss"
   }
@@ -105,26 +198,31 @@ export function performCut(
     ) {
       continue
     }
-    if (visibility?.hiddenLabelTypes.includes(label.type) === true) {
+    if (!isVisible(label, visibility)) {
       continue
     }
-    if (visibility?.hiddenCategories.includes(label.category[0]) === true) {
-      continue
-    }
-    const isOpen =
-      label.type === LabelTypeName.POLYLINE_2D && label.closed !== true
     const points = storedPoints(state, itemIndex, labelId)
     if (points.length < 2) {
       continue
     }
-    // Closed shapes participate only for the "closed" rejection message;
-    // include their closing edge so clicks on it are attributed to them.
-    const scanPoints = isOpen ? points : [...points, points[0]]
+    if (label.type === LabelTypeName.POLYLINE_2D && label.closed === true) {
+      const path = linearizeClosedPath(points)
+      const result = findCurveCutSite(path, click, radius, 0, true)
+      if (
+        result.kind === "site" &&
+        (best === null || result.site.distance < best.site.distance)
+      ) {
+        best = { labelId, closed: true, site: result.site, points, path }
+      }
+      continue
+    }
+    const isPolygon = label.type === LabelTypeName.POLYGON_2D
+    const scanPoints = isPolygon ? [...points, points[0]] : points
     const result = findCutSite(scanPoints, click, radius, snapRadius)
     if (result.kind === "miss") {
       continue
     }
-    if (!isOpen) {
+    if (isPolygon) {
       const distance =
         result.kind === "site" ? result.site.distance : result.distance
       if (bestRejection === null || distance < bestRejection.distance) {
@@ -134,7 +232,7 @@ export function performCut(
     }
     if (result.kind === "site") {
       if (best === null || result.site.distance < best.site.distance) {
-        best = { labelId, site: result.site }
+        best = { labelId, closed: false, site: result.site, points }
       }
     } else {
       if (bestRejection === null || result.distance < bestRejection.distance) {
@@ -151,21 +249,61 @@ export function performCut(
   if (bestRejection !== null && bestRejection.distance < best.site.distance) {
     return bestRejection.kind
   }
-  return commitCut(itemIndex, best)
+  if (best.closed) {
+    const { first, second } = buildCurveCutHalves(
+      best.path,
+      best.site,
+      snapRadius
+    )
+    setClosedCutPick({
+      viewerId,
+      itemIndex,
+      labelId: best.labelId,
+      points: best.points,
+      openedPoints: [...second, ...first.slice(1)]
+    })
+    return "first-picked"
+  }
+  const { first, second } = buildCutHalves(best.points, best.site)
+  return commitCut(itemIndex, best.labelId, first, second)
 }
 
 /**
- * Apply a validated cut: replace the original with its first half (same
- * label id — the drawHistory.setLine wholesale-replacement pattern), add the
- * second half as a new label (the pasteLabel pattern), and record ONE atomic
- * undo command.
+ * Open the outline at its first pick, keeping the full path as one polyline.
+ *
+ * @param visibility the optional viewer filter
+ * @param viewerId the viewer confirming the first pick
+ */
+export function confirmClosedCut(
+  visibility?: CutVisibilityFilter,
+  viewerId?: number
+): PolylineCutResult {
+  const pending = getClosedCutPick()
+  if (pending === null || pending.viewerId !== viewerId) {
+    return "miss"
+  }
+  const valid = stillCuttable(getState(), pending, visibility)
+  setClosedCutPick(null)
+  return valid
+    ? commitCut(pending.itemIndex, pending.labelId, pending.openedPoints)
+    : "stale"
+}
+
+/**
+ * Replace the original with one or two open paths in a single undo step.
  *
  * @param itemIndex the item being edited
- * @param candidate the polyline and site to cut
+ * @param labelId the original label
+ * @param first points for the original label after the cut
+ * @param second optional points for a new label
  */
-function commitCut(itemIndex: number, candidate: Candidate): CutResult {
+function commitCut(
+  itemIndex: number,
+  labelId: IdType,
+  first: SimplePathPoint2DType[],
+  second?: SimplePathPoint2DType[]
+): "cut" {
   const state = getState()
-  const { labelId, site } = candidate
   const label = state.task.items[itemIndex].labels[labelId]
   const stored = getShapes(state, itemIndex, labelId) as PathPoint2DType[]
 
@@ -174,13 +312,7 @@ function commitCut(itemIndex: number, candidate: Candidate): CutResult {
     shapes: _.cloneDeep(stored)
   }
 
-  const halves = buildCutHalves(
-    stored.map((p) => ({ x: p.x, y: p.y, pointType: p.pointType })),
-    site
-  )
-
-  // First half keeps the original label id.
-  const shapesA = halves.first.map((p) =>
+  const shapesA = first.map((p) =>
     makePathPoint2D({
       x: p.x,
       y: p.y,
@@ -191,25 +323,37 @@ function commitCut(itemIndex: number, candidate: Candidate): CutResult {
   const labelA: LabelType = _.cloneDeep(label)
   labelA.shapes = shapesA.map((s) => s.id)
   labelA.manual = true
+  if (labelA.closed === true) {
+    labelA.closed = false
+  }
 
-  // Second half is a brand-new polyline inheriting category/attributes.
-  const newLabelId = uid()
-  const shapesB = halves.second.map((p) =>
-    makePathPoint2D({
-      x: p.x,
-      y: p.y,
-      pointType: p.pointType,
-      label: [newLabelId]
-    })
-  )
-  const labelB: LabelType = _.cloneDeep(label)
-  labelB.id = newLabelId
-  labelB.item = itemIndex
-  labelB.track = ""
-  labelB.parent = ""
-  labelB.children = []
-  labelB.shapes = shapesB.map((s) => s.id)
-  labelB.manual = true
+  const actions = [
+    deleteLabel(itemIndex, labelId),
+    addLabel(itemIndex, labelA, shapesA)
+  ]
+  let newLabelId: IdType | undefined
+  if (second !== undefined) {
+    const secondId = uid()
+    newLabelId = secondId
+    const shapesB = second.map((p) =>
+      makePathPoint2D({
+        x: p.x,
+        y: p.y,
+        pointType: p.pointType,
+        label: [secondId]
+      })
+    )
+    const labelB: LabelType = {
+      ..._.cloneDeep(labelA),
+      id: secondId,
+      item: itemIndex,
+      track: "",
+      parent: "",
+      children: [],
+      shapes: shapesB.map((s) => s.id)
+    }
+    actions.push(addLabel(itemIndex, labelB, shapesB))
+  }
 
   // Deselect so no stale selected drawable survives the rebuild.
   dispatch(
@@ -223,23 +367,20 @@ function commitCut(itemIndex: number, candidate: Candidate): CutResult {
   )
   Session.label2dList.selectedLabels.length = 0
 
-  dispatch(
-    makeSequential([
-      deleteLabel(itemIndex, labelId),
-      addLabel(itemIndex, labelA, shapesA),
-      addLabel(itemIndex, labelB, shapesB)
-    ])
-  )
+  dispatch(makeSequential(actions))
 
   const committed = getState()
   const after: LineSnapshot = {
     label: _.cloneDeep(committed.task.items[itemIndex].labels[labelId]),
     shapes: _.cloneDeep(getShapes(committed, itemIndex, labelId))
   }
-  const newLine: LineSnapshot = {
-    label: _.cloneDeep(committed.task.items[itemIndex].labels[newLabelId]),
-    shapes: _.cloneDeep(getShapes(committed, itemIndex, newLabelId))
+  if (newLabelId === undefined) {
+    drawHistory.recordEdit(itemIndex, labelId, before, after)
+  } else {
+    drawHistory.recordCut(itemIndex, labelId, before, after, {
+      label: _.cloneDeep(committed.task.items[itemIndex].labels[newLabelId]),
+      shapes: _.cloneDeep(getShapes(committed, itemIndex, newLabelId))
+    })
   }
-  drawHistory.recordCut(itemIndex, labelId, before, after, newLine)
   return "cut"
 }

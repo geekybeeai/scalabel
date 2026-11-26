@@ -1,10 +1,15 @@
 import * as action from "../../src/action/common"
+import { setCutMode } from "../../src/common/cut_state"
 import { drawHistory } from "../../src/common/draw_history"
 import Session, { getState } from "../../src/common/session"
 import { LabelTypeName } from "../../src/const/common"
-import { performCut } from "../../src/drawable/2d/polyline_cut"
+import {
+  confirmClosedCut,
+  performCut
+} from "../../src/drawable/2d/polyline_cut"
 import { getShapes } from "../../src/functional/state_util"
 import { makeLabel, makePathPoint2D } from "../../src/functional/states"
+import { convertLabelsToExport } from "../../src/server/export"
 import { PathPoint2DType, PathPointType } from "../../src/types/state"
 import { initializeTestingObjects } from "./util"
 
@@ -15,12 +20,14 @@ import { initializeTestingObjects } from "./util"
  * @param vertices [x, y] pairs (all plain LINE vertices)
  * @param labelType label type name
  * @param category category indices (defaults to none)
+ * @param closed whether the polyline is a closed outline
  */
 function seedLine(
   labelId: string,
   vertices: number[][],
   labelType: string = LabelTypeName.POLYLINE_2D,
-  category: number[] = []
+  category: number[] = [],
+  closed?: boolean
 ): void {
   const shapes = vertices.map(([x, y]) =>
     makePathPoint2D({ x, y, pointType: PathPointType.LINE, label: [labelId] })
@@ -31,6 +38,7 @@ function seedLine(
       item: 0,
       type: labelType,
       category,
+      closed,
       shapes: shapes.map((s) => s.id)
     },
     false
@@ -39,6 +47,162 @@ function seedLine(
 }
 
 describe("performCut", () => {
+  afterEach(() => setCutMode(false))
+
+  test("accepts distinct cuts on opposite sides of a narrow median", () => {
+    initializeTestingObjects()
+    drawHistory.reset()
+    setCutMode(true)
+    seedLine(
+      "median",
+      [
+        [0, 0],
+        [200, 0],
+        [200, 4],
+        [0, 4]
+      ],
+      LabelTypeName.POLYLINE_2D,
+      [1],
+      true
+    )
+
+    expect(performCut({ x: 100, y: 0 }, 20, 8)).toBe("first-picked")
+    expect(performCut({ x: 100, y: 4 }, 20, 8)).toBe("cut")
+    expect(Object.keys(getState().task.items[0].labels)).toHaveLength(2)
+  })
+
+  test("opens a closed polyline at one pick when confirmed", () => {
+    initializeTestingObjects()
+    drawHistory.reset()
+    setCutMode(true)
+    seedLine(
+      "median",
+      [
+        [0, 0],
+        [100, 0],
+        [100, 50],
+        [0, 50],
+        [0, 0]
+      ],
+      LabelTypeName.POLYLINE_2D,
+      [1],
+      true
+    )
+
+    expect(performCut({ x: 0, y: 25 }, 20, 8, undefined, 1)).toBe(
+      "first-picked"
+    )
+    expect(performCut({ x: 0, y: 25 }, 20, 8, undefined, 1)).toBe(
+      "near-endpoint"
+    )
+    expect(
+      confirmClosedCut(
+        {
+          hideLabels: true,
+          hiddenLabelTypes: [],
+          hiddenCategories: []
+        },
+        2
+      )
+    ).toBe("miss")
+    expect(getState().task.items[0].labels.median.closed).toBe(true)
+    expect(confirmClosedCut(undefined, 1)).toBe("cut")
+
+    const { config, items } = getState().task
+    const exported = convertLabelsToExport(
+      items[0].labels,
+      items[0].shapes,
+      config
+    )
+    expect(exported).toHaveLength(1)
+    expect(exported[0].poly2d).toEqual([
+      {
+        vertices: [
+          [0, 25],
+          [0, 0],
+          [100, 0],
+          [100, 50],
+          [0, 50],
+          [0, 25]
+        ],
+        types: "LLLLLL",
+        closed: false
+      }
+    ])
+    expect(drawHistory.undo()).toBe(true)
+    expect(getState().task.items[0].labels.median.closed).toBe(true)
+  })
+
+  test("splits a closed median at two curved points and exports two open lines", () => {
+    initializeTestingObjects()
+    drawHistory.reset()
+    setCutMode(true)
+    const initial = [
+      [0, 0],
+      [100, 0],
+      [130, 0],
+      [130, 50],
+      [100, 50],
+      [0, 50],
+      [-30, 50],
+      [-30, 0]
+    ]
+    const shapes = initial.map(([x, y], index) =>
+      makePathPoint2D({
+        x,
+        y,
+        pointType:
+          "LLCCLLCC"[index] === "C" ? PathPointType.CURVE : PathPointType.LINE,
+        label: ["median"]
+      })
+    )
+    const label = makeLabel(
+      {
+        id: "median",
+        item: 0,
+        type: LabelTypeName.POLYLINE_2D,
+        category: [1],
+        closed: true,
+        shapes: shapes.map((shape) => shape.id)
+      },
+      false
+    )
+    Session.dispatch(action.addLabel(0, label, shapes))
+
+    expect(performCut({ x: 122.5, y: 25 }, 20, 8)).toBe("first-picked")
+    expect(getState().task.items[0].labels.median.closed).toBe(true)
+    expect(performCut({ x: -22.5, y: 25 }, 20, 8)).toBe("cut")
+
+    const { config, items } = getState().task
+    const exported = convertLabelsToExport(
+      items[0].labels,
+      items[0].shapes,
+      config
+    )
+    expect(exported).toHaveLength(2)
+    for (const piece of exported) {
+      expect(piece.category).toBe(config.categories[1])
+      expect(piece.manualShape).toBe(true)
+      expect(piece.poly2d?.[0]).toMatchObject({
+        closed: false,
+        types: "LCCLLCCL"
+      })
+    }
+    const [first, second] = exported.map((piece) => piece.poly2d![0].vertices)
+    expect(first[0]).toEqual(second[second.length - 1])
+    expect(first[first.length - 1]).toEqual(second[0])
+    expect([first[0], second[0]]).toEqual([
+      [122.5, 25],
+      [-22.5, 25]
+    ])
+    expect(drawHistory.undo()).toBe(true)
+    expect(getState().task.items[0].labels.median.closed).toBe(true)
+    const restored = getShapes(getState(), 0, "median") as PathPoint2DType[]
+    expect(restored.map((p) => [p.x, p.y])).toEqual(initial)
+    expect(drawHistory.redo()).toBe(true)
+    expect(Object.keys(getState().task.items[0].labels)).toHaveLength(2)
+  })
+
   test("cuts the nearest open polyline into two, undo restores it", () => {
     initializeTestingObjects()
     drawHistory.reset()

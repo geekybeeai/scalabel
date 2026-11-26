@@ -1,13 +1,21 @@
-/**
- * Transient, non-Redux state for the one-shot polyline cut (scissor) tool.
- *
- * Armed from the Viewer2D toolbar button or the Label2dCanvas context menu;
- * consumed by Label2dCanvas, which performs the cut on the next left-click.
- * Mirrors the pointer_pan_state.ts pattern, plus a minimal listener list so
- * the toolbar button can re-render when the mode is cleared from elsewhere
- * (Escape, a successful one-shot cut, item navigation).
- */
+import { IdType, SimplePathPoint2DType } from "../types/state"
+
+/** Geometry held while a closed polyline awaits a second pick or Enter. */
+export interface ClosedCutPick {
+  /** the viewer where the first point was picked */
+  viewerId?: number
+  /** active item at the time of the first pick */
+  itemIndex: number
+  /** label that owns the closed outline */
+  labelId: IdType
+  /** original points, for detecting intervening edits */
+  points: SimplePathPoint2DType[]
+  /** the full outline opened at the first pick */
+  openedPoints: SimplePathPoint2DType[]
+}
+
 let cutMode = false
+let closedCutPick: ClosedCutPick | null = null
 
 const listeners = new Set<() => void>()
 
@@ -22,10 +30,26 @@ export function isCutMode(): boolean {
  * @param on whether the tool should be armed
  */
 export function setCutMode(on: boolean): void {
-  if (cutMode === on) {
+  if (cutMode === on && (on || closedCutPick === null)) {
     return
   }
   cutMode = on
+  closedCutPick = null
+  listeners.forEach((listener) => listener())
+}
+
+/** The pending first pick on a closed outline. */
+export function getClosedCutPick(): ClosedCutPick | null {
+  return closedCutPick
+}
+
+/**
+ * Set or clear a pending pick without changing the tool's active state.
+ *
+ * @param pick the new pick, or null to clear it
+ */
+export function setClosedCutPick(pick: ClosedCutPick | null): void {
+  closedCutPick = pick
   listeners.forEach((listener) => listener())
 }
 

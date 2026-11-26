@@ -15,7 +15,12 @@ import {
   reset as resetPanState,
   shouldDeferPointerDown
 } from "../common/pointer_pan_state"
-import { isCutMode, setCutMode } from "../common/cut_state"
+import {
+  getClosedCutPick,
+  isCutMode,
+  onCutModeChange,
+  setCutMode
+} from "../common/cut_state"
 import { isCurveCutMode, setCurveCutMode } from "../common/curve_cut_state"
 import { isStraightenMode, setStraightenMode } from "../common/straighten_state"
 import { armKey, recordKeyDown, recordKeyUp } from "../common/keyboard_state"
@@ -51,9 +56,12 @@ import {
 } from "../common/freeform_select_state"
 import { runFreeformSelect } from "../drawable/2d/freeform_select"
 import {
+  confirmClosedCut,
   CUT_CLICK_RADIUS_PX,
   CUT_SNAP_RADIUS_PX,
-  performCut
+  CutVisibilityFilter,
+  performCut,
+  PolylineCutResult
 } from "../drawable/2d/polyline_cut"
 import {
   commitPendingSegmentDelete,
@@ -262,6 +270,8 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
   private _menuAnchor: { left: number; top: number } | null = null
   /** unsubscribe from delete-segment state changes */
   private _offSegmentDelete: (() => void) | null = null
+  /** unsubscribe from cut-mode and closed-cut pick changes */
+  private _offCutChange: (() => void) | null = null
   /** unsubscribe from marked-for-deletion set changes */
   private _offMarkedChange: (() => void) | null = null
   /** unsubscribe from freeform-select tool changes */
@@ -369,6 +379,7 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     this._offSegmentDelete = onSegmentDeleteChange(() =>
       this.onSegmentDeleteStateChange()
     )
+    this._offCutChange = onCutModeChange(() => this.redraw())
     this._offMarkedChange = onMarkedChange(() => {
       // Repaint immediately, and start/stop the marching-ants animation
       // depending on whether anything is now marked.
@@ -402,6 +413,11 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     if (this._offSegmentDelete !== null) {
       this._offSegmentDelete()
       this._offSegmentDelete = null
+    }
+    this._offCutChange?.()
+    this._offCutChange = null
+    if (getClosedCutPick()?.viewerId === this.props.id) {
+      setCutMode(false)
     }
     if (this._offMarkedChange !== null) {
       this._offMarkedChange()
@@ -618,6 +634,10 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         this.labelContext,
         this.displayToImageRatio * this._upResRatio
       )
+      this.drawClosedCutPick(
+        this.labelContext,
+        this.displayToImageRatio * this._upResRatio
+      )
       this.drawFreeformOverlay(
         this.labelContext,
         this.displayToImageRatio * this._upResRatio
@@ -794,45 +814,17 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       }
       return
     }
-    // One-shot cut tool: while armed, this click belongs to the scissors.
-    // It never starts a draw or select; a successful cut disarms the tool,
-    // any rejection keeps it armed so the user can re-aim.
+    // While armed, each click belongs to the cut tool. A completed cut
+    // disarms it. Closed outlines wait for a second click or Enter.
     if (isCutMode()) {
-      const config = this.state.user.viewerConfigs[this.props.id]
       const result = performCut(
         mousePos,
         CUT_CLICK_RADIUS_PX / this.displayToImageRatio,
         CUT_SNAP_RADIUS_PX / this.displayToImageRatio,
-        {
-          hideLabels: config.hideLabels,
-          hiddenLabelTypes:
-            config.hiddenLabelTypes !== undefined
-              ? config.hiddenLabelTypes
-              : [],
-          hiddenCategories:
-            config.hiddenCategories !== undefined ? config.hiddenCategories : []
-        }
+        this.cutVisibility(),
+        this.props.id
       )
-      switch (result) {
-        case "cut":
-          setCutMode(false)
-          this.setDefaultCursor()
-          break
-        case "curve":
-          alert(
-            Severity.WARNING,
-            "Cannot cut a curved segment — straighten it first."
-          )
-          break
-        case "closed":
-          alert(Severity.WARNING, "Cut works on open polylines only.")
-          break
-        case "near-endpoint":
-          alert(Severity.WARNING, "Too close to an endpoint to cut.")
-          break
-        case "miss":
-          break
-      }
+      this.handleCutResult(result)
       return
     }
     // Divide curve: splits the clicked bezier into two adjustable groups.
@@ -1172,6 +1164,46 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
     context.fillStyle = "rgba(255, 0, 200, 0.9)"
     context.arc(x, y, 5, 0, 2 * Math.PI)
     context.fill()
+  }
+
+  /**
+   * Mark the first point picked on a closed outline.
+   *
+   * @param context the label canvas context
+   * @param ratio image-to-canvas coordinate scale
+   */
+  private drawClosedCutPick(
+    context: CanvasRenderingContext2D,
+    ratio: number
+  ): void {
+    const pick = getClosedCutPick()
+    if (
+      pick === null ||
+      pick.viewerId !== this.props.id ||
+      pick.itemIndex !== this.state.user.select.item
+    ) {
+      return
+    }
+    const visibility = this.cutVisibility()
+    const label = this.state.task.items[pick.itemIndex]?.labels[pick.labelId]
+    if (
+      label === undefined ||
+      visibility.hideLabels ||
+      visibility.hiddenLabelTypes.includes(label.type) ||
+      visibility.hiddenCategories.includes(label.category[0])
+    ) {
+      return
+    }
+    const point = pick.openedPoints[0]
+    context.save()
+    context.beginPath()
+    context.arc(point.x * ratio, point.y * ratio, 8, 0, 2 * Math.PI)
+    context.fillStyle = "#1976d2"
+    context.strokeStyle = "#ffffff"
+    context.lineWidth = 2
+    context.fill()
+    context.stroke()
+    context.restore()
   }
 
   /**
@@ -1558,6 +1590,16 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
       return
     }
 
+    if (
+      e.key === Key.ENTER &&
+      getClosedCutPick()?.viewerId === this.props.id &&
+      this.canRunShortcut(e)
+    ) {
+      e.preventDefault()
+      this.handleCutResult(confirmClosedCut(this.cutVisibility(), this.props.id))
+      return
+    }
+
     if (e.key === Key.ENTER && isArcMode()) {
       // Enter finishes the curve. Clicks accumulate rather than committing at
       // a fixed count, so the gesture has to be closed explicitly.
@@ -1747,6 +1789,58 @@ export class Label2dCanvas extends DrawableCanvas<Props> {
         alert(Severity.WARNING, "Too close to an endpoint to divide.")
         break
       default:
+        break
+    }
+  }
+
+  /** Viewer filters shared by both steps of the cut gesture. */
+  private cutVisibility(): CutVisibilityFilter {
+    const config = this.state.user.viewerConfigs[this.props.id]
+    return {
+      hideLabels: config.hideLabels,
+      hiddenLabelTypes: config.hiddenLabelTypes ?? [],
+      hiddenCategories: config.hiddenCategories ?? []
+    }
+  }
+
+  /**
+   * Update the cut tool and report how to complete a pending pick.
+   *
+   * @param result the outcome of the cut gesture
+   */
+  private handleCutResult(result: PolylineCutResult): void {
+    switch (result) {
+      case "cut":
+        setCutMode(false)
+        this.setDefaultCursor()
+        break
+      case "first-picked":
+        alert(
+          Severity.INFO,
+          "Click a second point to split, or press Enter to open here."
+        )
+        break
+      case "curve":
+        alert(Severity.WARNING, "Cannot cut a curved segment.")
+        break
+      case "closed":
+        alert(Severity.WARNING, "Cut works on polylines only.")
+        break
+      case "near-endpoint":
+        alert(
+          Severity.WARNING,
+          getClosedCutPick() === null
+            ? "Too close to an endpoint to cut."
+            : "Pick a point farther from the first cut."
+        )
+        break
+      case "wrong-line":
+        alert(Severity.WARNING, "Pick the second point on the same outline.")
+        break
+      case "stale":
+        alert(Severity.WARNING, "The outline changed. Pick the first point again.")
+        break
+      case "miss":
         break
     }
   }

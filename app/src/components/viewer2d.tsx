@@ -624,8 +624,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
   }
 
   /**
-   * Build the scissor (cut polyline) toolbar button. One-shot: arming it cuts
-   * on the next canvas click; a successful cut (or Escape) disarms it.
+   * Build the cut button. A completed cut or Escape disarms it.
    *
    * @return {JSX.Element} the cut button
    */
@@ -634,7 +633,7 @@ export class Viewer2D extends DrawableViewer<Viewer2DProps> {
     return (
       <Tooltip
         key={`cut2dButton${this.props.id}`}
-        title="Cut polyline"
+        title="Cut polyline. On a closed outline, pick two points or pick one and press Enter."
         enterDelay={500}
         TransitionComponent={Fade}
         TransitionProps={{ timeout: 600 }}
