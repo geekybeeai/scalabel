@@ -70,6 +70,7 @@ function makeListeners(dataDir: string): {
 } {
   const storage = new FileStorage(dataDir)
   const client = new RedisClient(serverConfig.redis)
+  jest.spyOn(client, "get").mockResolvedValue(null)
   const redisStore = new RedisCache(serverConfig.redis, storage, client)
   const projectStore = new ProjectStore(storage, redisStore)
   const userManager = new UserManager(projectStore, false)
@@ -233,6 +234,47 @@ describe("openEditSessionHandler creates the project", () => {
     expect(await projectStore.checkProjectName(`embed_${sessionId}`)).toBe(
       true
     )
+    const state = await projectStore.loadState(`embed_${sessionId}`, "000000")
+    expect(state.task.config.categories).toEqual(["lane", "edge"])
+  })
+
+  test("loads older basemap sessions with the manual line categories", async () => {
+    const sessionId = "550e8400-e29b-41d4-a716-446655440014"
+    const original = [
+      "center_turn_lane",
+      "continuous_white_line",
+      "curb_road_edge",
+      "dashed_white_line",
+      "double_yellow_line",
+      "without_curb_road_edge",
+      "cat_track_line"
+    ]
+    const res = fakeRes()
+    await listeners.openEditSessionHandler(
+      fakeReq({
+        sessionId,
+        annotations: {
+          frames: [{ name: "x.png", url: "x.png", labels: [] }],
+          config: { categories: original.map((name) => ({ name })) }
+        }
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+
+    const projectName = `embed_${sessionId}`
+    const task = await projectStore.loadTask(projectName, "000000")
+    const expected = [...original, "bike_lane_line", "elephant_track_line"]
+    expect(task.config.categories).toEqual(expected)
+    expect(task.config.treeCategories.map(({ name }) => name)).toEqual(expected)
+
+    task.config.categories = original
+    task.config.treeCategories = original.map((name) => ({ name }))
+    await projectStore.saveTasks([task])
+
+    const { config } = (await projectStore.loadState(projectName, "000000")).task
+    expect(config.categories).toEqual(expected)
+    expect(config.treeCategories.map(({ name }) => name)).toEqual(expected)
   })
 
   test("returns 409 on duplicate sessionId", async () => {

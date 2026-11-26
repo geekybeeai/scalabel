@@ -30,7 +30,10 @@ import { Category } from "../types/state"
  */
 const CATEGORY_DISPLAY_NAME: { [name: string]: string } = {
   continuous_white_line: "continuous_line",
-  dashed_white_line: "dashed_line"
+  dashed_white_line: "dashed_line",
+  bike_lane_line: "bike_lane",
+  cat_track_line: "cat_track",
+  elephant_track_line: "elephant_track"
 }
 
 /**

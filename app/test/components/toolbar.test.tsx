@@ -45,6 +45,29 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe("Toolbar category setting", () => {
+  test("renders manual line categories with their own labels and colours", () => {
+    setupTestStore(testJson)
+    const categories = [
+      ["bike_lane_line", "bike_lane", "rgb(0, 230, 230)"],
+      ["cat_track_line", "cat_track", "rgb(255, 170, 210)"],
+      ["elephant_track_line", "elephant_track", "rgb(150, 100, 255)"]
+    ]
+    const { getByText, getByTitle } = render(
+      <ToolbarCategory
+        categories={categories.map(([name]) => name)}
+        treeCategories={categories.map(([name]) => ({ name }))}
+        headerText="Category"
+      />
+    )
+
+    categories.forEach(([name, label, colour], index) => {
+      const swatch = getByTitle(`Line colour for ${name}`)
+      expect(swatch).toHaveStyle({ background: colour })
+      fireEvent.click(getByText(label))
+      expect(getState().user.select.category).toBe(index)
+    })
+  })
+
   test("keeps the visibility control after a long category name", () => {
     setupTestStore(testJson)
     const category = "a_category_name_that_needs_to_wrap"

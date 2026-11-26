@@ -15,6 +15,7 @@ import * as path from "./path"
 import { RedisCache } from "./redis_cache"
 import { Storage } from "./storage"
 import {
+  addBasemapLineCategories,
   getPolicy,
   makeUserData,
   makeUserMetadata,
@@ -139,6 +140,10 @@ export class ProjectStore {
         const taskKey = path.getTaskKey(projectName, taskId)
         state = await this.loadStateFromTask(taskKey)
       }
+    }
+
+    if (state?.task !== undefined) {
+      addBasemapLineCategories(state.task.config)
     }
     return state
   }
