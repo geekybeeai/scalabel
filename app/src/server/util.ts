@@ -12,11 +12,53 @@ import { STORAGE_FOLDERS } from "../const/storage"
 import { BaseAction } from "../types/action"
 import { ItemExport } from "../types/export"
 import { CreationForm, UserData, UserMetadata } from "../types/project"
-import { Label2DTemplateType, State } from "../types/state"
+import { ConfigType, Label2DTemplateType, State } from "../types/state"
 import { FileStorage } from "./file_storage"
 import Logger from "./logger"
 import { S3Storage } from "./s3_storage"
 import { Storage } from "./storage"
+
+const BASEMAP_LINE_CATEGORIES = [
+  "center_turn_lane",
+  "continuous_white_line",
+  "curb_road_edge",
+  "dashed_white_line",
+  "double_yellow_line",
+  "without_curb_road_edge"
+]
+
+const MANUAL_STRIPING_CATEGORIES = [
+  "bike_lane_line",
+  "cat_track_line",
+  "elephant_track_line"
+]
+
+/**
+ * Add the manual striping categories to a Basemap lane project.
+ * Appending preserves the category indices of labels already saved.
+ *
+ * @param config project or task configuration
+ */
+export function addBasemapLineCategories(config: ConfigType): void {
+  const { labelTypes, categories, treeCategories } = config
+  if (
+    !labelTypes.includes(LabelTypeName.POLYLINE_2D) ||
+    !BASEMAP_LINE_CATEGORIES.every((name) => categories.includes(name))
+  ) {
+    return
+  }
+
+  const missing = MANUAL_STRIPING_CATEGORIES.filter(
+    (name) => !categories.includes(name)
+  )
+  if (missing.length > 0) {
+    config.categories = [...categories, ...missing]
+    config.treeCategories = [
+      ...treeCategories,
+      ...missing.map((name) => ({ name }))
+    ]
+  }
+}
 
 /**
  * Initialize storage

@@ -39,6 +39,7 @@ beforeAll(() => {
   dataDir = getTestDir("create-project-data")
   const storage = new FileStorage(dataDir)
   const client = new RedisClient(serverConfig.redis)
+  jest.spyOn(client, "get").mockResolvedValue(null)
   const redisStore = new RedisCache(serverConfig.redis, storage, client)
   projectStore = new ProjectStore(storage, redisStore)
 })
@@ -48,6 +49,49 @@ afterAll(() => {
 })
 
 describe("test project.json creation", () => {
+  test("standalone lane projects offer the manual striping categories", async () => {
+    const original = [
+      "double_yellow_line",
+      "yellow_line",
+      "continuous_white_line",
+      "dashed_white_line",
+      "curb_road_edge",
+      "without_curb_road_edge",
+      "crosswalk_line",
+      "center_turn_lane"
+    ]
+    const treeCategories = original.map((name) => ({ name }))
+    const project = await createProject(
+      {
+        ...sampleFormImage,
+        projectName: "standalone_lanes",
+        labelType: "polyline2d"
+      },
+      { ...sampleFormFileData, categories: treeCategories }
+    )
+    const expected = [
+      ...original,
+      "bike_lane_line",
+      "cat_track_line",
+      "elephant_track_line"
+    ]
+    expect(project.config.categories).toEqual(expected)
+    expect(project.config.treeCategories.map(({ name }) => name)).toEqual(
+      expected
+    )
+
+    const [task] = await createTasks(project, undefined, 0, 0, true)
+    task.config.categories = original
+    task.config.treeCategories = treeCategories
+    await projectStore.saveTasks([task])
+
+    const { config } = (
+      await projectStore.loadState("standalone_lanes", task.config.taskId)
+    ).task
+    expect(config.categories).toEqual(expected)
+    expect(config.treeCategories.map(({ name }) => name)).toEqual(expected)
+  })
+
   test("image project creation", async () => {
     return await testProjectCreation(
       sampleFormImage,

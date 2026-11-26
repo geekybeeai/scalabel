@@ -102,6 +102,9 @@ const CATEGORY_NAME_COLOR_MAP: { [name: string]: number[] } = {
   double_yellow_line:     [102, 51, 0],     // brown
   center_turn_lane:       [255, 140, 0],     // orange
   solid_single_line:      [255, 215, 0],    // yellow
+  bike_lane_line: [0, 230, 230],
+  cat_track_line: [255, 170, 210],
+  elephant_track_line: [150, 100, 255]
 }
 
 /**

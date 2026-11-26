@@ -375,6 +375,7 @@ export async function createProject(
     autosave: true,
     bots: false
   }
+  util.addBasemapLineCategories(config)
 
   // Ensure that all video names are set to default if empty
   let projectItems = formFileData.items
