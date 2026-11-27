@@ -200,10 +200,12 @@ export function findCurveCutSite(
   let best: CurveCutSite | null = null
 
   // Adjacent LINE anchors always define a straight span, even when each
-  // anchor also belongs to a different curve group.
-  for (let i = 0; i < points.length - 1; i++) {
+  // anchor also belongs to a different curve group. For a closed outline,
+  // the last and first anchors may also define an implicit straight span.
+  const spanCount = closed ? points.length : points.length - 1
+  for (let i = 0; i < spanCount; i++) {
     const a = points[i]
-    const b = points[i + 1]
+    const b = points[(i + 1) % points.length]
     if (
       a.pointType !== PathPointType.LINE ||
       b.pointType !== PathPointType.LINE

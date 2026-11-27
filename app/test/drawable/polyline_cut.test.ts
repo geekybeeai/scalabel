@@ -3,6 +3,7 @@ import { setCutMode } from "../../src/common/cut_state"
 import { drawHistory } from "../../src/common/draw_history"
 import Session, { getState } from "../../src/common/session"
 import { LabelTypeName } from "../../src/const/common"
+import { performCurveCut } from "../../src/drawable/2d/polyline_curve_cut"
 import {
   confirmClosedCut,
   performCut
@@ -45,6 +46,36 @@ function seedLine(
   )
   Session.dispatch(action.addLabel(0, label, shapes))
 }
+
+test("divides the implicit closing edge without opening the outline", () => {
+  initializeTestingObjects()
+  drawHistory.reset()
+  seedLine(
+    "median",
+    [
+      [0, 0],
+      [100, 0],
+      [100, 50],
+      [0, 50]
+    ],
+    LabelTypeName.POLYLINE_2D,
+    [1],
+    true
+  )
+
+  expect(performCurveCut({ x: 0, y: 25 }, 5, 8)).toBe("cut")
+  const item = getState().task.items[0]
+  expect(Object.keys(item.labels)).toEqual(["median"])
+  expect(item.labels.median.closed).toBe(true)
+  const points = getShapes(getState(), 0, "median") as PathPoint2DType[]
+  expect(points.map(({ x, y }) => [x, y])).toEqual([
+    [0, 0],
+    [100, 0],
+    [100, 50],
+    [0, 50],
+    [0, 25]
+  ])
+})
 
 describe("performCut", () => {
   afterEach(() => setCutMode(false))
